@@ -32,9 +32,10 @@ Later we may move one piece (notifications) into its own service. Each new piece
 **D7. Frontend: React + TypeScript + Vite + Tailwind CSS + shadcn/ui**
 Screens are built first with fake data. Then each backend feature plugs into a screen that already exists.
 
-**D8. Look**
-The reference screenshots set the layout only: icon rail, chat list, conversation area, side panel.
-Parley gets its own colors, fonts and logo. No copied branding, names or photos.
+**D8. Look (updated)**
+Parley matches the reference screenshots closely: layout, colors, spacing, shapes and font style.
+Not copied: the logo, names and photos. Parley has its own logo, made-up names and its own avatars. The README credits the reference design.
+Group chats, the side panel and uploads are built as screens first. They work for real in v2.
 
 **D9. Message rules**
 - Save to the database before sending anywhere.
@@ -60,7 +61,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 **D13. Git workflow**
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
-- Adithya makes every commit and writes the message in his own words. A "Co-Authored-By: Claude" line at the end is kept, because it is honest about how the project was built.
+- Adithya makes every commit and writes the message in his own words. Adding a "Co-Authored-By: Claude" line at the end is optional. Adithya decides each time.
 - Private repo; goes public once live chat works.
 
 **D14. Who does what**
