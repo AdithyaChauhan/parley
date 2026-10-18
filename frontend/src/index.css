@@ -31,6 +31,11 @@
   --parley-file-yellow: #FBF0D9;
   --parley-file-teal: #DDF3F4;
   --parley-file-red: #FCE4E4;
+  /* Darker icon on each file tile (look.md: "a darker icon of the same color") */
+  --parley-file-purple-icon: #5B5FE0;
+  --parley-file-yellow-icon: #C49A45;
+  --parley-file-teal-icon: #2E9FAA;
+  --parley-file-red-icon: #D0605A;
 
   /* shadcn's slots point at Parley's colors */
   --background: var(--parley-page);
@@ -92,6 +97,10 @@
   --color-file-yellow: var(--parley-file-yellow);
   --color-file-teal: var(--parley-file-teal);
   --color-file-red: var(--parley-file-red);
+  --color-file-purple-icon: var(--parley-file-purple-icon);
+  --color-file-yellow-icon: var(--parley-file-yellow-icon);
+  --color-file-teal-icon: var(--parley-file-teal-icon);
+  --color-file-red-icon: var(--parley-file-red-icon);
 
   /* Corners: rounded-lg is 12px; the rest are shadcn's sizes around it */
   --radius-sm: calc(var(--radius) * 0.6);
@@ -117,6 +126,13 @@
   --text-name: 18px;
   --text-body: 15px;
   --text-label: 12px;
+
+  /* animate-typing: the three "is typing" dots */
+  --animate-typing: typing 1.2s ease-in-out infinite;
+  @keyframes typing {
+    0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-2px); }
+  }
 }
 
 @layer base {

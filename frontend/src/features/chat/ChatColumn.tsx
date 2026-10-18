@@ -1,0 +1,97 @@
+import { useState } from "react"
+import { ChevronDown, ChevronLeft, EllipsisVertical, Plus, Search, Settings } from "lucide-react"
+import { Avatar } from "@/components/Avatar"
+import { me, type Chat } from "@/data/fake"
+import { cn } from "@/lib/utils"
+import { ChatRow } from "./ChatRow"
+
+type ChatColumnProps = {
+  chats: Chat[]
+  openId: string
+  onSelect: (id: string) => void
+  phoneVisible: boolean
+}
+
+// The left column: title, my profile, search box and the list of chats
+export function ChatColumn({ chats, openId, onSelect, phoneVisible }: ChatColumnProps) {
+  const [search, setSearch] = useState("")
+  const shown = chats.filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
+
+  return (
+    <section
+      className={cn(
+        "min-h-0 flex-1 flex-col px-4 md:w-85 md:flex-none",
+        phoneVisible ? "flex" : "hidden md:flex",
+      )}
+    >
+      {/* Phone only. On desktop the profile is the top of the column. */}
+      <header className="flex h-20 shrink-0 items-center gap-4 border-b pt-4 md:hidden">
+        <button
+          type="button"
+          aria-label="Back"
+          className="flex size-10 items-center justify-center rounded-lg bg-row-selected text-muted-foreground"
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <h1 className="text-header">Chat</h1>
+      </header>
+
+      <div className="relative flex shrink-0 flex-col items-center pt-4 pb-4 md:pt-6">
+        <button
+          type="button"
+          aria-label="Settings"
+          className="absolute top-3 right-0 flex size-8 items-center justify-center rounded-lg text-rail-icon hover:text-muted-foreground md:top-5"
+        >
+          <Settings className="size-5" />
+        </button>
+        <Avatar name={me.name} tint={me.tint} size="lg" online />
+        <p className="mt-2 text-name">{me.name}</p>
+        <button
+          type="button"
+          className="mt-2 flex items-center gap-1.5 rounded-md bg-status-pill px-3 py-0.5 text-sm text-primary"
+        >
+          available
+          <ChevronDown className="size-3.5" />
+        </button>
+      </div>
+
+      <label className="flex h-12 shrink-0 items-center gap-2 rounded-lg bg-search px-5">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search"
+          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+        />
+        <Search className="size-4 text-muted-foreground" />
+      </label>
+
+      <div className="mt-4 mb-2 flex shrink-0 items-center justify-between">
+        <h2>Last chats</h2>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="New chat"
+            className="flex size-8 items-center justify-center rounded-lg bg-accent text-primary"
+          >
+            <Plus className="size-4" />
+          </button>
+          <button type="button" aria-label="More" className="text-muted-foreground">
+            <EllipsisVertical className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-4 scrollbar-thin">
+        {shown.map((chat) => (
+          <ChatRow
+            key={chat.id}
+            chat={chat}
+            selected={chat.id === openId}
+            onSelect={() => onSelect(chat.id)}
+          />
+        ))}
+        {shown.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No chats found</p>}
+      </div>
+    </section>
+  )
+}

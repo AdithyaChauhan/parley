@@ -8,8 +8,8 @@ Not copied: the logo, the people's names and the photos. Parley uses its own log
 
 | Name | Hex | Used for |
 |---|---|---|
-| Page | `#DCE0E8` | The page behind the app (soft blue-grey) |
-| App card | `#FFFFFF` | The big card that holds the app |
+| Page | `#DCE0E8` | The page behind the sign-up and log-in card (soft blue-grey) |
+| App background | `#FFFFFF` | The main screen, which fills the whole window, and the sign-up and log-in card |
 | Conversation area | `#EDF0F6` | The conversation's own rounded panel |
 | Their bubble | `#FFFFFF` | Messages from other people |
 | My bubble | `#D1D3E4` | Messages I sent (soft lavender-grey) |
@@ -39,14 +39,14 @@ Not in the screenshots, so Parley picks its own.
 
 ### File type tiles
 
-Each tile has a darker icon of the same color.
+Each tile has a darker icon of the same color. Avatars use the same pairs: initials in the icon color on the tile color.
 
-| Name | Hex |
-|---|---|
-| Purple | `#E6E6FA` |
-| Yellow | `#FBF0D9` |
-| Teal | `#DDF3F4` |
-| Red | `#FCE4E4` |
+| Name | Tile | Icon |
+|---|---|---|
+| Purple | `#E6E6FA` | `#5B5FE0` |
+| Yellow | `#FBF0D9` | `#C49A45` |
+| Teal | `#DDF3F4` | `#2E9FAA` |
+| Red | `#FCE4E4` | `#D0605A` |
 
 ## Font
 
@@ -61,10 +61,11 @@ A rounded, geometric font. The screenshots look like Sofia Pro, which is paid. P
 
 ## Shapes
 
-- App card: 28px rounded corners.
+- Main screen: fills the whole browser window, with no outer frame or outer rounded corners (D8).
+- Sign-up and log-in card: 28px rounded corners. Only these screens use the card.
 - Conversation panel: 16px rounded corners.
 - Bubbles: 16px rounded corners, with one corner kept sharp.
-  - Their bubble: the top-left corner is sharp (next to the avatar).
+  - Their bubble: the bottom-left corner is sharp (next to the avatar, which sits at the bubble's bottom).
   - My bubble: the bottom-right corner is sharp.
 - Above each bubble, a small label: "Name, 11:24 AM" (12px, main text).
 - Spacing: steps of 4px (4, 8, 12, 16, 24, 32). Most gaps are 16px or 24px.
