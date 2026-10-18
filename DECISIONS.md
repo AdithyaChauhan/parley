@@ -36,6 +36,7 @@ ESLint (from Vite's template) checks the code for mistakes. It's a dev-only tool
 
 **D8. Look (updated)**
 Parley matches the reference screenshots closely: layout, colors, spacing, shapes and font style.
+The blue-grey frame around the app in the screenshots is only a showcase background. The real app fills the whole browser window, with no outer frame, and resizes with it. Profile areas are kept compact so lists get the most space.
 Not copied: the logo, names and photos. Parley has its own logo, made-up names and its own avatars. The README credits the reference design.
 Group chats, the side panel and uploads are built as screens first. They work for real in v2.
 

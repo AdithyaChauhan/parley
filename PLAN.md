@@ -14,24 +14,22 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 3: Create the React app
-- **Branch:** `feature/react-app`
-- **Goal:** a working, empty React app in `frontend/` that already uses Parley's font and colors, ready for T4 to build the layout.
-- **Tools (D7):** Vite, React, TypeScript, Tailwind CSS, shadcn/ui. Use the current official setup steps from each tool's own docs. Don't guess versions.
-- **A note on generated files:** commands like `npm create vite` make many files at once. That's fine. Claude Code doesn't write those by hand. After each command, it explains every file the command made, one at a time, in plain words. Files Claude Code writes itself still go one per step.
-- **Steps:**
-  1. Check Node.js is installed (`node -v`, `npm -v`). If not, Claude Code tells Adithya how to install the LTS version, and stops until it works.
-  2. Make the app in a `frontend/` folder with Vite's React + TypeScript template. Run it once (`npm run dev`) to see the default page.
-  3. Add Tailwind CSS v4 with its Vite plugin, following the official Tailwind guide for Vite (no `tailwind.config.js`; v4 sets the theme in CSS).
-  4. Add shadcn/ui with its CLI, following its official Vite guide (it sets up the `@/` import path and the theme file).
-  5. Put Parley's look into the theme, the modern way: one CSS file holds every color from `docs/design/look.md` as a CSS variable, and shadcn's own slots point at them (for example `--primary` = teal `#00A389`, `--background` = page `#DCE0E8`). Add the Outfit font from Google Fonts and the corner sizes. Components then use names like `bg-primary`, never raw hex codes.
-  6. Add one shadcn component only: Button. It turns teal by itself through `--primary`.
-  7. Replace the default Vite page with a small test page: "Parley" in Outfit on the `#DCE0E8` page color, inside a white card with 28px corners, and one teal shadcn Button.
-  8. Make sure `frontend/.gitignore` covers `node_modules` and `dist`.
-- **Not in this task:** layout, chat list, messages, routing, any other library or shadcn component. Those come in T4 to T7.
-- **Done when:** `npm run dev` shows the test page, the font is Outfit, the button is teal `#00A389`, `npm run build` works with no errors. Claude Code writes the LEARNING.md section (fast mode).
-
-Ask Adithya one question at the end: "What does Vite do, in your own words?"
+### Task 4: The main screen with fake data (fast mode)
+- **Branch:** `feature/main-screen`
+- **Goal:** the full desktop main screen from `docs/reference/reference-1.webp`, working with fake data, plus the folded side panel (reference-3), the upload view (reference-2) and the phone layout. Follow `docs/design/look.md` and `docs/design/screens.md`.
+- **Mode:** frontend fast mode (see CLAUDE.md). Claude Code builds, Adithya runs and looks.
+- **What to build:**
+  1. Fake data in one file: about 6 chats (1:1 and one group), each with 8-12 messages, made-up names (D8), times, unread counts and tick states (sent, delivered, read).
+  2. App layout: the app fills the whole browser window (no outer page frame, no outer rounded corners; see D8), with four columns: icon rail, chat column, conversation, side panel. Profile areas are compact so the chat list and file list get the most room.
+  3. Icon rail: a simple Parley logo (a teal speech bubble with "P", our own design), 6 icons (lucide-react), an active-icon tile with the teal bar, your avatar at the bottom.
+  4. Chat column: no header on desktop (phones keep a "Chat" title); the profile is the top of the column, with the settings gear in its corner: (avatar, online dot, name, "available" pill), search box that filters the list, "Last chats" with + and menu icons, chat rows (avatar or initials, name, time, preview, unread pill). Clicking a row opens that chat. "typing..." shows on one fake chat.
+  5. Conversation: title, Messages / Participants tabs (only Messages works for now), messages with avatar, "Name, time" label and bubble (sharp corner rule), ticks beside the time on my messages, "Mira is typing" with animated dots, message box with emoji, attach and teal send button. Typing a message and pressing Enter or Send adds it to the list with one grey tick (fake, no backend).
+  6. Side panel: no header on desktop (phones keep "Shared files" and a back arrow); a small ">" in its top-right corner folds it. Group avatar, name, member count, the two stat tiles and the four file type rows. Folded, it becomes the thin icon strip (reference-3) with a "<" to open it again.
+  7. Upload view: dragging a file over the conversation shows the dashed border and teal upload circle (reference-2). Dropping does nothing yet (v2).
+  8. Phone (under 768px wide): one column at a time, with the back arrow, and the icon rail as a bottom bar.
+- **Avatars:** initials on soft tinted circles (no photos, D8).
+- **Code layout:** `src/components/` for shared pieces, `src/features/chat/` for chat screens, `src/data/fake.ts` for fake data. Only React state (`useState`), no new libraries beyond D7.
+- **Done when:** the screen looks like reference-1 side by side (layout, colors, spacing, shapes), the folded panel looks like reference-3, the upload view like reference-2, the phone layout works in the browser's phone view (F12, then the phone icon), `npm run build` and `npm run lint` pass, and Claude Code has written the LEARNING.md section.
 
 ---
 
@@ -42,10 +40,10 @@ Ask Adithya one question at the end: "What does Vite do, in your own words?"
 - [x] T2. The look: Parley's colors, fonts and logo, plus screen sketches using the reference layout (reference screenshots go in `docs/reference/`)
 
 ### Phase 1: Screens with fake data (React)
-- [ ] T3. Create the React app (Vite + TypeScript) with Tailwind CSS and shadcn/ui, plus a `.gitignore` for `node_modules`. Do it in two steps: Vite + Tailwind first, shadcn/ui after that works
-- [ ] T4. App layout: icon rail, chat list column, conversation area
-- [ ] T5. Chat list with fake chats: search, last message, time, unread count
-- [ ] T6. Conversation with fake messages: bubbles, ticks, typing indicator, message box
+- [x] T3. Create the React app (Vite + TypeScript) with Tailwind CSS and shadcn/ui, plus a `.gitignore` for `node_modules`. Do it in two steps: Vite + Tailwind first, shadcn/ui after that works
+- [ ] T4. The main screen with fake data: layout, chat list, conversation, side panel, upload view, phone (T4 to T6 merged)
+- ~~T5~~ merged into T4
+- ~~T6~~ merged into T4
 - [ ] T7. Sign-up and log-in screens (not connected yet)
 
 ### Phase 2: Backend basics

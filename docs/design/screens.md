@@ -7,22 +7,23 @@ The main screen matches reference screenshot 1 (see D8). Names in the sketches a
 
 ```
 +--------+------------------+-----------------------------+------------------+
-| logo   | (<) Chat         | Group Chat [Messages] [Part]| (>) Shared files |
-|        |   [avatar]       |-----------------------------|   [group photo]  |
-| icons  |   Your name      | (o) Name, 11:24 AM          |   Group name     |
-|  ...   |  [available v]   |     [their bubble.......]   |   10 members     |
-| [act]| | [Search.......]  |          You, 11:26 AM      | [Files] [Links]  |
-|  ...   | Last chats   + : |      [my bubble.........]   | File type      : |
-|        | (o) Name   11:15 |                             | [D] Documents  > |
-|        |     typing...    | (..) Mira is typing         | [P] Photos     > |
-| [me]   | (o) Name   11:15 | [Write a message.. :) @] [>]| [M] Movies     > |
+| logo   |   [avatar]    (*)| Group Chat [Messages] [Part]|  [group photo] > |
+|        |   Your name      |-----------------------------|   Group name     |
+| icons  |  [available v]   | (o) Name, 11:24 AM          |   10 members     |
+|  ...   | [Search.......]  |     [their bubble.......]   | [Files] [Links]  |
+| [act]| | Last chats   + : |          You, 11:26 AM      | File type      : |
+|  ...   | (o) Name   11:15 |      [my bubble.........]   | [D] Documents  > |
+|        |     typing...    |                             | [P] Photos     > |
+|        | (o) Name   11:15 | (..) Mira is typing         | [M] Movies     > |
+| [me]   | (o) Name   11:15 | [Write a message.. :) @] [>]| [O] Other      > |
 +--------+------------------+-----------------------------+------------------+
 ```
+`(*)` is the settings gear. The `>` beside the group photo folds the side panel.
 
 1. **Icon rail** (about 90px): logo at the top, 6 icons, your avatar at the bottom. The active icon sits on a light teal tile, with a teal bar on its right edge.
 2. **Chat column** (about 320px):
-   - Back button and "Chat" title.
-   - Your profile: big avatar with a green online dot, your name, status pill.
+   - No title on desktop: your profile is the top of the column. A settings gear sits in its top-right corner.
+   - Your profile: compact avatar (about 64px) with a green online dot, your name, status pill.
    - Search box.
    - "Last chats" with a "+" and a menu.
    - Rows: avatar (or initials on teal tint), name, time, one-line preview.
@@ -39,12 +40,12 @@ The main screen matches reference screenshot 1 (see D8). Names in the sketches a
 ## 2. Side panel (open and folded)
 
 **Open** (screenshot 1, about 320px):
-- "Shared files" title.
+- No title on desktop. A small fold button (`>`) sits in the panel's top-right corner.
 - Group photo, group name, member count.
 - Two stat tiles: all files, all links.
 - The file type list: documents, photos, movies and so on, each on its own colored tile.
 
-**Folded** (screenshot 3): the panel shrinks to a thin strip of icons.
+**Folded** (screenshot 3): the panel shrinks to a thin strip of icons, with a small open button (`<`) at the top.
 
 ## 3. Upload view
 
@@ -77,12 +78,10 @@ The same card as sign-up, with no name field.
 
 One column at a time (D2):
 
-1. The chat column first.
+1. The chat column first, with a "Chat" title above the profile.
 2. Tapping a chat opens the conversation full screen, with a back arrow.
-3. The side panel opens as a full screen too.
+3. Tapping the conversation's title opens the side panel full screen, with a back arrow and a "Shared files" title. It never folds on a phone.
 4. The icon rail becomes a bar at the bottom.
-
-The details come in T4.
 
 ## Not copied (D8)
 
