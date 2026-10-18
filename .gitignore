@@ -1,0 +1,9 @@
+# Python virtual environment
+.venv/
+
+# Python and pytest caches
+__pycache__/
+.pytest_cache/
+
+# Real secrets (copy .env.example to .env)
+.env

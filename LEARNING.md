@@ -156,3 +156,42 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - What this task does, as if explaining to an interviewer: It adds log-in and sign-up screens that check the form in the browser and then pretend to send it. One state value in App picks which screen shows, so T12 only has to swap the fake wait for a real backend call.
 - What I'd check first if it broke: `validate.ts` for wrong errors, then the `screen` state in `App.tsx` if the wrong screen shows.
 - What still confuses me: nothing
+
+---
+
+### Task 8: FastAPI app, health check, PostgreSQL in Docker Compose
+**What was built**
+- `.gitignore` (root): keeps the venv, Python and pytest caches, and `.env` out of Git. Written first, so nothing slips in before it exists.
+- `backend/requirements.txt`: the four backend packages, pinned with `==` so every install is the same: fastapi, uvicorn, pytest and httpx2. httpx2 replaced httpx because newer Starlette (which FastAPI is built on) marks httpx as deprecated for its test client (approved by the planner).
+- `backend/app/__init__.py`: empty. Marks `app/` as a Python package so it can be imported.
+- `backend/app/main.py`: creates the FastAPI app (titled "Parley").
+  - `health()`: the `GET /health` route. Returns `{"status": "ok"}` so tools can ask "are you alive?" (Docker, Nginx and Kubernetes use this later).
+- `backend/pytest.ini`: tells pytest to find code in `backend/` (`pythonpath = .`) and tests only in `tests/`.
+- `backend/tests/test_health.py`: the first test.
+  - `test_health_returns_ok()`: calls `/health` through FastAPI's TestClient and checks the status is 200 and the body is `{"status": "ok"}`.
+- `docker-compose.yml` (root): one service, `db`, running the official `postgres:17` image. Its settings come from `.env`, port 5432 is open to the laptop, a named volume (`db_data`) keeps the data, and a `pg_isready` healthcheck marks it healthy.
+- `.env.example` (root, committed): the three database settings with placeholder values. The real `.env` is copied from it and never committed.
+
+**New ideas**
+- Virtual environment (venv): a private copy of Python inside the project, so its packages never clash with other projects. It can always be rebuilt from `requirements.txt`, so it isn't committed.
+- Pinning: `fastapi==0.143.5` means exactly this version, so nothing changes by surprise.
+- Route: a rule on the server that says "this method + this path → run this function", like `GET /health → health()`.
+- Decorator: a line starting with `@` above a function. `@app.get(...)` adds the function to FastAPI's list of routes when the app starts.
+- uvicorn: the server. It listens on a port and hands each request to FastAPI, which finds the route, runs it and turns the result into JSON.
+- JSON: the text format browsers and apps use to swap data.
+- Status code: a number sent with every answer. 200 means OK.
+- TestClient: a fake browser that calls the app in memory. No server or port needed, so tests are fast and run anywhere.
+- `assert`: "this must be true, or the test fails".
+- Deprecated: still works, but will be removed in a future version.
+- Image vs container: an image is a read-only package (a tiny Linux plus Postgres). A container is a running, isolated copy of an image.
+- Docker Compose: reads `docker-compose.yml` and starts the containers it describes with one command.
+- Port mapping: `"5432:5432"` means laptop port → container port. It's the door into the sealed container.
+- Named volume: storage Docker keeps outside the container, so the data survives restarts and even deleting the container.
+- Healthcheck: Docker runs `pg_isready` every 5 seconds. "Running" isn't the same as "ready", so this tells the two apart.
+- `.env` vs `.env.example`: real secrets for one machine (git-ignored) vs a committed list of which settings exist. A committed secret stays in Git history forever, so the only safe fix is never committing it.
+- Port clash: two programs on the same port. Another project's container was on port 8000 and answered `/health` too. The `/docs` title showed which app was really answering.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: we have built fastapi for backend server and integrated local postgresql database running in isolated docker container. We automated test using pytest and verified /health
+- What I'd check first if it broke: I'd check /docs in 8000 port. verify .env parameters if they match with .env.example and run docker compose ps to see containers health
+- What still confuses me: Nothing so far
