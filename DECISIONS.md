@@ -31,6 +31,8 @@ Later we may move one piece (notifications) into its own service. Each new piece
 
 **D7. Frontend: React + TypeScript + Vite + Tailwind CSS + shadcn/ui**
 Screens are built first with fake data. Then each backend feature plugs into a screen that already exists.
+The small packages shadcn/ui installs for itself (for example cn, clsx, tailwind-merge, class-variance-authority, lucide-react icons, tw-animate-css, radix-ui) count as part of shadcn/ui. No dark mode for now. The only font is Outfit from Google Fonts; preset fonts (like Geist) are removed.
+ESLint (from Vite's template) checks the code for mistakes. It's a dev-only tool and never ships with the app.
 
 **D8. Look (updated)**
 Parley matches the reference screenshots closely: layout, colors, spacing, shapes and font style.

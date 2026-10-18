@@ -25,6 +25,7 @@ Not copied: the logo, the people's names and the photos. Parley uses its own log
 | Online dot | `#09C2A3` | The green dot on an avatar (measured) |
 | Unread count | `#00A389` | A small round pill with a white number (uses the teal accent) |
 | Error | `#E5484D` | Soft red for errors. Error text sits under the field, 12px |
+| Border | `#E0E0E0` | Dividers and input outlines (measured from screenshot 1) |
 
 ### Ticks
 

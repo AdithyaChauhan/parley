@@ -1,0 +1,132 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* No dark mode (D7). dark: classes only work under a .dark class, which Parley never adds. */
+@custom-variant dark (&:is(.dark *));
+
+/* Parley's look. Every color comes from docs/design/look.md. */
+:root {
+  /* Parley's colors */
+  --parley-page: #DCE0E8;
+  --parley-card: #FFFFFF;
+  --parley-white: #FFFFFF;
+  --parley-conversation: #EDF0F6;
+  --parley-bubble-theirs: #FFFFFF;
+  --parley-bubble-mine: #D1D3E4;
+  --parley-teal: #00A389;
+  --parley-teal-tint: #E2F4F3;
+  --parley-tab-active: #D1E8E7;
+  --parley-status-pill: #BDE8DE;
+  --parley-search: #EFF3F6;
+  --parley-row-selected: #F5F7FB;
+  --parley-text: #28283A;
+  --parley-text-soft: #8A8CA0;
+  --parley-rail-icon: #C3C3D3;
+  --parley-online: #09C2A3;
+  --parley-error: #E5484D;
+  --parley-border: #E0E0E0;
+  --parley-tick: #B4B6C8;
+  --parley-file-purple: #E6E6FA;
+  --parley-file-yellow: #FBF0D9;
+  --parley-file-teal: #DDF3F4;
+  --parley-file-red: #FCE4E4;
+
+  /* shadcn's slots point at Parley's colors */
+  --background: var(--parley-page);
+  --foreground: var(--parley-text);
+  --card: var(--parley-card);
+  --card-foreground: var(--parley-text);
+  --popover: var(--parley-card);
+  --popover-foreground: var(--parley-text);
+  --primary: var(--parley-teal);
+  --primary-foreground: var(--parley-white);
+  --secondary: var(--parley-teal-tint);
+  --secondary-foreground: var(--parley-teal);
+  --muted: var(--parley-search);
+  --muted-foreground: var(--parley-text-soft);
+  --accent: var(--parley-teal-tint);
+  --accent-foreground: var(--parley-text);
+  --destructive: var(--parley-error);
+  --border: var(--parley-border);
+  --input: var(--parley-border);
+  --ring: var(--parley-teal);
+
+  /* Buttons and tiles */
+  --radius: 12px;
+}
+
+/* Turns the variables into Tailwind classes, e.g. bg-primary, text-muted-foreground */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Parley-only colors, e.g. bg-bubble-mine, bg-online */
+  --color-conversation: var(--parley-conversation);
+  --color-bubble-theirs: var(--parley-bubble-theirs);
+  --color-bubble-mine: var(--parley-bubble-mine);
+  --color-tab-active: var(--parley-tab-active);
+  --color-status-pill: var(--parley-status-pill);
+  --color-search: var(--parley-search);
+  --color-row-selected: var(--parley-row-selected);
+  --color-rail-icon: var(--parley-rail-icon);
+  --color-online: var(--parley-online);
+  --color-tick: var(--parley-tick);
+  --color-file-purple: var(--parley-file-purple);
+  --color-file-yellow: var(--parley-file-yellow);
+  --color-file-teal: var(--parley-file-teal);
+  --color-file-red: var(--parley-file-red);
+
+  /* Corners: rounded-lg is 12px; the rest are shadcn's sizes around it */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Fixed sizes from look.md */
+@theme {
+  --font-sans: "Outfit", sans-serif;
+  --font-heading: "Outfit", sans-serif;
+
+  /* rounded-panel, rounded-card */
+  --radius-panel: 16px;
+  --radius-card: 28px;
+
+  /* text-header, text-name, text-body, text-label */
+  --text-header: 22px;
+  --text-name: 18px;
+  --text-body: 15px;
+  --text-label: 12px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground text-body;
+  }
+}
