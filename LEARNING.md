@@ -56,3 +56,34 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - What this task does, as if explaining to an interviewer: This task locks down Parley’s design system and layout rules before building. By mapping out exact color tokens, a strict 4px grid, and multi-column viewports in look.md and screens.md, we guarantee visual consistency and an ergonomic mobile experience across the entire app.
 - What I'd check first if it broke:  would first check the global layout classes and the responsive breakpoint configurations. If elements look uneven, it usually means arbitrary pixel values were used instead of our approved spacing steps (16px or 24px), or the mobile viewpoint toggle is failing to collapse columns.
 - What still confuses me: • Managing transition animations smoothly when toggling the right side panel between open and folded states, ensuring it doesn't cause sudden layout jumps or text clipping in the active conversation column.
+
+---
+
+### Task 3: Create the React app
+**What was built**
+- `frontend/`: the React app, made with Vite's React + TypeScript template (with ESLint).
+  - `vite.config.ts`: turns on the React and Tailwind plugins, and makes `@/` mean `src/`.
+  - `tsconfig.json`, `tsconfig.app.json`: TypeScript settings, plus the `@/` shortcut.
+  - `eslint.config.js`: code checks. One rule is off for shadcn's generated files in `src/components/ui/`.
+  - `components.json`: shadcn's settings (Radix, Nova style, Neutral, CSS variables).
+  - `src/index.css`: Parley's whole theme. Every color from `look.md` as a `--parley-*` variable, shadcn's slots pointing at them, the Outfit font, corner sizes and text sizes.
+  - `index.html`: loads Outfit from Google Fonts and sets the tab title to "Parley".
+  - `src/components/ui/button.tsx`: shadcn's Button, made by `shadcn init`. Teal through `--primary`.
+  - `src/lib/utils.ts`: the `cn` helper that joins class names and settles clashes.
+  - `src/App.tsx`: the test page. "Parley" and a teal Button in a white 28px-corner card on the page color.
+- `docs/design/look.md`: added the Border color, `#E0E0E0`.
+
+**New ideas**
+- Vite: runs the app while I work and builds it for the web.
+- Tailwind CSS: style with short class names. Preflight clears the browser's default styles so we start clean.
+- @/ import path: a shortcut meaning src/, so imports don't break when files move. TypeScript 6 dropped baseUrl, so we use paths only.
+- dependencies vs devDependencies: what the app needs to run vs tools only for building and checking.
+- shadcn/ui: not a package of components. Its CLI copies each component's code into my project, so I own it.
+- Theme variables: colors live in one CSS file as variables. Components use names like `bg-primary`, so changing one variable restyles the whole app.
+- `@theme`: Tailwind v4's way to add my own classes from CSS, for example `rounded-card` or `text-header`.
+- Dark mode stays off: `dark:` classes only work under a `.dark` class, which Parley never adds.
+
+**In my words** (draft by Claude Code, Adithya keeps or edits)
+- What this task does, as if explaining to an interviewer: It sets up the React app with Vite, Tailwind and shadcn/ui, and puts Parley's colors, font and corners into one theme file so every screen uses the same names.
+- What I'd check first if it broke: `src/index.css` (the theme and imports), then `vite.config.ts` (the plugins and the `@/` alias).
+- What still confuses me: nothing
