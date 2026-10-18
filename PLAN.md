@@ -14,21 +14,33 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 7: Sign-up and log-in screens (fast mode, not connected yet)
-- **Branch:** `feature/auth-screens`
-- **Goal:** the sign-up and log-in screens from `docs/design/screens.md`, working with fake logic. T12 connects them to the real backend.
-- **Mode:** frontend fast mode (see CLAUDE.md).
-- **What to build:**
-  1. Log-in screen: one white card (28px corners) centered on the `#DCE0E8` page. Parley logo at the top, a short title ("Welcome back"), email and password fields, a teal "Log in" button, and a small link "No account? Sign up".
-  2. Sign-up screen: the same card with name, email and password fields, a teal "Sign up" button, and a link "Have an account? Log in".
-  3. Fields: soft grey like the search box, a label above each field, and a show/hide eye on the password field.
-  4. Checks in the browser before "sending": every field filled, email looks like an email, password at least 8 characters, name at least 2 characters. Errors show in red `#E5484D` text (12px) under the field. The button shows "Logging in..." / "Signing up..." for about 1 second.
-  5. Fake result: a correct form opens the main chat screen. A "Log out" item somewhere simple (for example the settings gear) goes back to the log-in screen. Nothing is saved; a page reload starts at log-in.
-  6. Switching screens: plain React state in `App.tsx` (log-in, sign-up, chat). No routing library yet (that's decided in T12).
-  7. Phone: the card fills the width with a 16px gap on each side.
-- **shadcn components allowed:** Input and Label (add them with the shadcn CLI). Nothing else new.
-- **Code layout:** `src/features/auth/` for the two screens and their shared form pieces.
-- **Done when:** both screens match `screens.md` and the look, the checks show the right errors, a correct form opens the chat screen, log out returns to log-in, the phone view works, `npm run build` and `npm run lint` pass, and Claude Code has written the LEARNING.md section.
+### Task 8: FastAPI app, health check, PostgreSQL in Docker Compose (teaching mode)
+- **Branch:** `feature/backend-setup`
+- **Goal:** the first piece of the backend. A tiny FastAPI app that answers "I'm alive", a PostgreSQL database running in Docker, and the first test. Nothing talks to the database yet (that's T9).
+- **Mode:** full teaching mode (CLAUDE.md "While building"). This is the part Adithya explains in interviews.
+- **How the pieces fit:**
+```
+ Browser / curl ──HTTP──> FastAPI app (backend/, runs on your laptop, port 8000)
+                              GET /health -> {"status": "ok"}
+
+ Docker Compose ──runs──> PostgreSQL (container "db", port 5432)   <- T9 connects the app to it
+
+ pytest ──calls──> the FastAPI app in memory (no server needed)
+```
+- **Steps:**
+  1. Check the tools: Python 3.12 or newer (`python --version`), Docker Desktop installed and running (`docker --version`, `docker compose version`). If one is missing, Claude Code gives install steps and waits.
+  2. `backend/` folder with a virtual environment (`python -m venv .venv`) and `requirements.txt`: fastapi, uvicorn (the server that runs FastAPI), pytest, httpx2 (needed by FastAPI's test client; newer Starlette prefers it over the old httpx). These count as part of D6.
+  3. `backend/app/main.py`: the FastAPI app with one route, `GET /health`, that returns `{"status": "ok"}`. Run it with uvicorn and open `http://localhost:8000/health` and `http://localhost:8000/docs`.
+  4. `backend/tests/test_health.py`: one pytest test that calls `/health` and checks the answer. Run `pytest`.
+  5. `docker-compose.yml` at the repo root: one service, `db`, using the official `postgres` image, with a named volume so data survives restarts, and a health check.
+  6. `.env.example` (committed) with the database name, user and password as placeholders; the real `.env` (never committed) is copied from it. Compose reads `.env`.
+  7. `.gitignore` at the root: `.venv/`, `__pycache__/`, `.pytest_cache/`, `.env`.
+  8. Check Postgres: `docker compose up -d`, `docker compose ps` shows `db` as healthy, and `docker compose exec db psql -U <user> -d <db> -c "select 1;"` prints 1.
+- **Agreed changes:** `.gitignore` is written first (before the venv). Also add `backend/app/__init__.py` and `backend/pytest.ini` so plain `pytest` finds the app. Pin `postgres:17` (not `latest`) and exact package versions in `requirements.txt`.
+- **Not in this task:** SQLAlchemy, tables, Alembic, any connection from the app to the database, Dockerfile for the backend (T25).
+- **Done when:** `/health` returns `{"status": "ok"}`, `pytest` passes, `db` shows healthy, `.env` is not in `git status`, and Adithya has filled in "In my words".
+
+Questions to ask Adithya along the way (one per big idea): what a route is, why a virtual environment, what a Docker container is, why `.env` is never committed.
 
 ---
 
@@ -43,7 +55,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T4. The main screen with fake data: layout, chat list, conversation, side panel, upload view, phone (T4 to T6 merged)
 - ~~T5~~ merged into T4
 - ~~T6~~ merged into T4
-- [ ] T7. Sign-up and log-in screens (not connected yet)
+- [x] T7. Sign-up and log-in screens (not connected yet)
 
 ### Phase 2: Backend basics
 - [ ] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
