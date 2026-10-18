@@ -128,3 +128,31 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - What this task does, as if explaining to an interviewer: It builds Parley's main chat screen with fake data. One top component holds the state, and the chat list, conversation and side panel just show it, so the backend can replace the fake data later without changing the screens.
 - What I'd check first if it broke: `ChatScreen.tsx` (the state and what it passes down), then the column that looks wrong.
 - What still confuses me: nothing
+
+---
+
+### Task 7: Sign-up and log-in screens
+**What was built**
+- `frontend/src/components/ui/input.tsx`, `label.tsx`: shadcn's Input and Label, added with `npx shadcn add input label`.
+- `frontend/src/features/auth/`: the two screens and their shared pieces.
+  - `validate.ts`: `checkName()`, `checkEmail()` and `checkPassword()`. Each returns an error message, or `""` when the value is fine. Name needs 2+ characters, email must look like `name@example.com`, password needs 8+ characters.
+  - `AuthCard.tsx`: the white 28px card on the blue-grey page, with the logo, a title and the small "switch screen" link. On a phone it keeps a 16px gap on each side.
+  - `FormField.tsx`: a label, a soft grey input and the red 12px error under it. A password field gets an eye button to show or hide it.
+  - `LoginScreen.tsx`: "Welcome back" with email and password. `handleSubmit()` runs the checks; if all pass, the button shows "Logging in..." for 1 second and then the chat opens.
+  - `SignupScreen.tsx`: "Create your account" with name, email and password. Same idea, with "Signing up...".
+- `frontend/src/App.tsx`: holds which screen shows (`"login"`, `"signup"` or `"chat"`) in plain state. It starts at log-in, so a page reload always comes back to log-in.
+- `frontend/src/features/chat/ChatScreen.tsx`, `ChatColumn.tsx`: the settings gear opens a small menu with "Log out", which goes back to the log-in screen.
+
+**New ideas**
+- Controlled input: React state holds what's in each field, and the input shows that state. So the code always knows the current value.
+- Client-side checks: the browser checks the form before sending, so mistakes show at once. The backend must still check again, because anyone can skip the browser.
+- `noValidate`: turns off the browser's own pop-up checks, so only our red messages show.
+- `preventDefault()`: stops a form from reloading the page when it's sent.
+- `aria-invalid` and `aria-describedby`: tell screen readers that a field has an error and where the error text is.
+- Screen switching with state: one value in `App.tsx` picks the screen. A routing library (real URLs like `/login`) is decided in T12.
+- `cn()` merging: it removes clashing classes. It reads a custom class like `text-body` as a color, so we write the size as `text-[length:var(--text-body)]`.
+
+**In my words** (draft by Claude Code, Adithya keeps or edits)
+- What this task does, as if explaining to an interviewer: It adds log-in and sign-up screens that check the form in the browser and then pretend to send it. One state value in App picks which screen shows, so T12 only has to swap the fake wait for a real backend call.
+- What I'd check first if it broke: `validate.ts` for wrong errors, then the `screen` state in `App.tsx` if the wrong screen shows.
+- What still confuses me: nothing

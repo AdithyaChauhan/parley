@@ -14,7 +14,7 @@ function timeNow() {
 }
 
 // The whole main screen. It holds all the state; the columns only show it.
-export function ChatScreen() {
+export function ChatScreen({ onLogout }: { onLogout: () => void }) {
   const [chats, setChats] = useState<Chat[]>(fakeChats)
   const [openId, setOpenId] = useState(fakeChats[0].id)
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
@@ -55,6 +55,7 @@ export function ChatScreen() {
         openId={openChat.id}
         onSelect={selectChat}
         phoneVisible={phoneView === "list"}
+        onLogout={onLogout}
       />
       <Conversation
         chat={openChat}
