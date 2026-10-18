@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ChevronDown, ChevronLeft, EllipsisVertical, Plus, Search, Settings } from "lucide-react"
+import { ChevronDown, ChevronLeft, EllipsisVertical, LogOut, Plus, Search, Settings } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { me, type Chat } from "@/data/fake"
 import { cn } from "@/lib/utils"
@@ -10,11 +10,13 @@ type ChatColumnProps = {
   openId: string
   onSelect: (id: string) => void
   phoneVisible: boolean
+  onLogout: () => void
 }
 
 // The left column: title, my profile, search box and the list of chats
-export function ChatColumn({ chats, openId, onSelect, phoneVisible }: ChatColumnProps) {
+export function ChatColumn({ chats, openId, onSelect, phoneVisible, onLogout }: ChatColumnProps) {
   const [search, setSearch] = useState("")
+  const [menuOpen, setMenuOpen] = useState(false)
   const shown = chats.filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
 
   return (
@@ -37,13 +39,30 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible }: ChatColumn
       </header>
 
       <div className="relative flex shrink-0 flex-col items-center pt-4 pb-4 md:pt-6">
-        <button
-          type="button"
-          aria-label="Settings"
-          className="absolute top-3 right-0 flex size-8 items-center justify-center rounded-lg text-rail-icon hover:text-muted-foreground md:top-5"
-        >
-          <Settings className="size-5" />
-        </button>
+        {/* The gear opens a small menu with "Log out" */}
+        <div className="absolute top-3 right-0 md:top-5">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label="Settings"
+            aria-expanded={menuOpen}
+            className="flex size-8 items-center justify-center rounded-lg text-rail-icon hover:text-muted-foreground"
+          >
+            <Settings className="size-5" />
+          </button>
+          {menuOpen && (
+            <div className="absolute top-full right-0 z-20 mt-1 w-36 rounded-lg bg-card p-1 shadow-lg ring-1 shadow-foreground/10 ring-border">
+              <button
+                type="button"
+                onClick={onLogout}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-row-selected"
+              >
+                <LogOut className="size-4 text-muted-foreground" />
+                Log out
+              </button>
+            </div>
+          )}
+        </div>
         <Avatar name={me.name} tint={me.tint} size="lg" online />
         <p className="mt-2 text-name">{me.name}</p>
         <button

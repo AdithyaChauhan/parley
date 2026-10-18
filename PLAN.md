@@ -14,22 +14,21 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 4: The main screen with fake data (fast mode)
-- **Branch:** `feature/main-screen`
-- **Goal:** the full desktop main screen from `docs/reference/reference-1.webp`, working with fake data, plus the folded side panel (reference-3), the upload view (reference-2) and the phone layout. Follow `docs/design/look.md` and `docs/design/screens.md`.
-- **Mode:** frontend fast mode (see CLAUDE.md). Claude Code builds, Adithya runs and looks.
+### Task 7: Sign-up and log-in screens (fast mode, not connected yet)
+- **Branch:** `feature/auth-screens`
+- **Goal:** the sign-up and log-in screens from `docs/design/screens.md`, working with fake logic. T12 connects them to the real backend.
+- **Mode:** frontend fast mode (see CLAUDE.md).
 - **What to build:**
-  1. Fake data in one file: about 6 chats (1:1 and one group), each with 8-12 messages, made-up names (D8), times, unread counts and tick states (sent, delivered, read).
-  2. App layout: the app fills the whole browser window (no outer page frame, no outer rounded corners; see D8), with four columns: icon rail, chat column, conversation, side panel. Profile areas are compact so the chat list and file list get the most room.
-  3. Icon rail: a simple Parley logo (a teal speech bubble with "P", our own design), 6 icons (lucide-react), an active-icon tile with the teal bar, your avatar at the bottom.
-  4. Chat column: no header on desktop (phones keep a "Chat" title); the profile is the top of the column, with the settings gear in its corner: (avatar, online dot, name, "available" pill), search box that filters the list, "Last chats" with + and menu icons, chat rows (avatar or initials, name, time, preview, unread pill). Clicking a row opens that chat. "typing..." shows on one fake chat.
-  5. Conversation: title, Messages / Participants tabs (only Messages works for now), messages with avatar, "Name, time" label and bubble (sharp corner rule), ticks beside the time on my messages, "Mira is typing" with animated dots, message box with emoji, attach and teal send button. Typing a message and pressing Enter or Send adds it to the list with one grey tick (fake, no backend).
-  6. Side panel: no header on desktop (phones keep "Shared files" and a back arrow); a small ">" in its top-right corner folds it. Group avatar, name, member count, the two stat tiles and the four file type rows. Folded, it becomes the thin icon strip (reference-3) with a "<" to open it again.
-  7. Upload view: dragging a file over the conversation shows the dashed border and teal upload circle (reference-2). Dropping does nothing yet (v2).
-  8. Phone (under 768px wide): one column at a time, with the back arrow, and the icon rail as a bottom bar.
-- **Avatars:** initials on soft tinted circles (no photos, D8).
-- **Code layout:** `src/components/` for shared pieces, `src/features/chat/` for chat screens, `src/data/fake.ts` for fake data. Only React state (`useState`), no new libraries beyond D7.
-- **Done when:** the screen looks like reference-1 side by side (layout, colors, spacing, shapes), the folded panel looks like reference-3, the upload view like reference-2, the phone layout works in the browser's phone view (F12, then the phone icon), `npm run build` and `npm run lint` pass, and Claude Code has written the LEARNING.md section.
+  1. Log-in screen: one white card (28px corners) centered on the `#DCE0E8` page. Parley logo at the top, a short title ("Welcome back"), email and password fields, a teal "Log in" button, and a small link "No account? Sign up".
+  2. Sign-up screen: the same card with name, email and password fields, a teal "Sign up" button, and a link "Have an account? Log in".
+  3. Fields: soft grey like the search box, a label above each field, and a show/hide eye on the password field.
+  4. Checks in the browser before "sending": every field filled, email looks like an email, password at least 8 characters, name at least 2 characters. Errors show in red `#E5484D` text (12px) under the field. The button shows "Logging in..." / "Signing up..." for about 1 second.
+  5. Fake result: a correct form opens the main chat screen. A "Log out" item somewhere simple (for example the settings gear) goes back to the log-in screen. Nothing is saved; a page reload starts at log-in.
+  6. Switching screens: plain React state in `App.tsx` (log-in, sign-up, chat). No routing library yet (that's decided in T12).
+  7. Phone: the card fills the width with a 16px gap on each side.
+- **shadcn components allowed:** Input and Label (add them with the shadcn CLI). Nothing else new.
+- **Code layout:** `src/features/auth/` for the two screens and their shared form pieces.
+- **Done when:** both screens match `screens.md` and the look, the checks show the right errors, a correct form opens the chat screen, log out returns to log-in, the phone view works, `npm run build` and `npm run lint` pass, and Claude Code has written the LEARNING.md section.
 
 ---
 
@@ -41,7 +40,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 1: Screens with fake data (React)
 - [x] T3. Create the React app (Vite + TypeScript) with Tailwind CSS and shadcn/ui, plus a `.gitignore` for `node_modules`. Do it in two steps: Vite + Tailwind first, shadcn/ui after that works
-- [ ] T4. The main screen with fake data: layout, chat list, conversation, side panel, upload view, phone (T4 to T6 merged)
+- [x] T4. The main screen with fake data: layout, chat list, conversation, side panel, upload view, phone (T4 to T6 merged)
 - ~~T5~~ merged into T4
 - ~~T6~~ merged into T4
 - [ ] T7. Sign-up and log-in screens (not connected yet)
