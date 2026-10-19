@@ -14,36 +14,47 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 9: First tables with SQLAlchemy and Alembic: users, sessions (teaching mode)
-- **Branch:** `feature/db-tables`
-- **Goal:** the FastAPI app connects to PostgreSQL, and the first two tables exist, created by an Alembic migration. No sign-up logic yet (that's T10).
-- **Mode:** full teaching mode.
-- **How the pieces fit:**
-```
- .env (DATABASE_URL) ──read by──> config.py (settings)
-                                      │
- models.py (User, UserSession) ──>│ db.py (engine + session) ──SQL──> PostgreSQL "db" container
-                                      │
- Alembic migration ──reads models, writes CREATE TABLE──> PostgreSQL
- GET /health/db ──"select 1"──> PostgreSQL   (proves the app can reach the database)
-```
-- **New packages (count as part of D6):** sqlalchemy (2.x), psycopg (the PostgreSQL driver, `psycopg[binary]`), alembic, pydantic-settings (reads `.env`). Pin exact versions.
-- **Steps:**
-  1. Add `DATABASE_URL` to `.env.example` and your `.env` (built from the same user, password and database name, host `localhost`, port 5432).
-  2. `backend/app/config.py`: one Settings class that reads `DATABASE_URL` from the root `.env`.
-  3. `backend/app/db.py`: the engine, a session maker, the `Base` class for models, and a `get_db` dependency that opens and closes one session per request.
-  4. `backend/app/auth/models.py` (feature folder, D5). Python class names `User` and `UserSession` (so it isn't confused with SQLAlchemy's own Session); table names stay `users` and `sessions`:
-     - `users`: `id` (UUID), `email` (unique, plus a CHECK rule that it equals `lower(email)`), `name`, `password_hash`, `created_at`.
-     - `sessions`: `id` (UUID), `user_id` (points to `users.id`, deleted with the user), `refresh_token_hash`, `created_at`, `expires_at`, `revoked_at` (empty until logged out). `refresh_token_hash` is unique, and `user_id` has an index. This is where the 7-day "long pass" from T10 will live.
-  5. Alembic setup inside `backend/`: `alembic init migrations`, then wire `migrations/env.py` to `Base.metadata` and to `DATABASE_URL` from config.py (never a password inside `alembic.ini`).
-  6. First migration: `alembic revision --autogenerate -m "create users and sessions"`. Adithya reads the generated file with Claude Code before running `alembic upgrade head`.
-  7. Check in psql: `\dt` lists `users`, `sessions` and `alembic_version`; `\d users` shows the columns.
-  8. `GET /health/db` in main.py: runs `select 1` through `get_db` and returns `{"database": "ok"}`.
-- **Added during the task:** a 5-second `connect_timeout` in db.py so `/health/db` fails clearly instead of hanging. Note: a Windows PostgreSQL install also uses port 5432; keep it stopped while Parley runs.
-- **Not in this task:** passwords, hashing, tokens, sign-up or log-in routes (T10); tests that need the database (T11 sets up a test database in CI).
-- **Done when:** `alembic upgrade head` creates both tables, `\dt` shows them, `/health/db` returns ok while `db` runs (and fails clearly when it's stopped), `pytest` still passes, and Adithya has filled in "In my words".
+### Task 10: Sign up and log in (teaching mode, short explanations)
+- **Branch:** `feature/auth`
+- **Goal:** real accounts. People can sign up, log in, stay logged in for 7 days, and log out. Tested from `/docs`. The screens connect in T12.
+- **Mode:** teaching mode, with SHORT explanations (max ~6 lines per idea) and the Excel picture: PostgreSQL = the Excel file, a table = a sheet, SQLAlchemy = the translator, Alembic = the builder.
 
-Questions to ask Adithya (one per big idea): what an ORM is, what a migration is and why not just create tables by hand, why UUIDs for ids, why we store a hash of the refresh token instead of the token itself.
+**Start with a 3-line recap (Claude Code says this first):**
+- Password hash: like a fingerprint of the password. We store the fingerprint, never the password, and compare fingerprints at log-in.
+- Refresh token: a 7-day visitor pass the browser keeps. We store only its fingerprint in `sessions`, so someone who steals the database can't use it to log in.
+- Access token: a 15-minute wristband. Every request shows it, and the server checks it with no database lookup.
+
+**How log-in works:**
+```
+ 1. POST /auth/login (email, password)
+ 2.   find user in "users" sheet ──> compare password fingerprint
+ 3.   add a row to "sessions" (fingerprint of a new random refresh token, expires in 7 days)
+ 4. <── access token (15 min, in the JSON reply)
+        + refresh token (7 days, in an httpOnly cookie the page's code can't read)
+
+ Every API call:  "Authorization: Bearer <access token>"  ──> server checks it, no DB needed
+ After 15 min:    POST /auth/refresh (cookie)  ──> new access token + a NEW refresh token (old one stops working)
+ Log out:         POST /auth/logout  ──> session row marked revoked, cookie cleared
+```
+
+- **New packages (D16):** argon2-cffi (password hashing), PyJWT (access tokens), email-validator (pydantic's email check, for EmailStr). Pin exact versions.
+- **New setting:** `JWT_SECRET` in `.env` and a placeholder in `.env.example`. Make a strong one with `python -c "import secrets; print(secrets.token_urlsafe(64))"`.
+- **Files (all in `backend/app/auth/`):**
+  1. `security.py`: hash and check passwords (argon2); make and read access tokens (PyJWT, 15 min, holds the user id and session id); make a random refresh token (`secrets.token_urlsafe`) and its SHA-256 fingerprint.
+  2. `schemas.py`: the shapes of requests and replies (pydantic). Sign-up: name 2 to 50 characters, email, password at least 8. Never return `password_hash`.
+  3. `deps.py`: `get_current_user` reads the Bearer token, checks it, loads the user. Wrong or expired token gives 401.
+  4. `routes.py` (an APIRouter, plugged into main.py):
+     - `POST /auth/signup`: trim and lowercase the email (the CHECK rule needs it), 409 if the email is taken, save the user, then log them in (same reply as log-in).
+     - `POST /auth/login`: trim and lowercase the email. A wrong email or password both give the same 401 "Wrong email or password" (don't reveal which accounts exist).
+     - `POST /auth/refresh`: read the cookie, find the session by fingerprint, check not revoked and not expired, then rotate (new refresh token, new fingerprint saved) and return a new access token.
+     - `POST /auth/logout`: mark the session revoked, clear the cookie.
+     - `GET /auth/me`: needs the access token, returns id, name and email.
+  5. Cookie settings: `httponly=True`, `samesite="lax"`, `path="/auth"`, `secure` off for local http (turned on in production later).
+- **Tests (no database needed yet):** `tests/test_security.py` for hashing, token make/read, expired token rejected, and email trim/lowercase. Route tests that need the database come in T11.
+- **Not in this task:** connecting the screens (T12), rate limits (T22), email verification, password reset.
+- **Done when:** in `/docs`: sign up, log in, `/auth/me` works with the token (Authorize button), refresh gives a new token, log out then refresh fails with 401. A new row appears in `sessions` (check in psql). `pytest` passes. Adithya fills in "In my words".
+
+Questions for Adithya (short): why a hash for passwords, why the same 401 for wrong email and wrong password, why the access token is short and the refresh token long, why the refresh token goes in an httpOnly cookie.
 
 ---
 
@@ -62,13 +73,13 @@ Questions to ask Adithya (one per big idea): what an ORM is, what a migration is
 
 ### Phase 2: Backend basics
 - [x] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
-- [ ] T9. First tables with SQLAlchemy and Alembic: users, sessions
+- [x] T9. First tables with SQLAlchemy and Alembic: users, sessions
 - [ ] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
-- [ ] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` there and start a Postgres service)
+- [ ] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` and `JWT_SECRET` there and start a Postgres service)
 - [ ] T12. Connect the sign-up and log-in screens to the real backend
 
 ### Phase 3: Messages over HTTP
-- [ ] T13. Chat tables: chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
+- [ ] T13. Chat tables (start the brief with the table map): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
 - [ ] T14. Send a message and load history, 30 at a time
 - [ ] T15. Connect the chat list and conversation screens to real data
 

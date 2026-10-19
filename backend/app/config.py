@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     database_url: str
+    # The private key that signs access tokens. Anyone who has it can make
+    # valid tokens, so it lives only in .env.
+    jwt_secret: str
 
 
 settings = Settings()

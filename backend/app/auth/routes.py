@@ -1,0 +1,137 @@
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.auth.deps import get_current_user
+from app.auth.models import User, UserSession
+from app.auth.schemas import LoginRequest, SignupRequest, TokenOut, UserOut
+from app.auth.security import (
+    REFRESH_TOKEN_DAYS,
+    create_access_token,
+    hash_password,
+    hash_refresh_token,
+    new_refresh_token,
+    verify_password,
+)
+from app.db import get_db
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+REFRESH_COOKIE = "refresh_token"
+
+# Checked against when the email doesn't exist, so a wrong email takes as
+# long as a wrong password and the timing doesn't reveal which accounts exist.
+_DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
+
+
+# --- Helpers ---
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=refresh_token,
+        max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60,
+        httponly=True,  # the page's JavaScript can't read it
+        samesite="lax",  # not sent when another site posts to us
+        path="/auth",  # only sent to /auth/..., not to every API call
+        secure=False,  # local http for now; turned on in production
+    )
+
+
+def _start_session(db: Session, user: User, response: Response) -> TokenOut:
+    """Add a sessions row, put the refresh token in a cookie, return an access token."""
+    refresh_token = new_refresh_token()
+    session = UserSession(
+        user_id=user.id,
+        refresh_token_hash=hash_refresh_token(refresh_token),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_DAYS),
+    )
+    db.add(session)
+    db.commit()
+
+    _set_refresh_cookie(response, refresh_token)
+    return TokenOut(access_token=create_access_token(user.id, session.id))
+
+
+def _find_session(db: Session, refresh_token: str | None) -> UserSession | None:
+    if not refresh_token:
+        return None
+    return db.scalar(
+        select(UserSession).where(
+            UserSession.refresh_token_hash == hash_refresh_token(refresh_token)
+        )
+    )
+
+
+# --- Routes ---
+
+
+@router.post("/signup", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
+def signup(body: SignupRequest, response: Response, db: Session = Depends(get_db)):
+    user = User(name=body.name, email=body.email, password_hash=hash_password(body.password))
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        # The UNIQUE rule on users.email refused the row: the email is taken.
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+
+    return _start_session(db, user, response)
+
+
+@router.post("/login", response_model=TokenOut)
+def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == body.email))
+
+    password_hash = user.password_hash if user else _DUMMY_PASSWORD_HASH
+    if not verify_password(body.password, password_hash) or user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password")
+
+    return _start_session(db, user, response)
+
+
+@router.post("/refresh", response_model=TokenOut)
+def refresh(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
+    db: Session = Depends(get_db),
+):
+    session = _find_session(db, refresh_token)
+    now = datetime.now(timezone.utc)
+    if session is None or session.revoked_at is not None or session.expires_at <= now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired, please log in again")
+
+    # Rotate: a new refresh token replaces the old one in the same row,
+    # so the old one stops matching anything.
+    new_token = new_refresh_token()
+    session.refresh_token_hash = hash_refresh_token(new_token)
+    session.expires_at = now + timedelta(days=REFRESH_TOKEN_DAYS)
+    db.commit()
+
+    _set_refresh_cookie(response, new_token)
+    return TokenOut(access_token=create_access_token(session.user_id, session.id))
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
+    db: Session = Depends(get_db),
+):
+    session = _find_session(db, refresh_token)
+    if session is not None and session.revoked_at is None:
+        session.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+
+    # Must use the same path as when it was set, or the browser keeps it.
+    response.delete_cookie(REFRESH_COOKIE, path="/auth", httponly=True, samesite="lax")
+
+
+@router.get("/me", response_model=UserOut)
+def me(user: User = Depends(get_current_user)):
+    return user
