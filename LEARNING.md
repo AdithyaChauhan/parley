@@ -251,3 +251,74 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - What this task does, as if explaining to an interviewer: The app can now open the database (the Excel file) through SQLAlchemy (the translator). Alembic (the builder) created the users and sessions sheets from a saved migration, and /health/db checks the app can reach the database
 - What I'd check first if it broke: docker compose ps to see if db is running, /health/db, and whether something else is on port 5432
 - What still confuses me: i dont know how many more tables, why and how will they be connected.
+
+---
+
+### Task 10: Sign up and log in
+**What was built**
+- `backend/requirements.txt`: three new pinned packages: argon2-cffi (password hashing), PyJWT (access tokens) and email-validator (pydantic's email check, for `EmailStr`).
+- `.env.example`: a new `JWT_SECRET` placeholder and the command that makes a strong one. The real secret is only in `.env`.
+- `backend/app/config.py`: new required setting `jwt_secret`. The app won't start without it.
+- `backend/app/auth/security.py`: the toolbox. Nothing in it touches the database.
+  - `normalize_email()`: trims spaces and lowercases.
+  - `hash_password()` / `verify_password()`: argon2 fingerprint of a password, and the check at log-in. A wrong password returns `False` instead of crashing.
+  - `create_access_token()`: a JWT holding the user id (`sub`), session id (`sid`), and when it was made and expires (`iat`, `exp`, 15 minutes), sealed with `JWT_SECRET`.
+  - `decode_access_token()`: checks the seal and expiry and returns the contents. Only accepts our one algorithm (HS256) and requires `sub`, `sid` and `exp`.
+  - `new_refresh_token()` / `hash_refresh_token()`: a random 7-day token and its SHA-256 fingerprint.
+- `backend/tests/test_security.py`: 7 tests, no database. Right and wrong password, different hash each time, token round trip, expired token rejected, token with another secret rejected, stable refresh fingerprint, email trim/lowercase.
+- `backend/app/auth/schemas.py`: shapes of requests and replies.
+  - `Email`: trims and lowercases first, then checks it's a real email address. (Done here, not in the routes, because email-validator rejects leading spaces.)
+  - `SignupRequest`: name 2 to 50 characters (trimmed), email, password at least 8. `LoginRequest`: email and password, no length rule.
+  - `TokenOut`: `access_token` and `token_type: "bearer"`. `UserOut`: only `id`, `name`, `email`, so `password_hash` can never be sent.
+- `backend/app/auth/deps.py`: `get_current_user`, the bouncer. Reads `Authorization: Bearer <token>`, checks it, loads the user. Missing, fake, changed or expired token, or a deleted user: 401. `HTTPBearer` adds the Authorize button to `/docs`.
+- `backend/app/auth/routes.py`: the `/auth` router.
+  - `_start_session()`: adds a `sessions` row with the refresh token's fingerprint, sets the cookie, returns an access token. Used by sign-up and log-in.
+  - `_set_refresh_cookie()`: `httponly`, `samesite="lax"`, `path="/auth"`, `secure` off for local http, lasts 7 days.
+  - `POST /auth/signup`: saves the user. If the UNIQUE rule on email refuses the row: 409. Then logs them in (201).
+  - `POST /auth/login`: same 401 "Wrong email or password" for an unknown email and a wrong password. An unknown email is still checked against a dummy hash so both take the same time.
+  - `POST /auth/refresh`: finds the session by fingerprint, checks not revoked and not expired, then rotates: new token, new fingerprint and a new 7-day expiry in the same row.
+  - `POST /auth/logout`: marks the session revoked and clears the cookie (204).
+  - `GET /auth/me`: needs the access token. Returns id, name, email.
+- `backend/app/main.py`: plugs in the auth router.
+
+**New ideas**
+- Password hash (argon2): a slow, salted fingerprint. A thief who steals the `users` sheet can still guess passwords, but each guess is slow and only tests one user.
+- Salt: random letters mixed into each password before hashing, so the same password gives a different fingerprint each time.
+- SHA-256 for refresh tokens: fast and always the same for the same input. Fine because the token is already random and unguessable, and needed because we look up the row by fingerprint.
+- JWT (access token): a short note ("user X, session Y, valid until 10:15") plus a seal made with the server's secret. Changing one letter breaks the seal. Checked without the database.
+- Access token vs refresh token: a 15-minute wristband shown on every request vs a 7-day visitor pass used only to get new wristbands.
+- Trade-off: the bouncer doesn't look in `sessions`, so after log-out an old access token still works until it expires. That's why it's short.
+- Rotation: each refresh replaces the refresh token, so a copied old one stops working.
+- httpOnly cookie: the browser stores it and sends it by itself, but the page's JavaScript can't read it, so injected scripts can't steal the refresh token. `path="/auth"` means it only goes to `/auth/...` routes.
+- Bearer header: `Authorization: Bearer <token>`, the standard way to send an access token.
+- Dependency as a bouncer: `Depends(get_current_user)` runs before a route; if it raises 401, the route never runs.
+- Same error for wrong email and wrong password: different messages would let an attacker find which emails have accounts, then focus on those. Same for timing, hence the dummy hash.
+- Status codes: 201 created, 204 done with no reply body, 401 not logged in, 409 conflict (email taken), 422 the request's shape is wrong (bad JSON, short password).
+- The database as the last guard: the UNIQUE rule on email stops duplicates even if two sign-ups arrive at the same moment.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: Adds accounts: sign up, log in, stay logged in, log out.
+
+Passwords are hashed with argon2; only the hash is stored.
+
+Log-in gives two tokens: a 15-minute JWT access token (checked by its seal, no database) and a 7-day refresh token in an httpOnly cookie (checked against the sessions table, so it can be cancelled).
+
+Refresh swaps a valid refresh token for a new access token and rotates the stored fingerprint, so the old one dies.
+
+Log-out stamps revoked_at, so the next refresh is 401.
+
+Duplicate emails are stopped by the database's UNIQUE rule → 409.
+
+Unknown email still runs a dummy argon2 check, so both failures take the same time and return the same 401.
+- What I'd check first if it broke: /health/db — it only runs select 1, so a failure proves the problem is below my code, not in it. One click eliminates the whole database layer.
+
+psql → \dt — code can be perfect while the tables were never created (fresh clone, CI). Missing tables → alembic upgrade head, done. "Relation does not exist" is a different bug from "wrong password."
+
+Is JWT_SECRET unchanged? — it explains one specific symptom nothing else does: a token issued seconds ago being rejected. Nothing wrong with the token; the stamp changed.
+
+Is the cookie arriving? — refresh reads the cookie, not the body. A valid sessions row plus a 401 means the server never got what it was looking for, so it's transport, not data.
+
+select id, user_id, expires_at, revoked_at from sessions; — 401 is deliberately vague; only the table tells you which case it is. No row = never written. revoked_at set = you logged out. Row valid but 401 = the lookup is the bug, not the row.
+
+Server log, then pytest last — the log shows what the code actually saw. And my 8 tests don't touch the database, so they'd pass while the routes are broken. Run them after you know it's in the routes, to confirm the machines are fine.
+- What still confuses me: The rotation race: two tabs refreshing at once both send the same old cookie, the first rotates it, the second gets 401. I get why, but not yet what the frontend should do about it.

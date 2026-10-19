@@ -77,3 +77,10 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T28) show a need.
 - Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
 - Config comes from `.env` through pydantic-settings. No secrets in committed files.
+
+**D16. How log-in works**
+- Passwords: hashed with argon2 (argon2-cffi). Never stored or logged in plain text.
+- Access token: a JWT (PyJWT) that lasts 15 minutes, sent as "Authorization: Bearer".
+- Refresh token: random, lasts 7 days, sent in an httpOnly cookie. Only its SHA-256 fingerprint is stored, in `sessions`. Each refresh swaps it for a new one (rotation) in the same `sessions` row and moves the expiry to 7 days from now, so you stay logged in while you keep using the app.
+- Emails are checked with pydantic's EmailStr (email-validator), then trimmed and lowercased before saving or looking up.
+- Log-in errors never reveal whether an email exists.
