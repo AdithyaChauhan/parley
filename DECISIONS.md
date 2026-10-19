@@ -72,3 +72,8 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Planning chat (Claude on claude.ai): writes the plan, task briefs and decisions; teaches.
 - Claude Code: writes project code, one file at a time. Adithya can write a file himself whenever he wants; he tells Claude Code first. Stops and reports if a brief clashes with the code or with this file.
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
+
+**D15. Database access style**
+- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T28) show a need.
+- Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
+- Config comes from `.env` through pydantic-settings. No secrets in committed files.

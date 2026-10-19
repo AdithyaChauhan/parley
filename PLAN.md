@@ -14,33 +14,36 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 8: FastAPI app, health check, PostgreSQL in Docker Compose (teaching mode)
-- **Branch:** `feature/backend-setup`
-- **Goal:** the first piece of the backend. A tiny FastAPI app that answers "I'm alive", a PostgreSQL database running in Docker, and the first test. Nothing talks to the database yet (that's T9).
-- **Mode:** full teaching mode (CLAUDE.md "While building"). This is the part Adithya explains in interviews.
+### Task 9: First tables with SQLAlchemy and Alembic: users, sessions (teaching mode)
+- **Branch:** `feature/db-tables`
+- **Goal:** the FastAPI app connects to PostgreSQL, and the first two tables exist, created by an Alembic migration. No sign-up logic yet (that's T10).
+- **Mode:** full teaching mode.
 - **How the pieces fit:**
 ```
- Browser / curl ──HTTP──> FastAPI app (backend/, runs on your laptop, port 8000)
-                              GET /health -> {"status": "ok"}
-
- Docker Compose ──runs──> PostgreSQL (container "db", port 5432)   <- T9 connects the app to it
-
- pytest ──calls──> the FastAPI app in memory (no server needed)
+ .env (DATABASE_URL) ──read by──> config.py (settings)
+                                      │
+ models.py (User, UserSession) ──>│ db.py (engine + session) ──SQL──> PostgreSQL "db" container
+                                      │
+ Alembic migration ──reads models, writes CREATE TABLE──> PostgreSQL
+ GET /health/db ──"select 1"──> PostgreSQL   (proves the app can reach the database)
 ```
+- **New packages (count as part of D6):** sqlalchemy (2.x), psycopg (the PostgreSQL driver, `psycopg[binary]`), alembic, pydantic-settings (reads `.env`). Pin exact versions.
 - **Steps:**
-  1. Check the tools: Python 3.12 or newer (`python --version`), Docker Desktop installed and running (`docker --version`, `docker compose version`). If one is missing, Claude Code gives install steps and waits.
-  2. `backend/` folder with a virtual environment (`python -m venv .venv`) and `requirements.txt`: fastapi, uvicorn (the server that runs FastAPI), pytest, httpx2 (needed by FastAPI's test client; newer Starlette prefers it over the old httpx). These count as part of D6.
-  3. `backend/app/main.py`: the FastAPI app with one route, `GET /health`, that returns `{"status": "ok"}`. Run it with uvicorn and open `http://localhost:8000/health` and `http://localhost:8000/docs`.
-  4. `backend/tests/test_health.py`: one pytest test that calls `/health` and checks the answer. Run `pytest`.
-  5. `docker-compose.yml` at the repo root: one service, `db`, using the official `postgres` image, with a named volume so data survives restarts, and a health check.
-  6. `.env.example` (committed) with the database name, user and password as placeholders; the real `.env` (never committed) is copied from it. Compose reads `.env`.
-  7. `.gitignore` at the root: `.venv/`, `__pycache__/`, `.pytest_cache/`, `.env`.
-  8. Check Postgres: `docker compose up -d`, `docker compose ps` shows `db` as healthy, and `docker compose exec db psql -U <user> -d <db> -c "select 1;"` prints 1.
-- **Agreed changes:** `.gitignore` is written first (before the venv). Also add `backend/app/__init__.py` and `backend/pytest.ini` so plain `pytest` finds the app. Pin `postgres:17` (not `latest`) and exact package versions in `requirements.txt`.
-- **Not in this task:** SQLAlchemy, tables, Alembic, any connection from the app to the database, Dockerfile for the backend (T25).
-- **Done when:** `/health` returns `{"status": "ok"}`, `pytest` passes, `db` shows healthy, `.env` is not in `git status`, and Adithya has filled in "In my words".
+  1. Add `DATABASE_URL` to `.env.example` and your `.env` (built from the same user, password and database name, host `localhost`, port 5432).
+  2. `backend/app/config.py`: one Settings class that reads `DATABASE_URL` from the root `.env`.
+  3. `backend/app/db.py`: the engine, a session maker, the `Base` class for models, and a `get_db` dependency that opens and closes one session per request.
+  4. `backend/app/auth/models.py` (feature folder, D5). Python class names `User` and `UserSession` (so it isn't confused with SQLAlchemy's own Session); table names stay `users` and `sessions`:
+     - `users`: `id` (UUID), `email` (unique, plus a CHECK rule that it equals `lower(email)`), `name`, `password_hash`, `created_at`.
+     - `sessions`: `id` (UUID), `user_id` (points to `users.id`, deleted with the user), `refresh_token_hash`, `created_at`, `expires_at`, `revoked_at` (empty until logged out). `refresh_token_hash` is unique, and `user_id` has an index. This is where the 7-day "long pass" from T10 will live.
+  5. Alembic setup inside `backend/`: `alembic init migrations`, then wire `migrations/env.py` to `Base.metadata` and to `DATABASE_URL` from config.py (never a password inside `alembic.ini`).
+  6. First migration: `alembic revision --autogenerate -m "create users and sessions"`. Adithya reads the generated file with Claude Code before running `alembic upgrade head`.
+  7. Check in psql: `\dt` lists `users`, `sessions` and `alembic_version`; `\d users` shows the columns.
+  8. `GET /health/db` in main.py: runs `select 1` through `get_db` and returns `{"database": "ok"}`.
+- **Added during the task:** a 5-second `connect_timeout` in db.py so `/health/db` fails clearly instead of hanging. Note: a Windows PostgreSQL install also uses port 5432; keep it stopped while Parley runs.
+- **Not in this task:** passwords, hashing, tokens, sign-up or log-in routes (T10); tests that need the database (T11 sets up a test database in CI).
+- **Done when:** `alembic upgrade head` creates both tables, `\dt` shows them, `/health/db` returns ok while `db` runs (and fails clearly when it's stopped), `pytest` still passes, and Adithya has filled in "In my words".
 
-Questions to ask Adithya along the way (one per big idea): what a route is, why a virtual environment, what a Docker container is, why `.env` is never committed.
+Questions to ask Adithya (one per big idea): what an ORM is, what a migration is and why not just create tables by hand, why UUIDs for ids, why we store a hash of the refresh token instead of the token itself.
 
 ---
 
@@ -58,10 +61,10 @@ Questions to ask Adithya along the way (one per big idea): what a route is, why 
 - [x] T7. Sign-up and log-in screens (not connected yet)
 
 ### Phase 2: Backend basics
-- [ ] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
+- [x] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
 - [ ] T9. First tables with SQLAlchemy and Alembic: users, sessions
 - [ ] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
-- [ ] T11. GitHub Actions: run the tests on every pull request
+- [ ] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` there and start a Postgres service)
 - [ ] T12. Connect the sign-up and log-in screens to the real backend
 
 ### Phase 3: Messages over HTTP

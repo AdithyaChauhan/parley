@@ -195,3 +195,59 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - What this task does, as if explaining to an interviewer: we have built fastapi for backend server and integrated local postgresql database running in isolated docker container. We automated test using pytest and verified /health
 - What I'd check first if it broke: I'd check /docs in 8000 port. verify .env parameters if they match with .env.example and run docker compose ps to see containers health
 - What still confuses me: Nothing so far
+
+---
+
+### Task 9: First tables with SQLAlchemy and Alembic: users, sessions
+**What was built**
+- `backend/requirements.txt`: four new pinned packages: sqlalchemy (the ORM), psycopg[binary] (the PostgreSQL driver), alembic (migrations) and pydantic-settings (reads `.env`).
+- `.env.example`: a new `DATABASE_URL` line, the app's full address for the database (`postgresql+psycopg://user:password@localhost:5432/database`).
+- `backend/app/config.py`: the one place the backend reads its settings from.
+  - `Settings`: lists the settings the app needs (just `database_url` for now) and fills them from the root `.env`. It stops at startup with a clear error if one is missing. `extra="ignore"` skips the `POSTGRES_*` lines, which are only for Docker.
+  - `settings`: the one shared copy other files import.
+- `backend/app/db.py`: how the backend talks to PostgreSQL.
+  - `engine`: the link to the database. Keeps a pool of open connections to reuse. `pool_pre_ping` checks a saved connection still works before using it. `connect_timeout` gives up on a new connection after 5 seconds.
+  - `SessionLocal`: makes sessions (one conversation with the database each).
+  - `Base`: parent class for all models. Every model is recorded in `Base.metadata`, which Alembic reads.
+  - `get_db()`: a FastAPI dependency. Opens one session per request and always closes it afterwards.
+- `backend/app/auth/__init__.py`: empty. Marks `auth/` as a package (the auth feature folder, D5).
+- `backend/app/auth/models.py`: the first two tables, as Python classes.
+  - `User` (table `users`): `id` (UUID), `email` (unique, with a CHECK rule that it is lowercase), `name`, `password_hash`, `created_at`.
+  - `UserSession` (table `sessions`): one logged-in device. `id` (UUID), `user_id` (points to `users.id`, deleted with the user, indexed), `refresh_token_hash` (unique), `created_at`, `expires_at`, `revoked_at` (empty until logout). Named `UserSession` so it isn't confused with SQLAlchemy's `Session`.
+- `backend/alembic.ini`: Alembic's settings, made by `alembic init migrations`. The `sqlalchemy.url` line was removed so no password is ever in this file.
+- `backend/migrations/env.py`: the script Alembic runs each time. Changed to load our models, use `Base.metadata` as the list of tables we want, and use the app's own `engine` and `DATABASE_URL`.
+- `backend/migrations/script.py.mako` and `README`: made by `alembic init`. The template for new migration files, unchanged.
+- `backend/migrations/versions/8d01e14c7065_create_users_and_sessions.py`: the first migration, made by `alembic revision --autogenerate`.
+  - `upgrade()`: creates `users`, `sessions` and the `ix_sessions_user_id` index.
+  - `downgrade()`: removes them again, in reverse order.
+- `backend/app/main.py`: new route.
+  - `health_db()`: `GET /health/db`. Runs `select 1` through `get_db`. Returns `{"database": "ok"}`, or status 503 with `{"database": "unavailable"}` if the database can't be reached.
+
+**New ideas**
+- The picture: PostgreSQL is an Excel file, a table is a sheet, SQLAlchemy is the translator from Python classes to sheets, Alembic is the builder that creates and changes the sheets.
+- ORM (Object-Relational Mapper): maps tables to classes, rows to objects and columns to attributes, so we work with Python objects and it writes the SQL for us. Raw SQL is still allowed (`select 1`).
+- Driver (psycopg): the piece that actually speaks PostgreSQL's network language. The ORM sits on top of it.
+- Engine and connection pool: the engine is the link to the database. The pool keeps a few connections open to reuse, because opening a new one each time is slow.
+- Session (SQLAlchemy): one conversation with the database. Changes are collected, then `commit()` saves them all together, or none.
+- Dependency (FastAPI `Depends`): something FastAPI prepares before a route runs, like opening a session, and cleans up afterwards.
+- `yield`: hands a value to the caller and pauses until the caller is done, then carries on (here: closes the session).
+- Primary key: the one column that names each row (`id`).
+- UUID: a long random id any program can make on its own without clashing. It can't be guessed the way 1, 2, 3 can.
+- Foreign key: a column that points at a row in another table. `ON DELETE CASCADE` deletes the linked rows too.
+- Unique constraint: no two rows can share this value.
+- CHECK constraint: a rule the database checks on every row (here: email must be lowercase).
+- Index: like the index at the back of a book. Finds rows fast without reading the whole table. Unique columns get one for free; foreign keys don't.
+- Hash: a one-way fingerprint. Easy to make from a value, impossible to turn back. We store only hashes of passwords and refresh tokens, so a leaked database can't be used to log in.
+- Migration: a saved list of table changes, kept in Git. Every copy of the database runs the same lists in the same order, and existing rows are kept.
+- Autogenerate: Alembic compares our models with the real database and writes the difference as a migration. A person still reads it before running it.
+- `alembic_version`: Alembic's own one-row table that remembers which migration the database is on.
+- `upgrade head` / `downgrade`: run all migrations not yet done / undo one.
+- psql: PostgreSQL's command-line tool. `\dt` lists tables, `\d users` shows one table's columns, `\q` quits.
+- Status 503: "service unavailable". The server is up, but something it needs (the database) is not.
+- Timeout: a limit on how long to wait. Without `connect_timeout`, a new connection to a stopped database waited forever on this laptop.
+- Port clash (again): a Windows-installed PostgreSQL service (`postgresql-x64-17`) was also on port 5432 and answered instead of Docker's, giving "password authentication failed". Fixed by stopping it and setting it to Manual.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: The app can now open the database (the Excel file) through SQLAlchemy (the translator). Alembic (the builder) created the users and sessions sheets from a saved migration, and /health/db checks the app can reach the database
+- What I'd check first if it broke: docker compose ps to see if db is running, /health/db, and whether something else is on port 5432
+- What still confuses me: i dont know how many more tables, why and how will they be connected.
