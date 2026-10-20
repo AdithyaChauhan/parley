@@ -403,3 +403,27 @@ Server log, then pytest last — the log shows what the code actually saw. And m
 - What this task does: the screens now use real accounts. Everything goes through `/api` on one address, the access token stays in memory, and the refresh cookie logs you back in after a reload.
 - What I'd check first if it broke: the Network tab in DevTools. Does `/api/auth/refresh` return 200, and is the `refresh_token` cookie there with path `/api/auth`? Then whether FastAPI is running on port 8000.
 - What still confuses me: how the "401, refresh, retry" path will behave once real chats load in T15, since nothing on the chat screen uses the token yet.
+
+
+---
+What this task does:
+
+Adds three tables for real conversations: chats (one per conversation), chat_members (who's in which chat), messages (one row per message, numbered #1, #2, #3 inside its chat).
+
+add_message() takes the next number safely — it locks the chat's row, adds 1, and saves the message in the same transaction. Two people sending at once get #8 and #9, never both #8. If saving fails, the +1 is undone, so no numbers are skipped.
+
+It also fixes the two-tab refresh race from T12: the session row is locked during refresh, so the second tab waits and gets 401 instead of both winning.
+
+What you'd check first:
+
+Did the migration run? alembic upgrade head, then \dt — all 6 tables there?
+
+Are the rules there? \d messages — both unique constraints?
+
+Run pytest tests/test_messages.py — numbering tests fail → problem is in add_message. Concurrency test flaky → the lock.
+
+Tests pass alone but fail together → the db fixture isn't emptying all 5 tables.
+
+What still confuses me:
+
+The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes to them yet. I get the idea — highest number a person has read — but not how they become read ticks in the UI. That's T14/T15.

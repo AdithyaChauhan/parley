@@ -8,57 +8,54 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - After a pull request merges, Adithya tells the planning chat. The planner sends back a new PLAN.md (box ticked, "You are here" moved to the next task). Adithya replaces the file, and that goes in the next task's branch.
 - Only the planner (chat Claude) writes task briefs. Claude Code never edits this file. It can only suggest changes.
 - Adithya may write a file himself if he wants. He tells Claude Code, so it knows.
+- Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
+- Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
 - Each task's "Done when" also needs the task's "In my words" in LEARNING.md filled in by Adithya. For frontend tasks (fast mode, see CLAUDE.md), Claude Code drafts it and Adithya just reviews it.
 
 ---
 
 ## You are here
 
-### Task 12: Connect the sign-up and log-in screens to the real backend (fast mode for the screens)
-- **Branch:** `feature/connect-auth`
-- **Goal:** the screens from T7 talk to the real backend from T10. Signing up makes a real row in `users`. A page reload keeps you logged in. Log out really logs you out.
-- **Mode:** frontend fast mode for the React parts. The one small backend change (step 1) gets a short explanation.
+### Task 13: Chat tables and safe message numbers (teaching mode, short, Excel picture)
+- **Branch:** `feature/chat-tables`
+- **Goal:** the three chat sheets exist, and the database itself makes sure messages get #1, #2, #3 with no gaps or doubles, even when two people send at the same instant. Also fix the small refresh race found in T12 (same idea: a row lock).
+- **Mode:** teaching mode, short explanations, Excel picture.
 
-**Carry-over from T11 (do first):**
-- Commit the T11 section of LEARNING.md that's already drafted. Adithya answers the 3 T11 questions and writes "In my words" for T11.
-- The red-cross proof: break `test_health` on purpose, push, see the red cross on the PR, `git revert HEAD`, push, see green again. Put the run links in the report.
+**The table map (Excel picture: each box is a sheet):**
+```
+ users ──< chat_members >── chats ──< messages
+   │        (who is in        (one row     (#1, #2, #3
+   │         which chat,       per chat,    per chat)
+   │         + ticks)          + counter)
+ sessions
+ ──<  means "one row here, many rows there"
+```
 
-**How the pieces talk (D17):**
-```
- Browser  ──>  Vite dev server (localhost:5173)
-                 │  /api/...  is passed on (the "proxy") to
-                 ▼
-               FastAPI (127.0.0.1:8000)  /api/auth/signup, /login, /refresh, /logout, /me
- The browser thinks it's all ONE site, so the refresh cookie just works.
-```
+**The big idea: a row lock (Claude Code explains this first, ~5 lines).**
+Two people send a message to the same chat at the same moment. Both read "last number = 7" and both write #8: that's a clash. A row lock is like Excel saying "someone else is editing this cell, wait". The first sender locks the chat's row, takes #8 and lets go; the second waits a few milliseconds, then takes #9.
 
 **Steps:**
-1. **Backend (small):** move every route under `/api` (`/api/health`, `/api/health/db`, `/api/auth/...`), set the refresh cookie's path to `/api/auth`, and update the tests. CI must stay green.
-2. **Vite proxy:** in `vite.config.ts`, send `/api` to `http://127.0.0.1:8000`.
-3. **Pages with addresses (React Router, D7):** `/login`, `/signup`, and `/` (the chat screen). `/` sends you to `/login` if you're not logged in. `/login` and `/signup` send you to `/` if you are.
-4. **`src/lib/api.ts`:** one small fetch helper.
-   - It adds `Authorization: Bearer <token>` to every request.
-   - On a 401 from a normal request, it refreshes once and retries.
-   - Only one refresh runs at a time: other requests wait for it. If the refresh itself gets 401, it waits about 300 ms and tries once more, because another tab may have just rotated the cookie. Then it gives up and logs out.
-5. **`src/features/auth/AuthProvider.tsx`:** keeps the user and the access token in memory only (never in localStorage, D16). On page load it calls refresh, then `/api/auth/me`. While that runs, show a simple loading screen.
-6. **Wire the forms:** sign-up and log-in call the API.
-   - Server errors show under the right field, in the T7 style:
-     - 409 means "That email is already taken."
-     - 401 means "Wrong email or password."
-     - 422 shows the field problems.
-     - If the backend is down: "Can't reach Parley. Try again."
-   - Log out calls `/api/auth/logout`, then goes to `/login`.
-7. **Chat screen:** the profile shows the real logged-in name (instead of the fake "Kiran Rao"). Chats and messages stay fake until T15.
+0. **Refresh race fix (from T12):** in `POST /api/auth/refresh`, load the session row with `.with_for_update()`, so two refreshes with the same cookie can't both rotate it. Add a test.
+1. **`app/chats/models.py`:**
+   - `chats`: `id` (UUID), `kind` ("direct" or "group"), `title` (empty for direct chats), `direct_key` (unique; for direct chats it's the two user ids sorted and joined, so the same two people can't get two direct chats), `last_seq` (whole number, starts at 0: the counter), `created_at`.
+   - `chat_members`: `chat_id` + `user_id` together are the key (one row per person per chat), `joined_at`, `delivered_up_to` and `read_up_to` (whole numbers, start at 0: the two D9 bookmarks for ticks). Index on `user_id` (for "list my chats").
+2. **`app/messages/models.py`:** `messages`: `id` (UUID), `chat_id`, `seq` (the number), `sender_id`, `client_msg_id` (UUID made by the sender's app, D9), `body` (text), `created_at`.
+   - Unique `(chat_id, seq)`: no two #8s in one chat.
+   - Unique `(sender_id, client_msg_id)`: a retried send is never saved twice.
+3. **Migration:** `alembic revision --autogenerate -m "create chats, chat_members, messages"`. Read it together before `alembic upgrade head`. Check with `\dt` and `\d messages`.
+4. **`app/messages/service.py`:** one function, `add_message(db, chat_id, sender_id, client_msg_id, body)`:
+   - If this `(sender_id, client_msg_id)` already exists, return that message (no new row).
+   - Otherwise, in one transaction: `UPDATE chats SET last_seq = last_seq + 1 WHERE id = ... RETURNING last_seq` (this locks the row), then insert the message with that number.
+   - No routes yet (T14).
+5. **Tests (`client` fixture or a db fixture; add the new tables to the conftest TRUNCATE):**
+   - three messages get 1, 2, 3;
+   - the same `client_msg_id` twice gives one row;
+   - two chats count separately;
+   - two threads sending at the same time get two different numbers and no error.
+- **Not in this task:** send and history routes (T14), screens (T15), groups UI.
+- **Done when:** tables exist (`\dt`), all tests pass locally and in CI (green tick), the concurrency test passes several runs in a row, and Adithya has filled in "In my words".
 
-- **New library (D7 updated):** react-router. Use its current version in "declarative" mode (`BrowserRouter`, `Routes`, `Route`), checked in its docs.
-- **Not in this task:** real chats or messages (T13–T15), remember-me options, password reset.
-- **Done when:**
-  - Signing up in the browser adds a row in `users` (check in psql).
-  - Reload keeps you logged in, and log out sends you to `/login`.
-  - A reload after log out stays logged out.
-  - Two tabs open for over 15 minutes, both still work.
-  - A wrong password shows the right message, and a stopped backend shows "Can't reach Parley".
-  - The PR shows a green tick, and Claude Code has written the LEARNING.md section.
+Questions for Adithya (short): what a row lock does; why `client_msg_id` stops double messages; why the counter lives on the chat row and not in Python.
 
 ---
 
@@ -80,12 +77,12 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T9. First tables with SQLAlchemy and Alembic: users, sessions
 - [x] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
 - [x] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` and `JWT_SECRET` there and start a Postgres service)
-- [ ] T12. Connect the sign-up and log-in screens to the real backend (only one refresh at a time per tab, other requests wait for it; if a refresh gets 401, wait a moment and retry once, since another tab may have just rotated the cookie; use a Vite proxy so the cookie works)
+- [x] T12. Connect the sign-up and log-in screens to the real backend (only one refresh at a time per tab, other requests wait for it; if a refresh gets 401, wait a moment and retry once, since another tab may have just rotated the cookie; use a Vite proxy so the cookie works)
 
 ### Phase 3: Messages over HTTP
 - [ ] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
 - [ ] T14. Send a message and load history, 30 at a time
-- [ ] T15. Connect the chat list and conversation screens to real data
+- [ ] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path) (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
 
 ### Phase 4: Live chat (WebSocket)
 - [ ] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)

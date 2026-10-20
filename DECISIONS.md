@@ -91,3 +91,9 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - In development, Vite passes `/api` on to FastAPI (a proxy). Later, Nginx does the same job (T26).
 - So the browser sees one site, and the refresh cookie (path `/api/auth`) works without extra cross-site settings.
 - Rule for every proof step (like the red-cross test): put the run link or a screenshot in the report.
+
+**D18. How message numbers are kept safe**
+- Each chat row holds a counter, `last_seq`. Taking the next number is one `UPDATE ... RETURNING` on that row, which locks it, so two senders never get the same number.
+- The database also refuses a second #N in the same chat (unique `chat_id` + `seq`).
+- A send carries the sender app's `client_msg_id`; the database refuses a second copy (unique `sender_id` + `client_msg_id`), and the server returns the first one instead.
+- A direct chat between two people has a unique `direct_key`, so they can't end up with two direct chats.
