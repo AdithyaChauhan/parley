@@ -10,11 +10,12 @@ type ChatColumnProps = {
   openId: string
   onSelect: (id: string) => void
   phoneVisible: boolean
+  myName: string
   onLogout: () => void
 }
 
 // The left column: title, my profile, search box and the list of chats
-export function ChatColumn({ chats, openId, onSelect, phoneVisible, onLogout }: ChatColumnProps) {
+export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLogout }: ChatColumnProps) {
   const [search, setSearch] = useState("")
   const [menuOpen, setMenuOpen] = useState(false)
   const shown = chats.filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
@@ -63,8 +64,8 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible, onLogout }: 
             </div>
           )}
         </div>
-        <Avatar name={me.name} tint={me.tint} size="lg" online />
-        <p className="mt-2 text-name">{me.name}</p>
+        <Avatar name={myName} tint={me.tint} size="lg" online />
+        <p className="mt-2 text-name">{myName}</p>
         <button
           type="button"
           className="mt-2 flex items-center gap-1.5 rounded-md bg-status-pill px-3 py-0.5 text-sm text-primary"

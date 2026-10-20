@@ -21,6 +21,8 @@ from app.db import get_db
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 REFRESH_COOKIE = "refresh_token"
+# The cookie is only sent to /api/auth/... routes, not to every API call.
+REFRESH_COOKIE_PATH = "/api/auth"
 
 # Checked against when the email doesn't exist, so a wrong email takes as
 # long as a wrong password and the timing doesn't reveal which accounts exist.
@@ -37,7 +39,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60,
         httponly=True,  # the page's JavaScript can't read it
         samesite="lax",  # not sent when another site posts to us
-        path="/auth",  # only sent to /auth/..., not to every API call
+        path=REFRESH_COOKIE_PATH,
         secure=False,  # local http for now; turned on in production
     )
 
@@ -129,7 +131,7 @@ def logout(
         db.commit()
 
     # Must use the same path as when it was set, or the browser keeps it.
-    response.delete_cookie(REFRESH_COOKIE, path="/auth", httponly=True, samesite="lax")
+    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, httponly=True, samesite="lax")
 
 
 @router.get("/me", response_model=UserOut)

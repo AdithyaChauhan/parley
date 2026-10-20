@@ -11,4 +11,11 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, './src'),
     },
   },
+  // Pass /api/... on to FastAPI, so the browser sees one site (D17)
+  // and the refresh cookie works without cross-site settings.
+  server: {
+    proxy: {
+      '/api': 'http://127.0.0.1:8000',
+    },
+  },
 })

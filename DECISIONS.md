@@ -33,6 +33,7 @@ Later we may move one piece (notifications) into its own service. Each new piece
 Screens are built first with fake data. Then each backend feature plugs into a screen that already exists.
 The small packages shadcn/ui installs for itself (for example cn, clsx, tailwind-merge, class-variance-authority, lucide-react icons, tw-animate-css, radix-ui) count as part of shadcn/ui. No dark mode for now. The only font is Outfit from Google Fonts; preset fonts (like Geist) are removed.
 ESLint (from Vite's template) checks the code for mistakes. It's a dev-only tool and never ships with the app.
+react-router handles page addresses (/login, /signup, /). Added in T12.
 
 **D8. Look (updated)**
 Parley matches the reference screenshots closely: layout, colors, spacing, shapes and font style.
@@ -84,3 +85,9 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Refresh token: random, lasts 7 days, sent in an httpOnly cookie. Only its SHA-256 fingerprint is stored, in `sessions`. Each refresh swaps it for a new one (rotation) in the same `sessions` row and moves the expiry to 7 days from now, so you stay logged in while you keep using the app.
 - Emails are checked with pydantic's EmailStr (email-validator), then trimmed and lowercased before saving or looking up.
 - Log-in errors never reveal whether an email exists.
+
+**D17. One address for the whole app**
+- Every backend route lives under `/api` (for example `/api/auth/login`).
+- In development, Vite passes `/api` on to FastAPI (a proxy). Later, Nginx does the same job (T26).
+- So the browser sees one site, and the refresh cookie (path `/api/auth`) works without extra cross-site settings.
+- Rule for every proof step (like the red-cross test): put the run link or a screenshot in the report.

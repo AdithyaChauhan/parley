@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { chats as fakeChats, type Chat, type Message } from "@/data/fake"
+import { useAuth, type User } from "@/features/auth/useAuth"
 import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
@@ -14,7 +15,9 @@ function timeNow() {
 }
 
 // The whole main screen. It holds all the state; the columns only show it.
-export function ChatScreen({ onLogout }: { onLogout: () => void }) {
+// The user is real (T12); chats and messages stay fake until T15.
+export function ChatScreen({ user }: { user: User }) {
+  const { logout } = useAuth()
   const [chats, setChats] = useState<Chat[]>(fakeChats)
   const [openId, setOpenId] = useState(fakeChats[0].id)
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
@@ -49,13 +52,14 @@ export function ChatScreen({ onLogout }: { onLogout: () => void }) {
   return (
     // Fills the whole browser window, with no outer frame (D8)
     <div className="flex h-svh w-full flex-col overflow-hidden bg-card md:flex-row">
-      <IconRail />
+      <IconRail myName={user.name} />
       <ChatColumn
         chats={chats}
         openId={openChat.id}
         onSelect={selectChat}
         phoneVisible={phoneView === "list"}
-        onLogout={onLogout}
+        myName={user.name}
+        onLogout={logout}
       />
       <Conversation
         chat={openChat}
