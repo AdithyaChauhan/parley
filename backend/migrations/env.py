@@ -2,7 +2,10 @@ from logging.config import fileConfig
 
 from alembic import context
 
-import app.auth.models  # noqa: F401  (loads the models so Base.metadata knows their tables)
+# Load every models file, so Base.metadata knows all the tables.
+import app.auth.models  # noqa: F401
+import app.chats.models  # noqa: F401
+import app.messages.models  # noqa: F401
 from app.config import settings
 from app.db import Base, engine
 

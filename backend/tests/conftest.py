@@ -33,8 +33,13 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from fastapi.testclient import TestClient  # noqa: E402  (must come after the line above)
 
-from app.db import engine  # noqa: E402
+from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+
+
+def _empty_all_tables():
+    with engine.begin() as connection:
+        connection.execute(text("TRUNCATE users, sessions, chats, chat_members, messages"))
 
 
 @pytest.fixture(scope="session")
@@ -45,9 +50,18 @@ def test_database():
 
 @pytest.fixture
 def client(test_database):
-    """A fresh test browser for one test. Empties users and sessions afterwards,
+    """A fresh test browser for one test. Empties every sheet afterwards,
     so every test starts clean."""
     yield TestClient(app)
 
-    with engine.begin() as connection:
-        connection.execute(text("TRUNCATE users, sessions"))
+    _empty_all_tables()
+
+
+@pytest.fixture
+def db(test_database):
+    """A database session, for tests that skip the routes. Empties every
+    sheet afterwards, so every test starts clean."""
+    with SessionLocal() as session:
+        yield session
+
+    _empty_all_tables()

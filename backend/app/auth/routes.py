@@ -59,14 +59,19 @@ def _start_session(db: Session, user: User, response: Response) -> TokenOut:
     return TokenOut(access_token=create_access_token(user.id, session.id))
 
 
-def _find_session(db: Session, refresh_token: str | None) -> UserSession | None:
+def _find_session(
+    db: Session, refresh_token: str | None, lock: bool = False
+) -> UserSession | None:
+    """lock=True also locks the row until we commit (SELECT ... FOR UPDATE).
+    Another request for the same row waits, then reads the saved version."""
     if not refresh_token:
         return None
-    return db.scalar(
-        select(UserSession).where(
-            UserSession.refresh_token_hash == hash_refresh_token(refresh_token)
-        )
+    query = select(UserSession).where(
+        UserSession.refresh_token_hash == hash_refresh_token(refresh_token)
     )
+    if lock:
+        query = query.with_for_update()
+    return db.scalar(query)
 
 
 # --- Routes ---
@@ -103,7 +108,10 @@ def refresh(
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
     db: Session = Depends(get_db),
 ):
-    session = _find_session(db, refresh_token)
+    # Locked: if two refreshes bring the same cookie at once, the second waits.
+    # By then the first has saved a new fingerprint, so the old cookie no
+    # longer matches and the second gets 401 instead of rotating it again.
+    session = _find_session(db, refresh_token, lock=True)
     now = datetime.now(timezone.utc)
     if session is None or session.revoked_at is not None or session.expires_at <= now:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired, please log in again")

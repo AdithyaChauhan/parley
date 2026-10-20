@@ -1,3 +1,11 @@
+import threading
+import time
+
+from fastapi.testclient import TestClient
+
+from app.auth import routes
+from app.main import app
+
 ANA = {"name": "Ana Silva", "email": "ana@example.com", "password": "secret123"}
 
 
@@ -76,3 +84,38 @@ def test_refresh_after_logout_gives_401(client):
     # hand, so the 401 proves the session was closed, not just that the cookie is gone.
     client.cookies.set("refresh_token", cookie)
     assert client.post("/api/auth/refresh").status_code == 401
+
+
+def test_two_refreshes_with_the_same_cookie_only_one_wins(client, monkeypatch):
+    _sign_up(client)
+    cookie = client.cookies.get("refresh_token")
+
+    # Refresh makes the new token between reading the session row and saving it.
+    # Slow that step down, so both requests surely read the row before either
+    # saves. Without this, the gap is under a millisecond and the race rarely happens.
+    make_token = routes.new_refresh_token
+
+    def slow_new_refresh_token():
+        time.sleep(0.2)
+        return make_token()
+
+    monkeypatch.setattr(routes, "new_refresh_token", slow_new_refresh_token)
+
+    start_together = threading.Barrier(2)
+    statuses = []
+
+    def refresh_in_another_tab():
+        tab = TestClient(app)  # its own test browser, like a second tab
+        tab.cookies.set("refresh_token", cookie)
+        start_together.wait()  # both threads send at the same moment
+        statuses.append(tab.post("/api/auth/refresh").status_code)
+
+    threads = [threading.Thread(target=refresh_in_another_tab) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    # The first refresh rotates the cookie. The second must find the old
+    # cookie no longer matches (401), not rotate it a second time (200).
+    assert sorted(statuses) == [200, 401]
