@@ -14,52 +14,51 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 11: GitHub Actions runs the tests on every pull request (teaching mode, short)
-- **Branch:** `chore/ci`
-- **Goal:** every pull request gets a green tick (all checks passed) or a red cross (something broke), before you merge. Also, the first real tests for the sign-up and log-in routes, using a separate test database.
-- **Mode:** teaching mode, short explanations, simple pictures.
+### Task 12: Connect the sign-up and log-in screens to the real backend (fast mode for the screens)
+- **Branch:** `feature/connect-auth`
+- **Goal:** the screens from T7 talk to the real backend from T10. Signing up makes a real row in `users`. A page reload keeps you logged in. Log out really logs you out.
+- **Mode:** frontend fast mode for the React parts. The one small backend change (step 1) gets a short explanation.
 
-**The idea in one picture:**
+**Carry-over from T11 (do first):**
+- Commit the T11 section of LEARNING.md that's already drafted. Adithya answers the 3 T11 questions and writes "In my words" for T11.
+- The red-cross proof: break `test_health` on purpose, push, see the red cross on the PR, `git revert HEAD`, push, see green again. Put the run links in the report.
+
+**How the pieces talk (D17):**
 ```
- You push a branch / open a PR
-        │
-        ▼
- GitHub starts a fresh, empty Linux computer (a "runner")
-        │
-        ├── job "backend":  start Postgres (a "service container")
-        │                   install Python packages
-        │                   alembic upgrade head   (build the sheets in an empty test database)
-        │                   pytest                 (all tests, including the new route tests)
-        │
-        └── job "frontend": npm ci → npm run lint → npm run build
-        │
-        ▼
- Green tick ✓ on the PR = safe to merge.  Red cross ✗ = fix first.
+ Browser  ──>  Vite dev server (localhost:5173)
+                 │  /api/...  is passed on (the "proxy") to
+                 ▼
+               FastAPI (127.0.0.1:8000)  /api/auth/signup, /login, /refresh, /logout, /me
+ The browser thinks it's all ONE site, so the refresh cookie just works.
 ```
-The runner has no `.env`, so the workflow file gives it test-only values (a throwaway `DATABASE_URL` and `JWT_SECRET`). These are fake and safe to commit.
 
 **Steps:**
-1. **A separate test database on your laptop** (so tests never touch your own data):
-   - `docker compose exec db createdb -U <your user> parley_test`
-   - Add `TEST_DATABASE_URL` to `.env` (same as `DATABASE_URL` but ending in `/parley_test`) and a placeholder to `.env.example`.
-2. **`backend/tests/conftest.py`**: before the app loads, point `DATABASE_URL` at `TEST_DATABASE_URL`. Build the tables once with Alembic at the start of the test run. Empty the `users` and `sessions` sheets after each test, so every test starts clean.
-3. **`backend/tests/test_auth_routes.py`**: tests through the real routes:
-   - sign-up gives 201, and the same email again gives 409;
-   - wrong password and unknown email both give 401;
-   - `/auth/me` works with the token and gives 401 without it;
-   - refresh works with the cookie;
-   - after log-out, refresh gives 401.
-4. **`.github/workflows/ci.yml`**: runs on every pull request to `main` and every push to `main`. Two jobs:
-   - `backend`: Postgres 17 service with a health check, Python 3.13, pip install from `backend/requirements.txt`, test-only `DATABASE_URL` / `TEST_DATABASE_URL` / `JWT_SECRET`, then `alembic upgrade head` and `pytest`.
-   - `frontend`: Node 24, `npm ci`, `npm run lint`, `npm run build` in `frontend/`.
-   - Use the current major versions of the official actions (`actions/checkout`, `actions/setup-python`, `actions/setup-node`), checked in their docs, and turn on their dependency caches.
-5. **Prove it works:** open the PR and wait for the green tick. Then push one commit that breaks a test on purpose, see the red cross, and revert it.
-6. **Optional:** on GitHub, Settings → Branches, require the checks to pass before merging, if your plan allows it on a private repo. If not, the rule is simple: never merge a red PR.
+1. **Backend (small):** move every route under `/api` (`/api/health`, `/api/health/db`, `/api/auth/...`), set the refresh cookie's path to `/api/auth`, and update the tests. CI must stay green.
+2. **Vite proxy:** in `vite.config.ts`, send `/api` to `http://127.0.0.1:8000`.
+3. **Pages with addresses (React Router, D7):** `/login`, `/signup`, and `/` (the chat screen). `/` sends you to `/login` if you're not logged in. `/login` and `/signup` send you to `/` if you are.
+4. **`src/lib/api.ts`:** one small fetch helper.
+   - It adds `Authorization: Bearer <token>` to every request.
+   - On a 401 from a normal request, it refreshes once and retries.
+   - Only one refresh runs at a time: other requests wait for it. If the refresh itself gets 401, it waits about 300 ms and tries once more, because another tab may have just rotated the cookie. Then it gives up and logs out.
+5. **`src/features/auth/AuthProvider.tsx`:** keeps the user and the access token in memory only (never in localStorage, D16). On page load it calls refresh, then `/api/auth/me`. While that runs, show a simple loading screen.
+6. **Wire the forms:** sign-up and log-in call the API.
+   - Server errors show under the right field, in the T7 style:
+     - 409 means "That email is already taken."
+     - 401 means "Wrong email or password."
+     - 422 shows the field problems.
+     - If the backend is down: "Can't reach Parley. Try again."
+   - Log out calls `/api/auth/logout`, then goes to `/login`.
+7. **Chat screen:** the profile shows the real logged-in name (instead of the fake "Kiran Rao"). Chats and messages stay fake until T15.
 
-- **Not in this task:** deploying anything, Docker images (T25), frontend tests.
-- **Done when:** `pytest` passes locally against `parley_test`, your own database is untouched, the PR shows a green tick for both jobs, the deliberate break showed a red cross, and Adithya has filled in "In my words".
-
-Questions for Adithya (short): what CI is and why teams use it; why tests use their own database; why the fake secrets in the workflow file are safe to commit.
+- **New library (D7 updated):** react-router. Use its current version in "declarative" mode (`BrowserRouter`, `Routes`, `Route`), checked in its docs.
+- **Not in this task:** real chats or messages (T13–T15), remember-me options, password reset.
+- **Done when:**
+  - Signing up in the browser adds a row in `users` (check in psql).
+  - Reload keeps you logged in, and log out sends you to `/login`.
+  - A reload after log out stays logged out.
+  - Two tabs open for over 15 minutes, both still work.
+  - A wrong password shows the right message, and a stopped backend shows "Can't reach Parley".
+  - The PR shows a green tick, and Claude Code has written the LEARNING.md section.
 
 ---
 
@@ -80,11 +79,11 @@ Questions for Adithya (short): what CI is and why teams use it; why tests use th
 - [x] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
 - [x] T9. First tables with SQLAlchemy and Alembic: users, sessions
 - [x] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
-- [ ] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` and `JWT_SECRET` there and start a Postgres service)
+- [x] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` and `JWT_SECRET` there and start a Postgres service)
 - [ ] T12. Connect the sign-up and log-in screens to the real backend (only one refresh at a time per tab, other requests wait for it; if a refresh gets 401, wait a moment and retry once, since another tab may have just rotated the cookie; use a Vite proxy so the cookie works)
 
 ### Phase 3: Messages over HTTP
-- [ ] T13. Chat tables (start the brief with the table map): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
+- [ ] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
 - [ ] T14. Send a message and load history, 30 at a time
 - [ ] T15. Connect the chat list and conversation screens to real data
 

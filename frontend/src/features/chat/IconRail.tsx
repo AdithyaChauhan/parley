@@ -16,7 +16,7 @@ const icons = [
 const activeLabel = "Chats"
 
 // Desktop: a column on the left. Phone: a bar at the bottom.
-export function IconRail() {
+export function IconRail({ myName }: { myName: string }) {
   return (
     <nav className="order-last flex h-16 shrink-0 border-t md:order-first md:h-auto md:w-24 md:flex-col md:border-t-0 md:border-r">
       <div className="hidden h-20 items-center justify-center pt-4 md:flex">
@@ -47,7 +47,7 @@ export function IconRail() {
       </div>
 
       <div className="hidden justify-center pb-6 md:flex">
-        <Avatar name={me.name} tint={me.tint} />
+        <Avatar name={myName} tint={me.tint} />
       </div>
     </nav>
   )

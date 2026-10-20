@@ -367,3 +367,39 @@ Server log, then pytest last — the log shows what the code actually saw. And m
 - What I'd check first if it broke: Which job failed (backend or frontend). Then the failed step's log. Then run pytest and npm run build locally — if local passes and CI fails, it's an environment difference like a version or a missing variable. Then check the Postgres service container started. Then check I actually committed and pushed every file CI needs.
 
 - What still confuses me: The runner is fresh every time, so it installs everything from scratch. I understand caches speed that up, but I don't know whether a stale cache can make CI fail or only make it slower.
+
+---
+
+### Task 12: Connect the sign-up and log-in screens to the real backend
+**What was built**
+- `backend/app/main.py`: one `/api` router holds every route (`/api/health`, `/api/health/db`, `/api/auth/...`), and the app includes it once (D17).
+- `backend/app/auth/routes.py`: the refresh cookie's path is now `/api/auth`, in one constant (`REFRESH_COOKIE_PATH`) used both when setting and when deleting it.
+- `backend/tests/test_health.py`, `backend/tests/test_auth_routes.py`: the same tests on the new `/api` paths.
+- `frontend/package.json`: react-router 8.5.0 (declarative mode).
+- `frontend/vite.config.ts`: the dev server passes `/api/...` on to FastAPI at `127.0.0.1:8000` (the proxy).
+- `frontend/src/lib/api.ts`: the one place that talks to the backend.
+  - `accessToken`: a plain variable, memory only (D16). A reload forgets it.
+  - `api()`: sends a request with `Authorization: Bearer <token>`. On a 401 with a token, it refreshes once and retries. If the refresh says the session is over, it logs out.
+  - `refresh()`: only one refresh runs at a time; others wait for the same one. If it gets 401, it waits 300 ms and tries once more, because another tab may have just swapped the cookie.
+  - `ApiError` and `isUnreachable()`: status 0 (no answer) or any 5xx (Vite answers 502 when FastAPI is stopped) means "can't reach Parley".
+- `frontend/src/features/auth/useAuth.ts`: the shared `AuthContext` and the `useAuth()` hook (kept out of the `.tsx` file so the react-refresh lint rule stays happy).
+- `frontend/src/features/auth/AuthProvider.tsx`: holds the logged-in user. On page load: refresh, then `/api/auth/me`, with a loading screen meanwhile. Gives every screen `login`, `signup` and `logout`.
+- `frontend/src/main.tsx`: wraps the app in `BrowserRouter` and `AuthProvider`.
+- `frontend/src/App.tsx`: the pages. `/` is the chat screen; logged out, it sends you to `/login`. Logged in, `/login` and `/signup` send you to `/`. Unknown addresses go to `/`.
+- `frontend/src/features/auth/serverErrors.ts`: turns a failed request into form messages: 401 "Wrong email or password." (under password), 409 "That email is already taken." (under email), 422 per field, and "Can't reach Parley. Try again." above the button.
+- `LoginScreen.tsx`, `SignupScreen.tsx`: call the real API. `AuthCard.tsx`: the "Sign up" / "Log in" switch is now a router link.
+- `ChatScreen.tsx`, `ChatColumn.tsx`, `IconRail.tsx`: the profile shows the real name. Log out calls the API. Chats stay fake until T15.
+
+**New ideas**
+- Proxy: the Vite dev server passes `/api` requests on to FastAPI, so the browser sees one site and the cookie needs no cross-site settings. Nginx does the same job later (T26).
+- Router: shows a different page for each address (`/login`, `/signup`, `/`), and lets the back button and reloads work.
+- Route guard: a page that sends you elsewhere if you're not allowed there (for example `/` to `/login` when logged out).
+- Context: a way to share one value (here, the logged-in user) with every screen without passing it down by hand.
+- Token in memory: a reload loses it on purpose; the httpOnly refresh cookie brings it back. Scripts on the page can't steal what isn't stored anywhere.
+- Single-flight refresh: many requests can fail with 401 at once, but only one refresh runs; the rest wait for its answer.
+- The two-tab race: both tabs share one cookie. If one tab rotates it, the other's refresh gets 401; waiting 300 ms and retrying sends the newest cookie.
+
+**In my words** (draft by Claude Code, Adithya keeps or edits)
+- What this task does: the screens now use real accounts. Everything goes through `/api` on one address, the access token stays in memory, and the refresh cookie logs you back in after a reload.
+- What I'd check first if it broke: the Network tab in DevTools. Does `/api/auth/refresh` return 200, and is the `refresh_token` cookie there with path `/api/auth`? Then whether FastAPI is running on port 8000.
+- What still confuses me: how the "401, refresh, retry" path will behave once real chats load in T15, since nothing on the chat screen uses the token yet.
