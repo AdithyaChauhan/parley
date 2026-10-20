@@ -1,0 +1,81 @@
+# Runs the checks on every pull request to main and every push to main.
+# A green tick on the PR means both jobs passed.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# The workflow only needs to read the code.
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    # A throwaway Postgres just for this run, deleted when the job ends.
+    services:
+      db:
+        image: postgres:17
+        env:
+          POSTGRES_DB: parley_test
+          POSTGRES_USER: parley
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        # Wait until Postgres accepts connections before the steps start.
+        options: >-
+          --health-cmd "pg_isready -U parley -d parley_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # The runner has no .env. These values are fake and only work inside
+    # this throwaway run, so they are safe to commit.
+    env:
+      DATABASE_URL: postgresql+psycopg://parley:ci-only-password@localhost:5432/parley_test
+      TEST_DATABASE_URL: postgresql+psycopg://parley:ci-only-password@localhost:5432/parley_test
+      JWT_SECRET: ci-only-fake-secret-never-used-anywhere-real-0123456789
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # Build the sheets in the empty test database.
+      - run: alembic upgrade head
+
+      - run: pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

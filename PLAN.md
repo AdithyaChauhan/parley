@@ -14,47 +14,52 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 10: Sign up and log in (teaching mode, short explanations)
-- **Branch:** `feature/auth`
-- **Goal:** real accounts. People can sign up, log in, stay logged in for 7 days, and log out. Tested from `/docs`. The screens connect in T12.
-- **Mode:** teaching mode, with SHORT explanations (max ~6 lines per idea) and the Excel picture: PostgreSQL = the Excel file, a table = a sheet, SQLAlchemy = the translator, Alembic = the builder.
+### Task 11: GitHub Actions runs the tests on every pull request (teaching mode, short)
+- **Branch:** `chore/ci`
+- **Goal:** every pull request gets a green tick (all checks passed) or a red cross (something broke), before you merge. Also, the first real tests for the sign-up and log-in routes, using a separate test database.
+- **Mode:** teaching mode, short explanations, simple pictures.
 
-**Start with a 3-line recap (Claude Code says this first):**
-- Password hash: like a fingerprint of the password. We store the fingerprint, never the password, and compare fingerprints at log-in.
-- Refresh token: a 7-day visitor pass the browser keeps. We store only its fingerprint in `sessions`, so someone who steals the database can't use it to log in.
-- Access token: a 15-minute wristband. Every request shows it, and the server checks it with no database lookup.
-
-**How log-in works:**
+**The idea in one picture:**
 ```
- 1. POST /auth/login (email, password)
- 2.   find user in "users" sheet ──> compare password fingerprint
- 3.   add a row to "sessions" (fingerprint of a new random refresh token, expires in 7 days)
- 4. <── access token (15 min, in the JSON reply)
-        + refresh token (7 days, in an httpOnly cookie the page's code can't read)
-
- Every API call:  "Authorization: Bearer <access token>"  ──> server checks it, no DB needed
- After 15 min:    POST /auth/refresh (cookie)  ──> new access token + a NEW refresh token (old one stops working)
- Log out:         POST /auth/logout  ──> session row marked revoked, cookie cleared
+ You push a branch / open a PR
+        │
+        ▼
+ GitHub starts a fresh, empty Linux computer (a "runner")
+        │
+        ├── job "backend":  start Postgres (a "service container")
+        │                   install Python packages
+        │                   alembic upgrade head   (build the sheets in an empty test database)
+        │                   pytest                 (all tests, including the new route tests)
+        │
+        └── job "frontend": npm ci → npm run lint → npm run build
+        │
+        ▼
+ Green tick ✓ on the PR = safe to merge.  Red cross ✗ = fix first.
 ```
+The runner has no `.env`, so the workflow file gives it test-only values (a throwaway `DATABASE_URL` and `JWT_SECRET`). These are fake and safe to commit.
 
-- **New packages (D16):** argon2-cffi (password hashing), PyJWT (access tokens), email-validator (pydantic's email check, for EmailStr). Pin exact versions.
-- **New setting:** `JWT_SECRET` in `.env` and a placeholder in `.env.example`. Make a strong one with `python -c "import secrets; print(secrets.token_urlsafe(64))"`.
-- **Files (all in `backend/app/auth/`):**
-  1. `security.py`: hash and check passwords (argon2); make and read access tokens (PyJWT, 15 min, holds the user id and session id); make a random refresh token (`secrets.token_urlsafe`) and its SHA-256 fingerprint.
-  2. `schemas.py`: the shapes of requests and replies (pydantic). Sign-up: name 2 to 50 characters, email, password at least 8. Never return `password_hash`.
-  3. `deps.py`: `get_current_user` reads the Bearer token, checks it, loads the user. Wrong or expired token gives 401.
-  4. `routes.py` (an APIRouter, plugged into main.py):
-     - `POST /auth/signup`: trim and lowercase the email (the CHECK rule needs it), 409 if the email is taken, save the user, then log them in (same reply as log-in).
-     - `POST /auth/login`: trim and lowercase the email. A wrong email or password both give the same 401 "Wrong email or password" (don't reveal which accounts exist).
-     - `POST /auth/refresh`: read the cookie, find the session by fingerprint, check not revoked and not expired, then rotate (new refresh token, new fingerprint saved) and return a new access token.
-     - `POST /auth/logout`: mark the session revoked, clear the cookie.
-     - `GET /auth/me`: needs the access token, returns id, name and email.
-  5. Cookie settings: `httponly=True`, `samesite="lax"`, `path="/auth"`, `secure` off for local http (turned on in production later).
-- **Tests (no database needed yet):** `tests/test_security.py` for hashing, token make/read, expired token rejected, and email trim/lowercase. Route tests that need the database come in T11.
-- **Not in this task:** connecting the screens (T12), rate limits (T22), email verification, password reset.
-- **Done when:** in `/docs`: sign up, log in, `/auth/me` works with the token (Authorize button), refresh gives a new token, log out then refresh fails with 401. A new row appears in `sessions` (check in psql). `pytest` passes. Adithya fills in "In my words".
+**Steps:**
+1. **A separate test database on your laptop** (so tests never touch your own data):
+   - `docker compose exec db createdb -U <your user> parley_test`
+   - Add `TEST_DATABASE_URL` to `.env` (same as `DATABASE_URL` but ending in `/parley_test`) and a placeholder to `.env.example`.
+2. **`backend/tests/conftest.py`**: before the app loads, point `DATABASE_URL` at `TEST_DATABASE_URL`. Build the tables once with Alembic at the start of the test run. Empty the `users` and `sessions` sheets after each test, so every test starts clean.
+3. **`backend/tests/test_auth_routes.py`**: tests through the real routes:
+   - sign-up gives 201, and the same email again gives 409;
+   - wrong password and unknown email both give 401;
+   - `/auth/me` works with the token and gives 401 without it;
+   - refresh works with the cookie;
+   - after log-out, refresh gives 401.
+4. **`.github/workflows/ci.yml`**: runs on every pull request to `main` and every push to `main`. Two jobs:
+   - `backend`: Postgres 17 service with a health check, Python 3.13, pip install from `backend/requirements.txt`, test-only `DATABASE_URL` / `TEST_DATABASE_URL` / `JWT_SECRET`, then `alembic upgrade head` and `pytest`.
+   - `frontend`: Node 24, `npm ci`, `npm run lint`, `npm run build` in `frontend/`.
+   - Use the current major versions of the official actions (`actions/checkout`, `actions/setup-python`, `actions/setup-node`), checked in their docs, and turn on their dependency caches.
+5. **Prove it works:** open the PR and wait for the green tick. Then push one commit that breaks a test on purpose, see the red cross, and revert it.
+6. **Optional:** on GitHub, Settings → Branches, require the checks to pass before merging, if your plan allows it on a private repo. If not, the rule is simple: never merge a red PR.
 
-Questions for Adithya (short): why a hash for passwords, why the same 401 for wrong email and wrong password, why the access token is short and the refresh token long, why the refresh token goes in an httpOnly cookie.
+- **Not in this task:** deploying anything, Docker images (T25), frontend tests.
+- **Done when:** `pytest` passes locally against `parley_test`, your own database is untouched, the PR shows a green tick for both jobs, the deliberate break showed a red cross, and Adithya has filled in "In my words".
+
+Questions for Adithya (short): what CI is and why teams use it; why tests use their own database; why the fake secrets in the workflow file are safe to commit.
 
 ---
 
@@ -74,9 +79,9 @@ Questions for Adithya (short): why a hash for passwords, why the same 401 for wr
 ### Phase 2: Backend basics
 - [x] T8. FastAPI app with a health check, PostgreSQL in Docker Compose, a first tiny pytest test, and `.gitignore` entries for the Python venv and `.env`
 - [x] T9. First tables with SQLAlchemy and Alembic: users, sessions
-- [ ] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
+- [x] T10. Sign up and log in: hashed passwords, short and long passes (tokens)
 - [ ] T11. GitHub Actions: run the tests on every pull request (CI has no `.env`, so set `DATABASE_URL` and `JWT_SECRET` there and start a Postgres service)
-- [ ] T12. Connect the sign-up and log-in screens to the real backend
+- [ ] T12. Connect the sign-up and log-in screens to the real backend (only one refresh at a time per tab, other requests wait for it; if a refresh gets 401, wait a moment and retry once, since another tab may have just rotated the cookie; use a Vite proxy so the cookie works)
 
 ### Phase 3: Messages over HTTP
 - [ ] T13. Chat tables (start the brief with the table map): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
@@ -100,7 +105,7 @@ Questions for Adithya (short): why a hash for passwords, why the same 401 for wr
 
 ### Phase 7: Run it like production
 - [ ] T25. Dockerfiles and Docker Compose for every part
-- [ ] T26. Nginx in front of several backend copies
+- [ ] T26. Nginx in front of several backend copies (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it
 - [ ] T27. Prometheus metrics and a Grafana dashboard
