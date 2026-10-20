@@ -322,3 +322,48 @@ select id, user_id, expires_at, revoked_at from sessions; — 401 is deliberatel
 
 Server log, then pytest last — the log shows what the code actually saw. And my 8 tests don't touch the database, so they'd pass while the routes are broken. Run them after you know it's in the routes, to confirm the machines are fine.
 - What still confuses me: The rotation race: two tabs refreshing at once both send the same old cookie, the first rotates it, the second gets 401. I get why, but not yet what the frontend should do about it.
+
+---
+
+### Task 11: GitHub Actions runs the tests on every pull request
+**What was built**
+- `.env.example`: a new `TEST_DATABASE_URL` placeholder (same as `DATABASE_URL`, but the database name ends in `_test`) and the one command that creates the test database.
+- `backend/tests/conftest.py`: setup shared by all tests. pytest loads it before any test file.
+  - `_TestDatabase`: reads `TEST_DATABASE_URL` from the shell (CI) or `.env` (laptop). It doesn't import `app.config`, because that would build the app's settings with the real `DATABASE_URL` first.
+  - Safety check: stops the whole run if the database name doesn't end in `_test`, because the tests empty tables.
+  - Sets `DATABASE_URL` to the test database before the app is imported. A real environment variable wins over `.env`, so the whole app (and Alembic) uses the test database.
+  - `test_database` fixture: runs `alembic upgrade head` once per test run, so the test sheets are built by the same migrations as the real ones.
+  - `client` fixture: a fresh test browser for each test, then `TRUNCATE users, sessions` so the next test starts clean. Only tests that ask for `client` need the database; `test_health` and `test_security` still run without it.
+- `backend/tests/test_auth_routes.py`: 6 tests through the real routes.
+  - Sign-up gives 201 and a refresh cookie; the same email again gives 409.
+  - Log-in with the right password gives 200.
+  - Wrong password and unknown email both give 401 with the exact same reply.
+  - `/auth/me` works with the token (and never shows `password_hash`), and gives 401 without it.
+  - Refresh works with the cookie, and the cookie changes (rotation).
+  - After log-out, refresh gives 401. The test puts the old cookie back by hand first, because log-out deletes it from the test browser. Without that, the 401 would only prove the cookie was gone, not that the session was closed.
+- `.github/workflows/ci.yml`: runs on every pull request to `main` and every push to `main`.
+  - `backend` job: a Postgres 17 service container with a health check, Python 3.13, `pip install` (cached), fake test-only `DATABASE_URL` / `TEST_DATABASE_URL` / `JWT_SECRET`, then `alembic upgrade head` and `pytest`.
+  - `frontend` job: Node 24, `npm ci` (cached), `npm run lint`, `npm run build`.
+  - Uses `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` (current majors, checked in their docs). `permissions: contents: read`: the workflow can only read the code.
+
+**New ideas**
+- CI (continuous integration): a robot runs the checks on every push and pull request, so a broken change shows a red cross before it reaches `main`, not after.
+- GitHub Actions: GitHub's CI. It reads every `.yml` file in `.github/workflows/`.
+- Workflow, job, step: the workflow is the whole recipe; a job is one set of steps on its own computer (backend and frontend run side by side); a step is one command or one ready-made action.
+- Runner: a fresh, empty Linux computer GitHub lends for one job and then throws away. It has no `.env`, no packages and no database until the steps add them.
+- Service container: a helper program (here Postgres) started next to the job and deleted with it. The health check makes the steps wait until it accepts connections.
+- Action (`uses:`): a ready-made step someone else wrote, for example "check out the code" or "install Python". The `@v7` pins the major version.
+- Dependency cache: CI saves the downloaded pip and npm packages and reuses them while `requirements.txt` / `package-lock.json` stay the same, so runs are faster.
+- `npm ci`: installs exactly what `package-lock.json` says, from scratch. Stricter than `npm install`, which is what CI wants.
+- Test database: tests create and delete rows freely, so they get their own database. Your own data is never touched, and every test starts from empty sheets.
+- Fixture: something a test needs, prepared before it and cleaned up after it. A test asks for one by naming it as a parameter (`def test_x(client)`). `scope="session"` means once per whole test run.
+- `TRUNCATE`: empties whole sheets at once, faster than deleting rows one by one. Listing `users, sessions` together is allowed even though `sessions` points at `users`.
+- Fake secrets in the workflow: they only open a throwaway database that exists for a few minutes inside GitHub's runner, so seeing them gives nobody access to anything real. The real `.env` secrets open your real database and sign real tokens, so they are never committed.
+- Green tick / red cross: every job is a check on the PR. Never merge a red PR.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: This task added a separate test database and CI. Tests create and delete rows, so they use their own database, and conftest.py refuses to run unless the database name ends in _test. I wrote 6 route tests through the real API covering signup, login, /me, refresh and logout. Then I added a GitHub Actions workflow with two jobs — backend runs pytest, frontend runs lint and build — so every pull request to main shows a green tick or a red cross.
+
+- What I'd check first if it broke: Which job failed (backend or frontend). Then the failed step's log. Then run pytest and npm run build locally — if local passes and CI fails, it's an environment difference like a version or a missing variable. Then check the Postgres service container started. Then check I actually committed and pushed every file CI needs.
+
+- What still confuses me: The runner is fresh every time, so it installs everything from scratch. I understand caches speed that up, but I don't know whether a stale cache can make CI fail or only make it slower.
