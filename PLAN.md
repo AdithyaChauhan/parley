@@ -8,6 +8,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - After a pull request merges, Adithya tells the planning chat. The planner sends back a new PLAN.md (box ticked, "You are here" moved to the next task). Adithya replaces the file, and that goes in the next task's branch.
 - Only the planner (chat Claude) writes task briefs. Claude Code never edits this file. It can only suggest changes.
 - Adithya may write a file himself if he wants. He tells Claude Code, so it knows.
+- npm audit's "braces" warnings: dev-only and no fixed version yet. Don't raise them again until a fix exists.
 - Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
 - Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
 - Each task's "Done when" also needs the task's "In my words" in LEARNING.md filled in by Adithya. For frontend tasks (fast mode, see CLAUDE.md), Claude Code drafts it and Adithya just reviews it.
@@ -16,46 +17,52 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 13: Chat tables and safe message numbers (teaching mode, short, Excel picture)
-- **Branch:** `feature/chat-tables`
-- **Goal:** the three chat sheets exist, and the database itself makes sure messages get #1, #2, #3 with no gaps or doubles, even when two people send at the same instant. Also fix the small refresh race found in T12 (same idea: a row lock).
-- **Mode:** teaching mode, short explanations, Excel picture.
+### Task 14: Start a chat, send a message, load history 30 at a time (teaching mode)
+- **Branch:** `feature/messages-api`
+- **Goal:** the first real chat routes. Two logged-in people can start a direct chat, send messages (numbered safely by T13's `add_message`), and load older messages page by page. Tested in `/docs` and by pytest. Screens connect in T15.
+- **Mode:** teaching mode. New style (CLAUDE.md updated): show a small example table first, then explain, then ask a "how does X work" question.
 
-**The table map (Excel picture: each box is a sheet):**
+**Carry-over (do first):** restore the full Task 13 section in LEARNING.md (heading, "What was built", "New ideas") around Adithya's own "In my words" text, which stays exactly as he wrote it.
+
+**Example first: how paging works (Claude Code shows this before writing code).** A chat has messages #1 to #70.
 ```
- users ──< chat_members >── chats ──< messages
-   │        (who is in        (one row     (#1, #2, #3
-   │         which chat,       per chat,    per chat)
-   │         + ticks)          + counter)
- sessions
- ──<  means "one row here, many rows there"
+ Request                                 Gets               has_more
+ GET /messages                     →     #70 ... #41        true
+ GET /messages?before=41           →     #40 ... #11        true
+ GET /messages?before=11           →     #10 ... #1         false
 ```
+Newest first, 30 at a time, using the message numbers (never page numbers or times), so a new message arriving never shifts a page.
 
-**The big idea: a row lock (Claude Code explains this first, ~5 lines).**
-Two people send a message to the same chat at the same moment. Both read "last number = 7" and both write #8: that's a clash. A row lock is like Excel saying "someone else is editing this cell, wait". The first sender locks the chat's row, takes #8 and lets go; the second waits a few milliseconds, then takes #9.
+**Routes (all need the access token; all under `/api`):**
+1. `POST /api/chats/direct` with `{ "email": "..." }`: start a direct chat with that person, or return the one that already exists.
+   - Your own email gives 400, and an unknown email gives 404.
+   - Uses a `direct_key` helper (the two user ids sorted, joined with ":") and adds both people to `chat_members`.
+   - If two "start chat" requests collide on the unique `direct_key`, catch the refusal and return the existing chat (same pattern as `add_message`).
+   - Replies 201 when new, 200 when it already existed.
+2. `GET /api/chats`: my chats, newest activity first. Each has:
+   - `id` and `kind`;
+   - a display name (the other person's name for direct chats);
+   - the last message (number, start of the text, time);
+   - `unread` = `last_seq - read_up_to`.
+3. `POST /api/chats/{chat_id}/messages` with `{ "client_msg_id": "<uuid>", "body": "..." }`:
+   - Not a member of the chat (or no such chat) gives 404, which doesn't reveal that the chat exists.
+   - The body is trimmed, 1 to 4000 characters.
+   - It calls `add_message`. A new message gives 201; a repeat of the same `client_msg_id` gives 200 with the first copy.
+4. `GET /api/chats/{chat_id}/messages?before=N&limit=30`: newest first.
+   - `limit` is at most 100.
+   - The reply is `{ "messages": [...], "has_more": true/false }`.
+   - Not a member gives 404.
 
-**Steps:**
-0. **Refresh race fix (from T12):** in `POST /api/auth/refresh`, load the session row with `.with_for_update()`, so two refreshes with the same cookie can't both rotate it. Add a test.
-1. **`app/chats/models.py`:**
-   - `chats`: `id` (UUID), `kind` ("direct" or "group"), `title` (empty for direct chats), `direct_key` (unique; for direct chats it's the two user ids sorted and joined, so the same two people can't get two direct chats), `last_seq` (whole number, starts at 0: the counter), `created_at`.
-   - `chat_members`: `chat_id` + `user_id` together are the key (one row per person per chat), `joined_at`, `delivered_up_to` and `read_up_to` (whole numbers, start at 0: the two D9 bookmarks for ticks). Index on `user_id` (for "list my chats").
-2. **`app/messages/models.py`:** `messages`: `id` (UUID), `chat_id`, `seq` (the number), `sender_id`, `client_msg_id` (UUID made by the sender's app, D9), `body` (text), `created_at`.
-   - Unique `(chat_id, seq)`: no two #8s in one chat.
-   - Unique `(sender_id, client_msg_id)`: a retried send is never saved twice.
-3. **Migration:** `alembic revision --autogenerate -m "create chats, chat_members, messages"`. Read it together before `alembic upgrade head`. Check with `\dt` and `\d messages`.
-4. **`app/messages/service.py`:** one function, `add_message(db, chat_id, sender_id, client_msg_id, body)`:
-   - If this `(sender_id, client_msg_id)` already exists, return that message (no new row).
-   - Otherwise, in one transaction: `UPDATE chats SET last_seq = last_seq + 1 WHERE id = ... RETURNING last_seq` (this locks the row), then insert the message with that number.
-   - No routes yet (T14).
-5. **Tests (`client` fixture or a db fixture; add the new tables to the conftest TRUNCATE):**
-   - three messages get 1, 2, 3;
-   - the same `client_msg_id` twice gives one row;
-   - two chats count separately;
-   - two threads sending at the same time get two different numbers and no error.
-- **Not in this task:** send and history routes (T14), screens (T15), groups UI.
-- **Done when:** tables exist (`\dt`), all tests pass locally and in CI (green tick), the concurrency test passes several runs in a row, and Adithya has filled in "In my words".
+**Agreed fixes:** `add_message` returns `(message, created)` so the route can pick 201 or 200; sending #N also sets the sender's own `read_up_to` to N (your own messages are never unread); add `app/messages/schemas.py`.
 
-Questions for Adithya (short): what a row lock does; why `client_msg_id` stops double messages; why the counter lives on the chat row and not in Python.
+**Code layout (D5):** `app/chats/schemas.py`, `service.py` (`direct_key`, get-or-create direct chat, list my chats), `routes.py`; `app/messages/routes.py` (send and history), using `add_message`. Plug both routers into the `/api` router.
+
+**Tests (always the `client` fixture):** a test for each rule above. Also a two-user story: A starts a chat with B, A sends 3, B sees them in order, B's `unread` is 3, and C (not a member) gets 404.
+
+- **Not in this task:** read and delivered ticks (T17/T18), groups (v2), live updates (T16+), screens (T15).
+- **Done when:** the two-user story works in `/docs` with two accounts, all tests pass locally and in CI (paste the green run link in the report), and Adithya has filled in "In my words".
+
+Questions for Adithya ("how does X work"): how paging with `before` works; how the server stops a non-member reading a chat; how a repeated send is turned into the first copy.
 
 ---
 
@@ -80,7 +87,7 @@ Questions for Adithya (short): what a row lock does; why `client_msg_id` stops d
 - [x] T12. Connect the sign-up and log-in screens to the real backend (only one refresh at a time per tab, other requests wait for it; if a refresh gets 401, wait a moment and retry once, since another tab may have just rotated the cookie; use a Vite proxy so the cookie works)
 
 ### Phase 3: Messages over HTTP
-- [ ] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
+- [x] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
 - [ ] T14. Send a message and load history, 30 at a time
 - [ ] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path) (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
 
@@ -115,6 +122,6 @@ Questions for Adithya (short): what a row lock does; why `client_msg_id` stops d
 - [ ] T31. README with an architecture diagram, screenshots, a demo video and the load-test results
 
 ### Later
-- End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12)
+- End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
 - v2: groups, images and voice notes, reactions, edit and delete, search
 - Optional: move notifications into their own service
