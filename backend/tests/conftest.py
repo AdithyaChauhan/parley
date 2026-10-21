@@ -58,6 +58,22 @@ def client(test_database):
 
 
 @pytest.fixture
+def sign_up(client):
+    """Makes an account and returns its login header, like Authorize in /docs.
+    sign_up("Ana") makes ana@example.com."""
+
+    def _sign_up(name: str) -> dict[str, str]:
+        response = client.post(
+            "/api/auth/signup",
+            json={"name": name, "email": f"{name.lower()}@example.com", "password": "secret123"},
+        )
+        assert response.status_code == 201
+        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    return _sign_up
+
+
+@pytest.fixture
 def db(test_database):
     """A database session, for tests that skip the routes. Empties every
     sheet afterwards, so every test starts clean."""

@@ -13,9 +13,11 @@ One section per task. Claude Code drafts the "What was built" part. Adithya writ
 - Each new word or tool, in one plain sentence.
 
 **In my words** (Adithya writes this)
-- What this task does, as if explaining to an interviewer:
-- What I'd check first if it broke:
-- What still confuses me:
+- What this task does, as if explaining to an interviewer: This task added the routes that use the new tables: start a chat, send a message, and load history. POST /api/chats/direct takes an email and returns the direct chat — 201 if it made it, 200 if it already existed; if two clicks land at once, the UNIQUE direct_key refuses the second and returns the first. POST /api/chats/{id}/messages saves a message — 201 new, 200 for a resend with the same client_msg_id — and moves the sender's own read_up_to, so your own messages are never unread to you. GET /api/chats/{id}/messages loads history 30 at a time, newest first, paged by message number (before=N) rather than page number, asking for limit+1 to set has_more. Every route checks chat_members itself, because anyone can call the API by hand, and "not your chat" and "no such chat" both return 404 so nobody can fish for real chat ids.
+
+- What I'd check first if it broke: A 401 means the access token expired after 15 minutes — log in again. A 404 on a chat I know exists means my chat_members row is missing or I'm using the wrong person's token. A resend giving 201 every time means add_message isn't returning created=False. Paging that looks wrong means checking before/limit and that has_more comes from asking for limit+1. Tests that pass alone but fail together mean conftest isn't emptying all five tables.
+
+- What still confuses me: Paging is anchored to a message number (before=N), so new messages don't shift the pages. But I don't yet know what the client has to remember between pages — whether it keeps the oldest number it has seen and passes that as before, or something else.
 
 ---
 
@@ -406,6 +408,36 @@ Server log, then pytest last — the log shows what the code actually saw. And m
 
 
 ---
+
+### Task 13: Chat tables: chats, chat members, messages
+**What was built**
+- `backend/app/chats/models.py`: two new sheets.
+  - `Chat`: one row per conversation. `kind` is `direct` or `group` (the database refuses anything else). `direct_key` holds the two user ids, sorted and joined with ":", and is UNIQUE, so two people can't get two direct chats (D18). `last_seq` is the counter: the last message number handed out in this chat.
+  - `ChatMember`: one row per person per chat. The key is the pair (`chat_id`, `user_id`). It holds the two tick bookmarks, `delivered_up_to` and `read_up_to` (D9). `user_id` has its own index, for "list my chats".
+- `backend/app/messages/models.py`: `Message`, one row per message, numbered `seq` #1, #2, #3 inside its chat.
+  - UNIQUE (`chat_id`, `seq`): no two #8s in one chat.
+  - UNIQUE (`sender_id`, `client_msg_id`): a retried send is never saved twice.
+  - `sender_id` has no CASCADE, so deleting a user never quietly deletes messages in other people's chats.
+- `backend/app/messages/service.py`:
+  - `add_message()`: takes the next number with one `UPDATE chats SET last_seq = last_seq + 1 ... RETURNING last_seq`, which locks the chat's row until the commit. Then it saves the message in the same transaction. If the same `client_msg_id` was already saved, it returns that first copy instead. If two copies arrive at once and the database refuses the second, it rolls back (undoing the +1, so no number is skipped) and returns the first.
+  - `_find_sent()`: finds a message by sender and `client_msg_id`.
+- `backend/migrations/versions/4b9f0a0b2f7b_create_chats_chat_members_messages.py`: builds the three sheets. `migrations/env.py` now loads every models file, so Alembic sees all the tables.
+- `backend/app/auth/routes.py`: `_find_session(lock=True)` locks the session row during refresh (`SELECT ... FOR UPDATE`). Two refreshes with the same cookie: the second waits, then finds the old cookie no longer matches, and gets 401.
+- `backend/tests/conftest.py`: `_empty_all_tables()` now empties all five sheets. A new `db` fixture gives a database session for tests that skip the routes.
+- `backend/tests/test_messages.py`: 4 tests. Three messages get #1, #2, #3. The same `client_msg_id` twice gives one row and uses one number. Two chats count separately. Two senders at the same moment (two threads) get different numbers.
+- `backend/tests/test_auth_routes.py`: two refreshes with the same cookie at the same moment: one gets 200, the other 401.
+- `DECISIONS.md`: D18 (how message numbers are kept safe).
+
+**New ideas**
+- Per-chat numbers (`seq`): each chat counts its own messages #1, #2, #3. Apps sort by this number, not by time, because two clocks can disagree.
+- Counter column (`last_seq`): the chat row remembers the last number it handed out. The next sender adds 1 to it.
+- Row lock: an `UPDATE` (or `SELECT ... FOR UPDATE`) locks the row until the commit. A second request for the same row waits, then sees the saved value.
+- Transaction: a group of changes saved together or not at all. The +1 and the new message are one transaction, so a failed save never skips a number.
+- Composite key: a key made of two columns. (`chat_id`, `user_id`) means one row per person per chat.
+- Idempotent send: sending the same message twice has the same effect as sending it once, thanks to `client_msg_id`.
+- Race condition: two requests at the same moment that both read before either writes. The lock turns "both at once" into "one after the other".
+
+**In my words** (Adithya writes this)
 What this task does:
 
 Adds three tables for real conversations: chats (one per conversation), chat_members (who's in which chat), messages (one row per message, numbered #1, #2, #3 inside its chat).
@@ -427,3 +459,42 @@ Tests pass alone but fail together → the db fixture isn't emptying all 5 table
 What still confuses me:
 
 The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes to them yet. I get the idea — highest number a person has read — but not how they become read ticks in the UI. That's T14/T15.
+
+---
+
+### Task 14: Start a chat, send a message, load history 30 at a time
+**What was built**
+- `backend/app/messages/service.py`: `add_message()` now returns `(message, created)`. `created` is `False` for a resend, so the route can answer 200 instead of 201. Sending #N also moves the sender's own `read_up_to` to N, in the same save, so your own messages are never unread for you.
+- `backend/app/chats/schemas.py`: what "start a chat" takes (`StartDirectChatRequest`: an email, trimmed and lowercased) and what one row of the chat list looks like (`ChatOut`: id, kind, name, last message, unread; `LastMessageOut`: number, first 100 letters, time).
+- `backend/app/chats/service.py`:
+  - `direct_key()`: the two user ids, sorted and joined with ":", so Ana+Ben and Ben+Ana give the same label.
+  - `get_or_create_direct_chat()`: finds the chat with that label, or makes it with both people in `chat_members`. If two clicks land at once, the UNIQUE `direct_key` refuses the second; it rolls back and returns the first. Returns `(chat, created)`.
+  - `get_member()`: this person's row in this chat, or None (not in it, or no such chat).
+  - `list_my_chats()`: every chat I have a row in, with the other person's name, the last message (the one numbered `last_seq`), and `unread = last_seq - read_up_to`. Newest message first; an empty chat counts from when it was made.
+- `backend/app/chats/routes.py`: `POST /api/chats/direct` (201 new, 200 already there, 400 your own email, 404 unknown email; replies with a chat-list row) and `GET /api/chats`.
+- `backend/app/messages/schemas.py`: `SendMessageRequest` (`client_msg_id` + body trimmed, 1 to 4000 letters), `MessageOut`, and `MessagePage` (`messages` + `has_more`).
+- `backend/app/messages/routes.py`:
+  - `_check_member()`: 404 "Chat not found" if you have no row in the chat. The same reply for a real chat you're not in and a made-up id.
+  - `POST /api/chats/{chat_id}/messages`: calls `add_message`; 201 new, 200 resend with the first copy.
+  - `GET /api/chats/{chat_id}/messages?before=N&limit=30`: messages numbered below N, newest first. Asks for `limit + 1`; if the extra comes back, `has_more` is true. `limit` is 1 to 100 (101 gives 422).
+- `backend/app/main.py`: both new routers plugged into the `/api` router.
+- `backend/tests/conftest.py`: a `sign_up` fixture. `sign_up("Ana")` makes ana@example.com and returns her login header.
+- `backend/tests/test_messages.py`: unpacks the new `(message, created)` pair, plus a test that the sender's `read_up_to` moves and the other person's doesn't.
+- `backend/tests/test_chat_routes.py`: 7 tests. Start twice (from either side) gives one chat; 400/404; login needed; two clicks at once (the first look is made to miss on purpose); both people see the other's name; newest first; last message preview and unread.
+- `backend/tests/test_message_routes.py`: 7 tests. Resend gives 200 and one copy; trim and 1 to 4000 letters; a stranger and a made-up id get the same 404; login needed; 70 messages page as #70-#41, #40-#11, #10-#1; `limit`; and the Ana / Ben / Cara story.
+
+**New ideas**
+- Paging by number (`before=N`): "the 30 below #41", anchored to a message number. "Page 2" counts from the newest, so one new message shifts every page and you'd see a message twice.
+- `has_more` with one extra row: ask for 31; getting 31 back means there's more above.
+- 404 instead of 403: "not your chat" and "no such chat" look the same, so nobody can go fishing for real chat ids.
+- The screens aren't the lock: anyone logged in can send any request by hand (`/docs`, curl), so every route checks `chat_members` itself.
+- Get-or-create: look first, make it if missing, and if the database refuses (someone else made it a moment ago), use theirs.
+- One status code per outcome: 201 "made something new", 200 "already had it".
+- Access tokens expire after 15 minutes: in `/docs` that shows as 401 "Not logged in", and logging in again fixes it. The real app refreshes by itself (T12).
+- `client_msg_id` counts per sender: Ana's `1111...` and Ben's `1111...` are two different messages.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: This task added the routes that use the new tables: start a chat, send a message, and load history. POST /api/chats/direct takes an email and returns the direct chat — 201 if it made it, 200 if it already existed; if two clicks land at once, the UNIQUE direct_key refuses the second and returns the first. POST /api/chats/{id}/messages saves a message — 201 new, 200 for a resend with the same client_msg_id — and moves the sender's own read_up_to, so your own messages are never unread to you. GET /api/chats/{id}/messages loads history 30 at a time, newest first, paged by message number (before=N) rather than page number, asking for limit+1 to set has_more. Every route checks chat_members itself, because anyone can call the API by hand, and "not your chat" and "no such chat" both return 404 so nobody can fish for real chat ids.
+
+- What I'd check first if it broke:
+- What still confuses me:
