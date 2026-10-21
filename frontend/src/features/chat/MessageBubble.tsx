@@ -1,6 +1,8 @@
 import { Avatar } from "@/components/Avatar"
 import { Ticks } from "@/components/Ticks"
-import type { Message, Person } from "@/data/fake"
+import { cn } from "@/lib/utils"
+import { clockTime } from "./time"
+import type { Message, Tint } from "./types"
 
 // Shows "@Name" in teal (look.md: @mentions use the teal accent)
 function withMentions(text: string) {
@@ -17,36 +19,50 @@ function withMentions(text: string) {
 
 type MessageBubbleProps = {
   message: Message
-  sender: Person
+  senderName: string
+  senderTint: Tint
   mine: boolean
+  onRetry: () => void
 }
 
 // One message: a "Name, time" label above a bubble.
 // Their bubble: sharp bottom-left corner, next to the avatar. My bubble: sharp bottom-right corner.
-export function MessageBubble({ message, sender, mine }: MessageBubbleProps) {
+export function MessageBubble({ message, senderName, senderTint, mine, onRetry }: MessageBubbleProps) {
+  const time = clockTime(message.createdAt)
+
   if (mine) {
     return (
       <div className="flex flex-col items-end gap-2">
         <p className="flex items-center gap-1 text-label">
-          You, {message.time}
-          {message.tick && <Ticks status={message.tick} />}
+          You, {time}
+          {message.status !== "failed" && <Ticks status={message.status} />}
         </p>
-        <div className="max-w-[80%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word">
-          {withMentions(message.text)}
+        <div
+          className={cn(
+            "max-w-[80%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word",
+            message.status === "sending" && "opacity-60",
+          )}
+        >
+          {withMentions(message.body)}
         </div>
+        {message.status === "failed" && (
+          <button type="button" onClick={onRetry} className="text-label text-destructive hover:underline">
+            Not sent, tap to retry
+          </button>
+        )}
       </div>
     )
   }
 
   return (
     <div className="flex items-end gap-3">
-      <Avatar name={sender.name} tint={sender.tint} size="sm" />
+      <Avatar name={senderName} tint={senderTint} size="sm" />
       <div className="flex max-w-[80%] min-w-0 flex-col items-start gap-2">
         <p className="text-label">
-          {sender.name}, {message.time}
+          {senderName}, {time}
         </p>
         <div className="rounded-panel rounded-bl-none bg-bubble-theirs px-4 py-3 shadow-sm shadow-foreground/5 wrap-break-word">
-          {withMentions(message.text)}
+          {withMentions(message.body)}
         </div>
       </div>
     </div>

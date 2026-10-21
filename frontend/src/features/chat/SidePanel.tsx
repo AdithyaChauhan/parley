@@ -11,8 +11,9 @@ import {
   Link,
 } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
-import type { Chat } from "@/data/fake"
+import { fakeFiles } from "@/data/fake"
 import { cn } from "@/lib/utils"
+import { tintFor, type ChatSummary } from "./types"
 
 const fileTypes = [
   { key: "documents", label: "Documents", icon: FileText, tile: "bg-file-purple text-file-purple-icon" },
@@ -22,16 +23,19 @@ const fileTypes = [
 ] as const
 
 type SidePanelProps = {
-  chat: Chat
+  chat: ChatSummary
   open: boolean
   onToggle: () => void
   onBack: () => void
   phoneVisible: boolean
 }
 
-// The right panel: shared files of the open chat (reference-1).
+// The right panel: the open chat's real name and member count, and its shared files
+// (reference-1). The file tiles stay fake until v2.
 // Folded, it becomes a thin strip of icons (reference-3). On a phone it is always open, full screen.
 export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePanelProps) {
+  const tint = tintFor(chat.id)
+
   return (
     <>
       <aside
@@ -64,9 +68,10 @@ export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePa
           >
             <ChevronRight className="size-5" />
           </button>
-          <Avatar name={chat.name} tint={chat.tint} size="lg" />
+          <Avatar name={chat.name} tint={tint} size="lg" />
           <p className="mt-2 text-name">{chat.name}</p>
-          <p className="text-sm text-muted-foreground">{chat.memberCount} members</p>
+          {/* Every chat is a direct chat (two people) until groups in v2 */}
+          <p className="text-sm text-muted-foreground">{chat.kind === "direct" ? "2 members" : "Group"}</p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -77,7 +82,7 @@ export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePa
             <p className="pl-9 text-label">All files</p>
             <p className="flex items-center gap-3 text-3xl">
               <Folder className="size-6 fill-primary text-primary" />
-              {chat.files.all}
+              {fakeFiles.all}
             </p>
           </div>
           <div className="relative rounded-lg bg-row-selected p-4">
@@ -85,7 +90,7 @@ export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePa
             <p className="pl-9 text-label text-muted-foreground">All links</p>
             <p className="flex items-center gap-3 text-3xl">
               <Link className="size-6 text-rail-icon" />
-              {chat.files.links}
+              {fakeFiles.links}
             </p>
           </div>
         </div>
@@ -107,7 +112,7 @@ export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePa
                 <span className="flex-1">
                   <span className="block font-medium">{label}</span>
                   <span className="block text-label text-muted-foreground">
-                    {chat.files[key].count} files, {chat.files[key].size}
+                    {fakeFiles[key].count} files, {fakeFiles[key].size}
                   </span>
                 </span>
                 <ChevronRight className="size-4 text-muted-foreground" />
@@ -130,7 +135,7 @@ export function SidePanel({ chat, open, onToggle, onBack, phoneVisible }: SidePa
           </button>
         </div>
         <div className="mt-4">
-          <Avatar name={chat.name} tint={chat.tint} />
+          <Avatar name={chat.name} tint={tint} />
         </div>
         <p className="mt-6 mb-3 text-label text-muted-foreground">Files</p>
         <div className="flex flex-col gap-4">

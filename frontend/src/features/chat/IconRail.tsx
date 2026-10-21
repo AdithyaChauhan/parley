@@ -1,7 +1,6 @@
 import { ChartNoAxesColumn, ClipboardCheck, Eye, Gauge, Users, Video } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { Logo } from "@/components/Logo"
-import { me } from "@/data/fake"
 import { cn } from "@/lib/utils"
 
 // Only "Chats" works for now. The other icons are placeholders.
@@ -47,7 +46,7 @@ export function IconRail({ myName }: { myName: string }) {
       </div>
 
       <div className="hidden justify-center pb-6 md:flex">
-        <Avatar name={myName} tint={me.tint} />
+        <Avatar name={myName} tint="teal" />
       </div>
     </nav>
   )

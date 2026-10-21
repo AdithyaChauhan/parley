@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { Tint } from "@/data/fake"
+import type { Tint } from "@/features/chat/types"
 
 const sizes = {
   sm: "size-8 text-[11px]",

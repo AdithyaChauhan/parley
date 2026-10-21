@@ -1,28 +1,54 @@
-import { useEffect, useRef, useState, type DragEvent } from "react"
+import { useLayoutEffect, useRef, useState, type DragEvent } from "react"
 import { ArrowLeft } from "lucide-react"
-import { people, type Chat } from "@/data/fake"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
+import { tintFor, type ChatSummary, type ServerMessage } from "./types"
 import { UploadView } from "./UploadView"
+import { useMessages } from "./useMessages"
 
 type ConversationProps = {
-  chat: Chat
-  onSend: (text: string) => void
+  chat: ChatSummary
+  myId: string
+  onSent: (message: ServerMessage) => void
   onBack: () => void
   onOpenPanel: () => void
   phoneVisible: boolean
 }
 
-// The middle panel: title and tabs, the messages, "is typing", and the message box
-export function Conversation({ chat, onSend, onBack, onOpenPanel, phoneVisible }: ConversationProps) {
+// The middle panel: title and tabs, the messages, and the message box
+export function Conversation({ chat, myId, onSent, onBack, onOpenPanel, phoneVisible }: ConversationProps) {
+  const { messages, hasMore, loading, failed, loadOlder, send, retry } = useMessages(chat.id, myId, onSent)
   const [dragging, setDragging] = useState(false)
-  const endRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  // How far from the bottom you were when older messages were asked for
+  const fromBottom = useRef<number | null>(null)
 
-  // Jump to the newest message when a chat opens or a message is added
-  useEffect(() => {
-    endRef.current?.scrollIntoView()
-  }, [chat.id, chat.messages.length])
+  const firstKey = messages[0]?.clientMsgId
+  const lastKey = messages.at(-1)?.clientMsgId
+
+  // Older messages were added on top: put the same message back under your eyes, no jump
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (list && fromBottom.current !== null) {
+      list.scrollTop = list.scrollHeight - fromBottom.current
+      fromBottom.current = null
+    }
+  }, [firstKey])
+
+  // First load, or a new message at the bottom: show the newest
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }, [lastKey])
+
+  // Near the top: load the 30 above
+  function handleScroll() {
+    const list = listRef.current
+    if (!list || !hasMore || list.scrollTop > 80) return
+    fromBottom.current = list.scrollHeight - list.scrollTop
+    loadOlder()
+  }
 
   function handleDragEnter(e: DragEvent) {
     if (e.dataTransfer.types.includes("Files")) setDragging(true)
@@ -37,8 +63,6 @@ export function Conversation({ chat, onSend, onBack, onOpenPanel, phoneVisible }
     e.preventDefault() // stop the browser opening the file
     setDragging(false)
   }
-
-  const typingName = chat.typingId ? people[chat.typingId].name.split(" ")[0] : null
 
   return (
     <section
@@ -73,34 +97,34 @@ export function Conversation({ chat, onSend, onBack, onOpenPanel, phoneVisible }
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 scrollbar-thin md:p-6">
-        {chat.messages.map((message) => (
+      {/* overflow-anchor none: the browser mustn't move the scroll on its own; handleScroll and the effects do it */}
+      <div
+        ref={listRef}
+        onScroll={handleScroll}
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 [overflow-anchor:none] scrollbar-thin md:p-6"
+      >
+        {loading && <p className="m-auto text-sm text-muted-foreground">Loading messages...</p>}
+        {failed && <p className="m-auto text-sm text-muted-foreground">Can't reach Parley. Reload to try again.</p>}
+        {!loading && !failed && messages.length === 0 && (
+          <p className="m-auto text-sm text-muted-foreground">No messages yet. Say hi!</p>
+        )}
+        {messages.map((message) => (
           <MessageBubble
-            key={message.id}
+            key={message.clientMsgId}
             message={message}
-            sender={people[message.senderId]}
-            mine={message.senderId === "me"}
+            senderName={chat.name} // a direct chat: anyone who isn't me is the other person
+            senderTint={tintFor(chat.id)}
+            mine={message.senderId === myId}
+            onRetry={() => retry(message)}
           />
         ))}
-        <div ref={endRef} />
       </div>
-
-      {typingName && (
-        <div className="flex shrink-0 items-center gap-3 px-4 pb-3 md:px-6">
-          <div className="flex size-9 items-center justify-center gap-1 rounded-full bg-card">
-            <span className="size-1 animate-typing rounded-full bg-muted-foreground" />
-            <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:150ms]" />
-            <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:300ms]" />
-          </div>
-          <p className="text-label">{typingName} is typing</p>
-        </div>
-      )}
 
       <div className="shrink-0 px-4 pb-4">
-        <MessageBox onSend={onSend} />
+        <MessageBox onSend={send} />
       </div>
 
-      {dragging && <UploadView chatName={chat.name} isGroup={chat.isGroup} />}
+      {dragging && <UploadView chatName={chat.name} isGroup={chat.kind !== "direct"} />}
     </section>
   )
 }

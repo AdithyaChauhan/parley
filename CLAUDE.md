@@ -47,5 +47,7 @@ That's fine. Read it, explain anything wrong in plain words, and carry on. Do no
 - For any "prove it fails" step, use a throwaway branch and PR (break, see red, close without merging), and ask Adithya for the run link.
 
 ## Style
+- Explain like to a friend: WhatsApp examples (send, scroll up, chat list), short sentences, no jargon, under 5 lines per idea.
+- Before each step, say in one line what Adithya would see change in the app.
 - Simple, easy words. Short sentences. Explain any technical word the first time it appears.
 - Adithya uses Windows, VS Code and Git Bash. Give commands that work there.
