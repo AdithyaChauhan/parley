@@ -611,3 +611,50 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What I'd check first if it broke: No push arriving means checking the Network tab's Socket filter — is the line open, and did message.new arrive? No two ticks means checking delivered_up_to in GET /api/chats/{id}/messages under members — if it's lower than the message's seq, the delivered report never reached the server. A message showing twice means the merge by id and client_msg_id isn't matching the optimistic copy with the pushed copy. CI hanging means checking which step hung, since timeout-minutes should now kill a stuck live test. A crash during push would mean push_from_thread raised, which it should never do, since a failed push must only be logged.
 
 - What still confuses me: When the chat list loads, reportDelivered() runs for each chat's newest message, which moves that person's delivered_up_to to the newest number at once — including messages they haven't scrolled to. I think that's right, because delivered means "reached the device" and the preview itself is evidence it reached the device. But I want to be sure that when T18 arrives, this doesn't accidentally get treated as "read". Delivered and read need to stay separate, and the line between them is the thing I'm watching.
+
+---
+
+### Task 18: Read ticks (teal) and "typing..."
+**What was built**
+- `backend/app/chats/service.py`:
+  - `Bookmarks`: a named pair `(delivered_up_to, read_up_to)`. Both `mark_*` functions return it, or None if nothing moved.
+  - `_capped()`: the "never past `last_seq`" rule, shared by both.
+  - `mark_read()`: a forward-only `UPDATE` on `read_up_to` (members only, capped at `last_seq`). It also lifts `delivered_up_to` with `GREATEST`, so reading never pulls "delivered" back.
+- `backend/app/messages/service.py`: a send now moves both of the sender's bookmarks, not just `read_up_to`.
+- `backend/app/live/routes.py`:
+  - `_handle()` only sorts events: `delivered` and `read` go to `_on_bookmark()`, `typing` to `_on_typing()`, anything else is ignored.
+  - `_on_bookmark()`: moves the bookmark, then sends a `receipt` with both bookmarks to the others in the chat (D20). The `delivered` receipt carries both now too.
+  - `_on_typing()`: drops a `typing` that comes within 1 s of the last one from the same line (before touching the database), checks the person is in the chat, and passes `{chat_id, user_id}` to the others. Nothing is saved.
+  - `_Line`: what the server remembers about one open line (whose it is, when its last `typing` got through). `_others()`: the others in a chat, or nobody for a non-member.
+- `backend/tests/test_live_messages.py`: 7 new tests (13 in the file). `read` moves both bookmarks and the receipt carries both; `read` never goes backwards or past `last_seq`; `read` never pulls "delivered" back; a non-member's `read` and `typing` are ignored; `typing` reaches Ana but not Ben; a second `typing` inside 1 s is dropped (and gets through after a faked 1.1 s); the sender's `delivered_up_to` moves on send. Two T17 tests updated for the "both bookmarks" receipt.
+- `frontend/src/lib/live.ts`: `reportRead()` (the highest number per chat, sent again when the line opens, like `delivered`), `sendTyping()` (at most once every 3 s per chat) and `windowInFront()` (the tab is showing and the window has focus).
+- `frontend/src/features/chat/types.ts`: the receipt has `read_up_to`, and there's a new `typing` event.
+- `frontend/src/features/chat/useMessages.ts`: also keeps the other person's `read_up_to` (from history and receipts), and `newestSeq`.
+- `frontend/src/features/chat/useTyping.ts` (new): chat id → who is typing there. Hidden 5 s after their last `typing`, or as soon as their message arrives.
+- `frontend/src/features/chat/Conversation.tsx`:
+  - Sends `read` only when the chat is showing, the window is in front and the newest message is on screen. Checks again on load, on a new message, on scroll, and when you come back to the window or tab.
+  - Picks ✓, grey ✓✓ or teal ✓✓ for each of my messages.
+  - Shows "<name> is typing..." with the bouncing dots, and stays at the bottom when it appears.
+  - On a phone, jumps to the newest message when the chat comes into view (it loaded while hidden, and a hidden list can't scroll). This was an old T15 bug that T18 made visible.
+- `MessageBubble.tsx`: `receipt` ("delivered", "read" or none) replaces `delivered`.
+- `MessageBox.tsx`: `onTyping` on every key, but not when the box is emptied.
+- `ChatScreen.tsx`: `markRead()` sets a chat's unread to 0 when its conversation sends `read`. Their new message always adds 1; if you're looking at that chat, the read check clears it again before the screen is drawn.
+- `ChatColumn.tsx`, `ChatRow.tsx`: "typing..." replaces the preview in the chat list.
+
+**New ideas**
+- Delivered vs read: delivered = "it's on my device" (chat list, history, live push). Read = "it was on my screen": open chat, window in front, newest message in view. The chat list never sends read.
+- Read implies delivered: `GREATEST(delivered_up_to, n)` lifts "delivered" without ever lowering it.
+- Three ticks from two numbers: my #N is teal ✓✓ if their `read_up_to` ≥ N, grey ✓✓ if their `delivered_up_to` ≥ N, else ✓.
+- Short-lived events: "typing" is only true for a few seconds, so it's passed on and never saved. A missed one costs nothing; the next comes in 3 s.
+- Two speed limits: the app sends at most every 3 s (being polite), and the server drops anything within 1 s per line (protecting itself, because it can't trust the app). The server's check runs before the database, so spam is cheap.
+- Show-for timer: the receiver shows "typing..." for 5 s after the last event. 5 is more than 3, so it stays on while they type and goes away by itself when they stop or close the tab. No "stopped typing" event needed.
+- Page visibility and focus: `document.visibilityState` (is the tab showing?) and `document.hasFocus()` (does the window have the keyboard?). The `focus` and `visibilitychange` events tell the app to check again.
+- Layout effect: runs after React changes the page but before the browser draws it, so scrolling and clearing the unread count happen with no flash.
+- Marker events in tests: you can't wait for "nothing arrived", so send a later event on the same line and check it's the next thing to arrive.
+
+**In my words** (Adithya writes this)
+- How the app decides a message is "read" and not just "delivered": Delivered is automatic — anything that puts the message on the device counts (the chat list loading, history loading, or a live push). Read is strict: the chat must be open, the window must be in front (document.visibilityState is "visible" and document.hasFocus() is true), and the newest message must be on screen. The app checks again on load, on a new message, on scroll, and when you come back to the window or tab. The chat list never sends read.
+
+- Why typing is never saved in the database: Because it's only true for a few seconds — saving it would mean a database write on every keystroke for information that's worthless a second later. It's passed to the other person and forgotten. The server drops anything within 1 second of the last one from the same line, before touching the database, so spam is cheap to refuse. The receiver shows "typing..." for 5 seconds after the last event, which is longer than the 3-second send limit, so it stays on while they type and fades by itself when they stop. No "stopped typing" event is needed.
+
+- What Ana's app checks to pick ✓, grey ✓✓ or teal ✓✓: There are two numbers per person per chat, delivered_up_to and read_up_to. For Ana's message #N: if their read_up_to is N or more, it shows teal ✓✓; otherwise if their delivered_up_to is N or more, it shows grey ✓✓; otherwise it shows ✓. Read implies delivered — when someone reads #12, delivered_up_to is lifted to at least 12 too (using GREATEST, so it never goes down).

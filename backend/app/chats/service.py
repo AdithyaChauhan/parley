@@ -1,4 +1,5 @@
 import uuid
+from typing import NamedTuple
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -62,20 +63,34 @@ def member_ids(db: Session, chat_id: uuid.UUID) -> list[uuid.UUID]:
     return list(db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)))
 
 
-def mark_delivered(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> int | None:
-    """Move this person's "delivered up to" bookmark forward to seq (D20).
-    Returns the new value, or None if nothing moved: not a member, no such
-    chat, or seq isn't ahead of the bookmark."""
+class Bookmarks(NamedTuple):
+    """One person's two tick bookmarks in a chat, right after a move (D9)."""
+
+    delivered_up_to: int
+    read_up_to: int
+
+
+def _capped(db: Session, chat_id: uuid.UUID, seq: int) -> int | None:
+    """seq, but never past the chat's last message: nobody can have #99 in a
+    chat that ends at #12. None if there's no such chat."""
     last_seq = db.scalar(select(Chat.last_seq).where(Chat.id == chat_id))
     if last_seq is None:
         return None
-    # Never past the last message: nobody can have #99 in a chat that ends at #12.
-    target = min(seq, last_seq)
+    return min(seq, last_seq)
+
+
+def mark_delivered(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> Bookmarks | None:
+    """Move this person's "delivered up to" bookmark forward to seq (D20).
+    Returns both bookmarks after the move, or None if nothing moved: not a
+    member, no such chat, or seq isn't ahead of the bookmark."""
+    target = _capped(db, chat_id, seq)
+    if target is None:
+        return None
 
     # Only matches if the person is in the chat AND it's a step forward. The
     # row is locked while it changes, so two tabs reporting at once can't
     # move it backwards: the second one re-checks against the new value.
-    moved = db.scalar(
+    row = db.execute(
         update(ChatMember)
         .where(
             ChatMember.chat_id == chat_id,
@@ -83,10 +98,36 @@ def mark_delivered(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int
             ChatMember.delivered_up_to < target,
         )
         .values(delivered_up_to=target)
-        .returning(ChatMember.delivered_up_to)
-    )
+        .returning(ChatMember.delivered_up_to, ChatMember.read_up_to)
+    ).one_or_none()
     db.commit()
-    return moved
+    return None if row is None else Bookmarks(row.delivered_up_to, row.read_up_to)
+
+
+def mark_read(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> Bookmarks | None:
+    """Move this person's "read up to" bookmark forward to seq (D20). Read
+    implies delivered, so "delivered up to" is lifted to at least seq too.
+    Returns both bookmarks after the move, or None if nothing moved (the
+    same reasons as mark_delivered)."""
+    target = _capped(db, chat_id, seq)
+    if target is None:
+        return None
+
+    # The same forward-only UPDATE as mark_delivered, on read_up_to.
+    # GREATEST keeps the bigger of the two: reading #3 after #5 was
+    # delivered must not pull "delivered" back to 3.
+    row = db.execute(
+        update(ChatMember)
+        .where(
+            ChatMember.chat_id == chat_id,
+            ChatMember.user_id == user_id,
+            ChatMember.read_up_to < target,
+        )
+        .values(read_up_to=target, delivered_up_to=func.greatest(ChatMember.delivered_up_to, target))
+        .returning(ChatMember.delivered_up_to, ChatMember.read_up_to)
+    ).one_or_none()
+    db.commit()
+    return None if row is None else Bookmarks(row.delivered_up_to, row.read_up_to)
 
 
 def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> list[ChatOut]:

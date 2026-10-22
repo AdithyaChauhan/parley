@@ -2,8 +2,13 @@ import { useState, type FormEvent } from "react"
 import { Paperclip, SendHorizontal, Smile } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
+type MessageBoxProps = {
+  onSend: (text: string) => void
+  onTyping: () => void // called on every key; live.ts sends at most one "typing" every 3 s
+}
+
 // The white box at the bottom: type a message, press Enter or the teal button
-export function MessageBox({ onSend }: { onSend: (text: string) => void }) {
+export function MessageBox({ onSend, onTyping }: MessageBoxProps) {
   const [text, setText] = useState("")
 
   function handleSubmit(e: FormEvent) {
@@ -21,7 +26,10 @@ export function MessageBox({ onSend }: { onSend: (text: string) => void }) {
     >
       <input
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value)
+          if (e.target.value.trim()) onTyping() // deleting everything isn't typing
+        }}
         placeholder="Write your message..."
         aria-label="Message"
         className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"

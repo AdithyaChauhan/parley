@@ -45,7 +45,8 @@ export type MessagePage = {
 export type LiveEvent =
   | { type: "hello"; data: { user_id: string } }
   | { type: "message.new"; data: ServerMessage }
-  | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number } }
+  | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number; read_up_to: number } }
+  | { type: "typing"; data: { chat_id: string; user_id: string } }
 
 // A message on screen. Until the server answers, it has no id or number (seq) yet.
 // clientMsgId stays the same before and after, so it's the key that matches them.

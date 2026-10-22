@@ -42,11 +42,12 @@ def add_message(
         db.rollback()
         raise ValueError(f"No chat with id {chat_id}")
 
-    # The sender has read their own message, so it never counts as unread for them.
+    # The sender has read their own message, so it never counts as unread for
+    # them. Read implies delivered (D20), so both bookmarks move.
     db.execute(
         update(ChatMember)
         .where(ChatMember.chat_id == chat_id, ChatMember.user_id == sender_id)
-        .values(read_up_to=seq)
+        .values(read_up_to=seq, delivered_up_to=seq)
     )
 
     message = Message(

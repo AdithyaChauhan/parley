@@ -26,14 +26,17 @@ export function useMessages(
   onSent: (message: ServerMessage) => void,
 ) {
   const [saved, setSaved] = useState<Message[]>([])
-  // The other person's "delivered up to" bookmark: my messages up to it get ✓✓
+  // The other person's bookmarks: my messages up to "delivered" get grey ✓✓, up to "read" teal ✓✓
   const [theirDelivered, setTheirDelivered] = useState(0)
+  const [theirRead, setTheirRead] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const loadingOlder = useRef(false) // so fast scrolling doesn't ask for the same page twice
 
   const messages = [...saved, ...unsent]
+  // The highest number here, which is what a "read" reports. 0 = no messages yet.
+  const newestSeq = saved.at(-1)?.seq ?? 0
 
   // A saved message for this chat: my send's reply, or one pushed live.
   // Never twice: the merge matches by id, and my own unsent copy (same clientMsgId) is taken out.
@@ -55,6 +58,7 @@ export function useMessages(
         setHasMore(page.has_more)
         const them = page.members.find((member) => member.user_id !== myId)
         setTheirDelivered((current) => Math.max(current, them?.delivered_up_to ?? 0))
+        setTheirRead((current) => Math.max(current, them?.read_up_to ?? 0))
         if (page.messages.length > 0) reportDelivered(chatId, page.messages[0].seq)
       })
       .catch(() => !ignore && setFailed(true))
@@ -68,10 +72,11 @@ export function useMessages(
     if (event.type === "message.new" && event.data.chat_id === chatId) {
       addSaved(event.data)
     }
-    // The other person's device got more of my messages: redraw the ticks
+    // The other person got or read more of my messages: redraw the ticks
     if (event.type === "receipt" && event.data.chat_id === chatId && event.data.user_id !== myId) {
-      const upTo = event.data.delivered_up_to
-      setTheirDelivered((current) => Math.max(current, upTo))
+      const { delivered_up_to: deliveredUpTo, read_up_to: readUpTo } = event.data
+      setTheirDelivered((current) => Math.max(current, deliveredUpTo))
+      setTheirRead((current) => Math.max(current, readUpTo))
     }
   })
 
@@ -129,5 +134,5 @@ export function useMessages(
     deliver(message)
   }
 
-  return { messages, theirDelivered, hasMore, loading, failed, loadOlder, send, retry: deliver }
+  return { messages, newestSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, send, retry: deliver }
 }

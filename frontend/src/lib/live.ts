@@ -11,6 +11,13 @@ const listeners = new Set<(event: LiveEvent) => void>()
 // The highest message number this tab has, per chat (D20). Kept so it can be
 // told again when the line opens: the chat list often loads before that.
 const delivered = new Map<string, number>()
+// The same for "read": the highest number shown on screen, per chat
+const read = new Map<string, number>()
+// When this tab last sent "typing", per chat (milliseconds)
+const lastTyping = new Map<string, number>()
+
+// The other side shows "typing..." for 5 s, so one every 3 s keeps it on while you type
+const TYPING_EVERY_MS = 3000
 
 function send(type: string, data: object) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type, data }))
@@ -22,6 +29,28 @@ export function reportDelivered(chatId: string, seq: number) {
   if (seq <= (delivered.get(chatId) ?? 0)) return
   delivered.set(chatId, seq)
   send("delivered", { chat_id: chatId, seq })
+}
+
+// "I've seen every message in this chat up to #seq, on screen" (D20). Only the
+// open chat sends this, never the chat list. Read also counts as delivered on the server.
+export function reportRead(chatId: string, seq: number) {
+  if (seq <= (read.get(chatId) ?? 0)) return
+  read.set(chatId, seq)
+  send("read", { chat_id: chatId, seq })
+}
+
+// "I'm typing in this chat", at most once every 3 seconds. Never saved (D20).
+export function sendTyping(chatId: string) {
+  const now = Date.now()
+  if (now - (lastTyping.get(chatId) ?? 0) < TYPING_EVERY_MS) return
+  lastTyping.set(chatId, now)
+  send("typing", { chat_id: chatId })
+}
+
+// The window is in front: its tab is showing and it has the keyboard focus.
+// Only then can a message on screen count as read (D20).
+export function windowInFront() {
+  return document.visibilityState === "visible" && document.hasFocus()
 }
 
 // Calls handler for every event the server pushes, while the component is on screen.
@@ -62,6 +91,7 @@ export function useLiveConnection() {
           // The server took our ticket. Tell it what this tab already has.
           setConnected(true)
           for (const [chatId, seq] of delivered) send("delivered", { chat_id: chatId, seq })
+          for (const [chatId, seq] of read) send("read", { chat_id: chatId, seq })
           return
         }
         for (const listener of listeners) listener(event)
@@ -76,7 +106,10 @@ export function useLiveConnection() {
       stopped = true
       line?.close()
       socket = null
-      delivered.clear() // someone else may log in next in this tab
+      // Someone else may log in next in this tab
+      delivered.clear()
+      read.clear()
+      lastTyping.clear()
     }
   }, [])
 

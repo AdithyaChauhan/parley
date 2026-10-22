@@ -12,6 +12,7 @@ type ChatColumnProps = {
   openId: string | null
   onSelect: (id: string) => void
   onChatStarted: (chat: ChatSummary) => void
+  typing: Record<string, string> // chat id → who is typing there
   phoneVisible: boolean
   myName: string
   connected: boolean // my live line is open: green dot, else grey
@@ -25,6 +26,7 @@ export function ChatColumn({
   openId,
   onSelect,
   onChatStarted,
+  typing,
   phoneVisible,
   myName,
   connected,
@@ -133,6 +135,7 @@ export function ChatColumn({
             key={chat.id}
             chat={chat}
             selected={chat.id === openId}
+            typing={chat.id in typing}
             onSelect={() => onSelect(chat.id)}
           />
         ))}
