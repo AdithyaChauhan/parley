@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -55,6 +55,38 @@ def get_or_create_direct_chat(db: Session, me: User, other: User) -> tuple[Chat,
 def get_member(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> ChatMember | None:
     """This person's row in this chat. None if they aren't in it, or there's no such chat."""
     return db.get(ChatMember, (chat_id, user_id))
+
+
+def member_ids(db: Session, chat_id: uuid.UUID) -> list[uuid.UUID]:
+    """Everyone in this chat: the people its live events go to."""
+    return list(db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)))
+
+
+def mark_delivered(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> int | None:
+    """Move this person's "delivered up to" bookmark forward to seq (D20).
+    Returns the new value, or None if nothing moved: not a member, no such
+    chat, or seq isn't ahead of the bookmark."""
+    last_seq = db.scalar(select(Chat.last_seq).where(Chat.id == chat_id))
+    if last_seq is None:
+        return None
+    # Never past the last message: nobody can have #99 in a chat that ends at #12.
+    target = min(seq, last_seq)
+
+    # Only matches if the person is in the chat AND it's a step forward. The
+    # row is locked while it changes, so two tabs reporting at once can't
+    # move it backwards: the second one re-checks against the new value.
+    moved = db.scalar(
+        update(ChatMember)
+        .where(
+            ChatMember.chat_id == chat_id,
+            ChatMember.user_id == user_id,
+            ChatMember.delivered_up_to < target,
+        )
+        .values(delivered_up_to=target)
+        .returning(ChatMember.delivered_up_to)
+    )
+    db.commit()
+    return moved
 
 
 def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> list[ChatOut]:

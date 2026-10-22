@@ -31,9 +31,21 @@ class MessageOut(BaseModel):
     created_at: datetime
 
 
+class MemberOut(BaseModel):
+    """One person in the chat with their two tick bookmarks (D9)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    delivered_up_to: int
+    read_up_to: int
+
+
 class MessagePage(BaseModel):
     """Up to `limit` messages, newest first."""
 
     messages: list[MessageOut]
     # True if there are older messages above these: ask again with before=<smallest seq>.
     has_more: bool
+    # Everyone's bookmarks, so the app can draw the right ticks after a reload too.
+    members: list[MemberOut]
