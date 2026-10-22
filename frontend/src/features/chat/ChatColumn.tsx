@@ -14,6 +14,7 @@ type ChatColumnProps = {
   onChatStarted: (chat: ChatSummary) => void
   phoneVisible: boolean
   myName: string
+  connected: boolean // my live line is open: green dot, else grey
   onLogout: () => void
 }
 
@@ -26,6 +27,7 @@ export function ChatColumn({
   onChatStarted,
   phoneVisible,
   myName,
+  connected,
   onLogout,
 }: ChatColumnProps) {
   const [search, setSearch] = useState("")
@@ -77,7 +79,7 @@ export function ChatColumn({
             </div>
           )}
         </div>
-        <Avatar name={myName} tint="teal" size="lg" online />
+        <Avatar name={myName} tint="teal" size="lg" status={connected ? "online" : "offline"} />
         <p className="mt-2 text-name">{myName}</p>
         <button
           type="button"

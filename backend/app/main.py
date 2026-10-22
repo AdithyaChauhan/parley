@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
 from app.db import get_db
+from app.live.routes import router as live_router
 from app.messages.routes import router as messages_router
 
 app = FastAPI(title="Parley")
@@ -34,5 +35,6 @@ def health_db(db: Session = Depends(get_db)):
 api.include_router(auth_router)
 api.include_router(chats_router)
 api.include_router(messages_router)
+api.include_router(live_router)
 # Last, after every route above is added to the /api router.
 app.include_router(api)

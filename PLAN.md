@@ -19,49 +19,61 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 15: Real chats on the screen (fast mode)
-- **Branch:** `feature/connect-chats`
-- **Goal:** the chat screen uses real data from T14 instead of fake data. You can start a chat by email, see your real chats, send messages, and scroll up for older ones.
-- **Mode:** frontend fast mode. Summaries in the friend style (WhatsApp examples, under 5 lines).
+### Task 16: The live connection (WebSocket) with a one-time ticket (teaching mode, friend style)
+- **Branch:** `feature/live-connection`
+- **Goal:** each open tab keeps one "phone line" open to the server, so in T17 the server can push new messages instantly. This task only opens the line safely and proves it works. Nothing is pushed yet except a hello.
+- **Mode:** teaching mode, friend style (CLAUDE.md). Example first, then short explanation, then a "how does X work" question.
 
-**What you'll see in the app when it's done:**
-- The chat list shows your real chats, with last message, time and unread count.
-- The "+" button asks for an email and starts a chat.
-- Open a chat: the newest messages show, oldest at the top. Scroll up and older ones load.
-- Type, then Send: your message appears at once with one grey tick, and stays after a reload.
+**Example first (Claude Code shows this before any code):**
+```
+ Today (HTTP):      Ben's app asks "anything new?"  → server answers → line closes
+                    Ben only sees Ana's message when he reloads.
+ With a WebSocket:  Ben's app opens a line once and keeps it open.
+                    Server can say "new message!" any time, like a phone call vs. sending letters.
+
+ Getting on the line (the ticket):
+ 1. Ben's app → POST /api/live/ticket   (shows its access token, like any request)
+ 2. Server   → { "ticket": "x7Kq...", "expires_in": 30 }   one use only, 30 seconds
+ 3. Ben's app → opens  ws://.../api/live?ticket=x7Kq...
+ 4. Server checks the ticket, crosses it off (can't be used again), and says:
+               { "type": "hello", "data": { "user_id": "..." } }
+```
+Why a ticket: a browser can't add the "Authorization" header to a WebSocket, and putting the real 15-minute token in the address would leave it in logs. A ticket that dies after one use or 30 seconds is safe to put there.
 
 **Steps:**
-1. **Chat list:** load from `GET /api/chats`.
-   - Show the time in your own time zone (server times are UTC): "11:15", "Yesterday", or a date.
-   - No chats yet: show "Start your first chat" with the "+" button.
-2. **New chat ("+" button):** a small box asking for an email, then `POST /api/chats/direct`.
-   - Add the reply to the list (same shape as a list row) and open it.
-   - Errors under the field:
-     - 404: "No Parley account with that email."
-     - 400: "That's you."
-     - Backend down: "Can't reach Parley."
-3. **Conversation:** load `GET /api/chats/{id}/messages`.
-   - Flip it so the oldest is at the top.
-   - When you scroll to the top, load more with `before=<smallest number on screen>`, and keep the scroll position steady.
-   - Stop when `has_more` is false.
-4. **Send:**
-   - Make a fresh `crypto.randomUUID()` for each new message.
-   - Show it right away with a small "sending" look, then swap in the server's copy (matched by `client_msg_id`) with one grey tick.
-   - If it fails, show "Not sent, tap to retry". The retry uses the **same** `client_msg_id`, so it can never double.
-5. **Side panel:** real chat name and member count. The file tiles stay fake (v2).
-6. **Remove the old fake chats and messages** from the main screen. Keep the fake-data file only if something still needs it.
-
-- **Known and fine for now:**
-  - New messages from the other person show only when you reopen the chat or reload. Live updates come in T17.
-  - The unread count doesn't clear when you open a chat yet. Read bookmarks come in T18.
-- **Test with two people at once:** use a normal window for Ana and a private (incognito) window for Ben. They don't share cookies, so both stay logged in.
+1. **Package:** add `websockets` (lets uvicorn speak WebSocket; named in D19). Pin the exact version.
+2. **`app/live/tickets.py`:** a small in-memory ticket store (D19).
+   - `issue(user_id)` makes a random ticket that lasts 30 seconds.
+   - `redeem(ticket)` returns the user id once, then the ticket is gone. Expired or unknown gives nothing.
+   - Lock it with a thread lock, since requests can arrive at the same time.
+3. **`app/live/manager.py`:** the switchboard. It remembers which open lines belong to which user (one user can have several tabs), with `connect`, `disconnect` and `send_to_user(user_id, event)`. `send_to_user` is used in T17.
+4. **`app/live/routes.py`:**
+   - `POST /api/live/ticket` needs the access token and returns `{ticket, expires_in}`.
+   - The WebSocket `/api/live?ticket=...`:
+     - A bad, used or expired ticket closes with code 4401.
+     - A good ticket accepts the line, registers it, and sends `hello`.
+     - When the tab closes, the line is removed from the switchboard.
+5. **Vite proxy:** allow WebSocket on `/api` (`ws: true`).
+6. **Frontend `src/lib/live.ts` (fast mode, small):**
+   - After log-in, get a ticket and open the line.
+   - Show a small dot on your avatar: green when connected, grey when not.
+   - Close the line on log-out.
+   - No auto-reconnect yet (T19).
+7. **Tests:**
+   - The ticket route needs the token.
+   - A ticket works once; the second use is refused.
+   - An expired ticket is refused (fake the clock).
+   - A good ticket gets `hello` with the right user id.
+   - Two tabs of the same user are both in the switchboard; after one closes, one is left.
+- **Not in this task:**
+  - Pushing real messages (T17). Note for T17: the send route runs in a worker thread, so pushing from it to the live line needs a safe hand-off to the async side.
+  - Ticks and typing (T17/T18), reconnecting (T19), Redis (T20/T21).
 - **Done when:**
-  - Ana starts a chat with Ben by email and sends 3 messages.
-  - Ben reloads and sees them, then replies.
-  - 40+ messages scroll up smoothly, with no doubles and no jumps.
-  - A send with the backend stopped shows "Not sent", and the retry after starting it again sends exactly one copy.
-  - The 15-minute check: leave the app open 15+ minutes, then open another chat without reloading. It just works.
-  - `npm run build` and lint pass, the PR is green (copy the run link from https://github.com/AdithyaChauhan/parley/actions before merging), and Claude Code has written the LEARNING.md section.
+  - The dot turns green after log-in and grey after you stop the backend.
+  - In the browser DevTools Network tab (filter "WS"), you can see the hello message.
+  - All tests pass locally and in CI (run link in the report), and Adithya has filled in "In my words".
+
+Questions for Adithya ("how does X work"): how the ticket gets you onto the line without the real token in the address; how the server knows which open line is Ben's; what happens to the switchboard when Ben has two tabs and closes one.
 
 ---
 
@@ -88,11 +100,11 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 3: Messages over HTTP
 - [x] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
 - [x] T14. Send a message and load history, 30 at a time
-- [ ] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
+- [x] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
 
 ### Phase 4: Live chat (WebSocket)
 - [ ] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)
-- [ ] T17. New messages appear instantly; "got it" replies give two ticks
+- [ ] T17. New messages appear instantly; "got it" replies give two ticks (also keep a "Not sent" message in the chat when you switch chats and come back)
 - [ ] T18. Typing indicator and read ticks
 - [ ] T19. Reconnect and catch up on missed messages
 
