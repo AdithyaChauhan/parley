@@ -107,6 +107,38 @@ def test_limit_can_be_smaller_but_not_over_100(client, sign_up):
     assert _history(client, ana, chat_id, "?limit=101").status_code == 422
 
 
+def test_catching_up_returns_the_ones_after_oldest_first(client, sign_up):
+    ana, ben = sign_up("Ana"), sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+    for n in range(1, 6):
+        _send(client, ana, chat_id, f"message {n}")
+
+    # Ben's app had up to #1 when his line dropped. limit=2 keeps the pages small.
+    first = _history(client, ben, chat_id, "?after=1&limit=2").json()
+    second = _history(client, ben, chat_id, "?after=3&limit=2").json()
+    nothing_new = _history(client, ben, chat_id, "?after=5").json()
+
+    assert _seqs(first) == [2, 3]  # oldest first
+    assert first["has_more"] is True  # ask again with after=3
+    assert _seqs(second) == [4, 5]
+    assert second["has_more"] is False
+    assert _seqs(nothing_new) == []
+    assert nothing_new["has_more"] is False
+    # Everyone's bookmarks come too, so the ticks are right after a catch-up.
+    assert len(first["members"]) == 2
+    # after=0: an empty chat on screen gets everything from #1.
+    assert _seqs(_history(client, ben, chat_id, "?after=0&limit=2").json()) == [1, 2]
+
+
+def test_before_and_after_together_give_422(client, sign_up):
+    ana = sign_up("Ana")
+    sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+
+    assert _history(client, ana, chat_id, "?before=5&after=2").status_code == 422
+    assert _history(client, ana, chat_id, "?after=-1").status_code == 422
+
+
 def test_two_person_story(client, sign_up):
     ana, ben, cara = sign_up("Ana"), sign_up("Ben"), sign_up("Cara")
 

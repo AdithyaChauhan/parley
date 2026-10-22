@@ -93,6 +93,22 @@ def test_bens_read_moves_both_bookmarks_and_ana_gets_a_receipt(client, sign_up):
     assert client.get("/api/chats", headers=ben).json()[0]["unread"] == 0
 
 
+def test_bens_other_tab_gets_his_own_read_receipt(client, sign_up):
+    ana, ben = sign_up("Ana"), sign_up("Ben")
+    ben_id = _my_id(client, ben)
+    chat_id = _start_chat(client, ana, "ben@example.com")
+    _send(client, ana, chat_id, "hi Ben")
+
+    with _open_line(client, ben) as bens_tab_1, _open_line(client, ben) as bens_tab_2:
+        bens_tab_1.send_json({"type": "read", "data": {"chat_id": chat_id, "seq": 1}})
+
+        # Tab 2 hears that Ben read #1 in tab 1, so it can clear its unread count (D20).
+        assert bens_tab_2.receive_json() == {
+            "type": "receipt",
+            "data": {"chat_id": chat_id, "user_id": ben_id, "delivered_up_to": 1, "read_up_to": 1},
+        }
+
+
 def test_delivered_never_goes_backwards_or_past_the_last_message(client, sign_up, db):
     ana, ben = sign_up("Ana"), sign_up("Ben")
     ben_id = uuid.UUID(_my_id(client, ben))

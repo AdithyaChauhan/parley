@@ -62,6 +62,17 @@ def test_a_good_ticket_gets_hello_with_my_id(client, sign_up):
         assert line.receive_json() == {"type": "hello", "data": {"user_id": ana_id}}
 
 
+def test_ping_gets_pong(client, sign_up):
+    ana = sign_up("Ana")
+
+    with client.websocket_connect(f"/api/live?ticket={_ticket(client, ana)}") as line:
+        line.receive_json()  # hello
+        line.send_json({"type": "ping"})  # no data: counts as {} (D21)
+        assert line.receive_json() == {"type": "pong", "data": {}}
+        line.send_json({"type": "ping", "data": {}})  # the shape the app sends
+        assert line.receive_json() == {"type": "pong", "data": {}}
+
+
 def test_two_tabs_are_both_on_the_switchboard(client, sign_up):
     ana = sign_up("Ana")
     ana_id = uuid.UUID(_my_id(client, ana))

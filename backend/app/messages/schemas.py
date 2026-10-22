@@ -42,10 +42,11 @@ class MemberOut(BaseModel):
 
 
 class MessagePage(BaseModel):
-    """Up to `limit` messages, newest first."""
+    """Up to `limit` messages: newest first, or oldest first with after= (D21)."""
 
     messages: list[MessageOut]
-    # True if there are older messages above these: ask again with before=<smallest seq>.
+    # True if there are more past these. Normally older ones: ask again with
+    # before=<smallest seq>. With after=, newer ones: ask again with after=<biggest seq>.
     has_more: bool
     # Everyone's bookmarks, so the app can draw the right ticks after a reload too.
     members: list[MemberOut]

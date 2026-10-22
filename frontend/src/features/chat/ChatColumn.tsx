@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { ChevronDown, ChevronLeft, EllipsisVertical, LogOut, Plus, Search, Settings } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
+import type { LiveStatus } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { ChatRow } from "./ChatRow"
 import { NewChatBox } from "./NewChatBox"
@@ -15,7 +16,7 @@ type ChatColumnProps = {
   typing: Record<string, string> // chat id → who is typing there
   phoneVisible: boolean
   myName: string
-  connected: boolean // my live line is open: green dot, else grey
+  live: LiveStatus // my live line: green dot when online, else grey
   onLogout: () => void
 }
 
@@ -29,7 +30,7 @@ export function ChatColumn({
   typing,
   phoneVisible,
   myName,
-  connected,
+  live,
   onLogout,
 }: ChatColumnProps) {
   const [search, setSearch] = useState("")
@@ -81,15 +82,20 @@ export function ChatColumn({
             </div>
           )}
         </div>
-        <Avatar name={myName} tint="teal" size="lg" status={connected ? "online" : "offline"} />
+        <Avatar name={myName} tint="teal" size="lg" status={live === "online" ? "online" : "offline"} />
         <p className="mt-2 text-name">{myName}</p>
-        <button
-          type="button"
-          className="mt-2 flex items-center gap-1.5 rounded-md bg-status-pill px-3 py-0.5 text-sm text-primary"
-        >
-          available
-          <ChevronDown className="size-3.5" />
-        </button>
+        {/* While the line is down, the note takes the pill's place at the same height, so nothing jumps */}
+        {live === "reconnecting" ? (
+          <p className="mt-2 py-0.5 text-sm text-muted-foreground">Reconnecting...</p>
+        ) : (
+          <button
+            type="button"
+            className="mt-2 flex items-center gap-1.5 rounded-md bg-status-pill px-3 py-0.5 text-sm text-primary"
+          >
+            available
+            <ChevronDown className="size-3.5" />
+          </button>
+        )}
       </div>
 
       <label className="flex h-12 shrink-0 items-center gap-2 rounded-lg bg-search px-5">

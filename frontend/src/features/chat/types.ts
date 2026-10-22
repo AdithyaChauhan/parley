@@ -47,9 +47,12 @@ export type LiveEvent =
   | { type: "message.new"; data: ServerMessage }
   | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number; read_up_to: number } }
   | { type: "typing"; data: { chat_id: string; user_id: string } }
+  | { type: "pong"; data: Record<string, never> } // the answer to the app's heartbeat ping (D21)
 
 // A message on screen. Until the server answers, it has no id or number (seq) yet.
 // clientMsgId stays the same before and after, so it's the key that matches them.
+// sending = in the outbox, going out in its turn. waiting = no answer (offline),
+// goes out when the line is back (D21). failed = refused, tap to retry.
 export type Message = {
   id: string | null
   clientMsgId: string
@@ -57,7 +60,7 @@ export type Message = {
   senderId: string
   body: string
   createdAt: string
-  status: "sending" | "failed" | "sent"
+  status: "sending" | "waiting" | "failed" | "sent"
 }
 
 export function fromServer(message: ServerMessage): Message {

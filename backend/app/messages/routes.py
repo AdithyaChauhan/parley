@@ -48,19 +48,32 @@ def send_message(
 @router.get("", response_model=MessagePage)
 def message_history(
     chat_id: uuid.UUID,
-    # Only messages numbered below this. Leave it out for the newest page.
+    # Only messages numbered below this. Leave both out for the newest page.
     before: int | None = Query(default=None, ge=1),
+    # Only messages numbered above this. 0 = from #1 (an empty chat on screen).
+    after: int | None = Query(default=None, ge=0),
     limit: int = Query(default=30, ge=1, le=100),
     me: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if before is not None and after is not None:
+        # Back and forward at once makes no sense: refused like any other bad query.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Use before or after, not both")
     _check_member(db, chat_id, me)
 
     query = select(Message).where(Message.chat_id == chat_id)
-    if before is not None:
-        query = query.where(Message.seq < before)
-    # Newest first, and one extra: if the extra comes back, there are older messages.
-    rows = list(db.scalars(query.order_by(Message.seq.desc()).limit(limit + 1)))
+    if after is not None:
+        # Catching up (D21): the ones above my highest number, oldest first,
+        # so they come in reading order and I can ask again from the last one.
+        query = query.where(Message.seq > after).order_by(Message.seq.asc())
+    elif before is not None:
+        # Scrolling up: the ones above the oldest on screen, newest first.
+        query = query.where(Message.seq < before).order_by(Message.seq.desc())
+    else:
+        # Opening the chat: the newest ones, newest first.
+        query = query.order_by(Message.seq.desc())
+    # One extra: if the extra comes back, there are more past these.
+    rows = list(db.scalars(query.limit(limit + 1)))
 
     members = db.scalars(select(ChatMember).where(ChatMember.chat_id == chat_id))
     return MessagePage(

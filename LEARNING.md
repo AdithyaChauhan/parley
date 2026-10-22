@@ -658,3 +658,66 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why typing is never saved in the database: Because it's only true for a few seconds — saving it would mean a database write on every keystroke for information that's worthless a second later. It's passed to the other person and forgotten. The server drops anything within 1 second of the last one from the same line, before touching the database, so spam is cheap to refuse. The receiver shows "typing..." for 5 seconds after the last event, which is longer than the 3-second send limit, so it stays on while they type and fades by itself when they stop. No "stopped typing" event is needed.
 
 - What Ana's app checks to pick ✓, grey ✓✓ or teal ✓✓: There are two numbers per person per chat, delivered_up_to and read_up_to. For Ana's message #N: if their read_up_to is N or more, it shows teal ✓✓; otherwise if their delivered_up_to is N or more, it shows grey ✓✓; otherwise it shows ✓. Read implies delivered — when someone reads #12, delivered_up_to is lifted to at least 12 too (using GREATEST, so it never goes down).
+
+---
+
+### Task 19: Reconnect and catch up on missed messages
+**What was built**
+- `backend/app/live/routes.py`:
+  - `_save_bookmark()`, `_on_bookmark()`: a `receipt` now goes to everyone in the chat, the reader's own tabs too (D20), so Ben's other tab can clear its unread. `typing` still goes only to the others.
+  - `EventIn.data` defaults to `{}`, so a bare `{"type":"ping"}` is a valid event (D21).
+  - `_Line.websocket`: the line itself, so an answer can go back to just the tab that asked.
+  - `_handle()` answers `ping` with `{"type":"pong","data":{}}`. No database, so it costs almost nothing.
+- `backend/app/messages/routes.py`: history takes `after=N`: messages above #N, **oldest first**, and `has_more` means newer ones are waiting. `after=0` starts from #1. `before` with `after` gives 422.
+- `backend/app/messages/schemas.py`: `MessagePage` comments explain both directions.
+- `backend/tests/test_live_messages.py`: Ben has two tabs, reads in one, and the other gets his own receipt.
+- `backend/tests/test_message_routes.py`: catch-up pages come oldest first with the right `has_more`, and `after=0` starts from #1. `before` with `after`, and `after=-1`, give 422.
+- `backend/tests/test_live.py`: `ping`, with or without `data`, gets `pong`.
+- `frontend/src/lib/live.ts`:
+  - `useLiveConnection()` now reconnects by itself and returns `connecting`, `online` or `reconnecting`.
+  - Heartbeat: `ping` every 25 s. No `pong` (or no `hello` after opening) within 10 s → `hangUp()`.
+  - `lost()`: waits 1, 2, 4 ... up to 30 s, plus 0–1 s of random extra, then tries again with a new ticket. A `hello` resets the wait.
+  - The browser's `offline` hangs up at once. `online`, or the tab coming back to the front, tries at once. Never after log-out.
+  - `announce()`: one way in for pushed events, `hello`, and my own send's reply.
+- `frontend/src/features/chat/useOutbox.ts` (new): my unsent messages per chat. Sends one at a time, in order, each with its original `client_msg_id`. No answer → that message and everything after it are "waiting". A real refusal → "Not sent, tap to retry". Every `hello` sends every chat's waiting messages.
+- `frontend/src/features/chat/useMessages.ts`:
+  - `gapFree()`: the highest number with no hole below it.
+  - `takePage()`: one page in from any direction (merge, bookmarks, "delivered").
+  - `catchUp()`: `after=<gapFreeSeq>`, 100 at a time while `has_more`.
+  - On `hello`: catch up, or load the normal way if the chat never loaded. A saved message that skips numbers also catches up (the gap check).
+  - Their pushed message #N lifts their bookmarks to at least #N, because the server moved them with no receipt when it saved the message (D20). Found in the "Server restart" check: Ana's `r1` stayed at one grey ✓ after Ben's `r2` went out.
+  - Sending moved out to `useOutbox`. My unsent copy is hidden once the saved one is on screen.
+- `ChatScreen.tsx`: reloads the chat list on every `hello` (`reloadChats()`). `myReadMoved()`: a receipt about me sets unread to the newest number minus my `read_up_to`, and only ever lowers it. Holds the outbox.
+- `Conversation.tsx`: "read" reports `gapFreeSeq`. Sends and retries go to the outbox.
+- `ChatColumn.tsx`: "Reconnecting..." takes the "available" pill's place while the line is down, at the same height, so nothing jumps.
+- `MessageBubble.tsx`: a waiting message is faded, with the clock and "Waiting for connection".
+- `types.ts`: the `pong` event and the `waiting` status.
+
+**New ideas**
+- Heartbeat: a dead Wi-Fi often doesn't close the line, so silence is the only sign. The app asks "you there?" every 25 s. uvicorn already pings at a lower level, but browser code can't see those pings, so the app needs its own.
+- Hang up yourself: on a dead network, a polite close can take minutes, so the app drops the line and moves on.
+- Exponential backoff: each failed try waits twice as long (1, 2, 4 ... 30 s), so a server that's down isn't hammered. A good connection resets it.
+- Jitter (random extra): after a server restart, every app lost its line at the same moment. 0–1 s of random spreads them out, so they don't all call back in the same second.
+- Catch-up by number: messages are numbered with no gaps (D18), so "what did I miss?" is "everything after my highest number". Times would be wrong: clocks disagree, and two messages can share a millisecond.
+- The highest number with no hole below it: if I have #20 and #24, catch-up asks `after=20`, not `after=24`.
+- Gap check: a message that skips numbers proves something went missing, even while connected.
+- Catch up on every `hello`, the first one too: it also covers the moment between the page loading and the line opening.
+- Outbox: every send goes through one queue per chat, one at a time, so order is kept. "No answer" waits; "refused" fails.
+- Safe to send again: the same `client_msg_id` on every try means a resend after a lost reply gets the first copy back, not a double (D18).
+- Browser signals: `online`, `offline` and `visibilitychange` tell the app to act now instead of waiting.
+- One way in: my send's reply and a pushed message go through the same listeners, so the chat list, the gap check and "no doubles" work the same for both.
+- Receipts to myself: unread = newest number − my `read_up_to`. That works across tabs, and a "delivered" receipt can't wrongly clear unread.
+- Sending counts as reading: a message from Ben at #N means Ben's bookmarks are at #N too. The server moves them silently, so the app works it out from the push. Known simplification: after an offline race this can show "read" a few seconds early (D20).
+
+**In my words** (Adithya writes this)
+- How the app knows the line is dead:
+  Short version: It asks "you there?" and waits for a reply.
+  Full version: When Wi-Fi drops, the browser often doesn't know, and the line just sits there looking open. So the app sends a ping every 25 seconds. If the server doesn't answer with a pong within 10 seconds, the app knows the line is dead, hangs up, and starts trying to reconnect.
+
+- How catch-up finds exactly the messages you missed:
+  Short version: It asks for everything above its highest safe number.
+  Full version: Every message in a chat has a number with no gaps (#1, #2, #3). The app remembers the highest number it has with no holes below it. When it reconnects, it just asks the server "give me everything after this number". This is safer than using times because two phones' clocks can disagree.
+
+- Why waiting messages can be re-sent without making doubles:
+  Short version: Each message has a unique ID, so the server ignores copies.
+  Full version: Every message gets a unique ID (client_msg_id) the moment you hit send. If you send it while offline, it waits in a queue (the outbox). When it retries, it sends that exact same ID. If the first try actually did reach the server, the server sees the same ID, refuses to save it twice, and just returns the first copy.

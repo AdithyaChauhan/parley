@@ -6,8 +6,8 @@ import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
-import type { ChatSummary, Message, ServerMessage } from "./types"
-import type { UpdateUnsent } from "./useMessages"
+import type { ChatSummary, ServerMessage } from "./types"
+import { useOutbox } from "./useOutbox"
 import { useTyping } from "./useTyping"
 
 // On a phone only one column shows at a time
@@ -30,11 +30,10 @@ export function ChatScreen({ user }: { user: User }) {
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1280)
   const [phoneView, setPhoneView] = useState<PhoneView>("list")
-  // My unsaved messages per chat ("sending" or "Not sent"). Kept here, above the
-  // Conversation, so they're still there after switching chats and back.
-  const [unsent, setUnsent] = useState<Record<string, Message[]>>({})
+  // My unsaved messages per chat, sent one at a time, in order (D21)
+  const outbox = useOutbox(user.id)
   // This screen only shows while logged in, so the line opens on log-in and closes on log-out.
-  const connected = useLiveConnection()
+  const live = useLiveConnection()
   // Who is typing in which chat, for the chat list and the open conversation
   const typing = useTyping()
 
@@ -54,6 +53,20 @@ export function ChatScreen({ user }: { user: User }) {
     }
   }, [])
 
+  // The chat list again, quietly (a failure leaves the old list up): a chat I
+  // don't have yet, or back on the line, when previews, unread counts and even
+  // whole chats may have changed while it was down (D21)
+  function reloadChats() {
+    api<ChatSummary[]>("/chats")
+      .then((list) => {
+        setChats(list)
+        setLoadFailed(false)
+        setOpenId((current) => current ?? list[0]?.id ?? null)
+        reportListDelivered(list)
+      })
+      .catch(() => {})
+  }
+
   const openChat = chats?.find((chat) => chat.id === openId) ?? null
 
   // Opening a chat doesn't clear its unread count by itself: the Conversation
@@ -71,6 +84,20 @@ export function ChatScreen({ user }: { user: User }) {
     })
   }
 
+  // My read bookmark moved, maybe in another tab (D20). Unread is always the
+  // newest number minus it. A "delivered" or late receipt never raises it.
+  function myReadMoved(chatId: string, readUpTo: number) {
+    setChats(
+      (all) =>
+        all &&
+        all.map((chat) => {
+          if (chat.id !== chatId) return chat
+          const unread = Math.max(0, (chat.last_message?.seq ?? 0) - readUpTo)
+          return unread < chat.unread ? { ...chat, unread } : chat
+        }),
+    )
+  }
+
   // From the "+" box. If we already had this chat, just open it.
   function chatStarted(chat: ChatSummary) {
     setChats((all) => {
@@ -79,9 +106,6 @@ export function ChatScreen({ user }: { user: User }) {
     })
     selectChat(chat.id)
   }
-
-  const updateUnsent: UpdateUnsent = (chatId, update) =>
-    setUnsent((all) => ({ ...all, [chatId]: update(all[chatId] ?? []) }))
 
   // A saved message reached this tab: my send's reply, or one pushed live.
   // Its chat moves to the top. My own message arrives twice (the reply and the
@@ -106,7 +130,17 @@ export function ChatScreen({ user }: { user: User }) {
 
   // A new message pushed live (D20). It's on this device now, so tell the server.
   // A chat I don't have yet (someone just started it with me): load the list again.
+  // A receipt about me: I read something, here or in another tab.
+  // A hello: on the line again, so catch up on the list (D21).
   useLiveEvents((event) => {
+    if (event.type === "hello") {
+      reloadChats()
+      return
+    }
+    if (event.type === "receipt" && event.data.user_id === user.id) {
+      myReadMoved(event.data.chat_id, event.data.read_up_to)
+      return
+    }
     if (event.type !== "message.new") return
     const message = event.data
     reportDelivered(message.chat_id, message.seq)
@@ -114,12 +148,7 @@ export function ChatScreen({ user }: { user: User }) {
     if (chats.some((chat) => chat.id === message.chat_id)) {
       messageArrived(message)
     } else {
-      api<ChatSummary[]>("/chats")
-        .then((list) => {
-          setChats(list)
-          reportListDelivered(list)
-        })
-        .catch(() => {})
+      reloadChats()
     }
   })
 
@@ -136,7 +165,7 @@ export function ChatScreen({ user }: { user: User }) {
         typing={typing}
         phoneVisible={phoneView === "list"}
         myName={user.name}
-        connected={connected}
+        live={live}
         onLogout={logout}
       />
       {openChat ? (
@@ -146,9 +175,9 @@ export function ChatScreen({ user }: { user: User }) {
             key={openChat.id}
             chat={openChat}
             myId={user.id}
-            unsent={unsent[openChat.id] ?? []}
-            updateUnsent={updateUnsent}
-            onSent={messageArrived}
+            unsent={outbox.unsent[openChat.id] ?? []}
+            onSend={(body) => outbox.send(openChat.id, body)}
+            onRetry={(message) => outbox.retry(openChat.id, message)}
             typing={openChat.id in typing}
             onRead={() => markRead(openChat.id)}
             onBack={() => setPhoneView("list")}

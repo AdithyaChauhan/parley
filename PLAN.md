@@ -19,54 +19,69 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 18: Read ticks (teal) and "typing..." (teaching mode, faster)
-- **Branch:** `feature/read-typing`
-- **Goal:**
-  - When Ben actually looks at Ana's messages, her ✓✓ turns teal and his unread count clears for good.
-  - While someone types, the other person sees "Ben is typing..."
-- **Mode:** teaching mode, friend style, faster (questions at the end, as "In my words" prompts). Claude Code runs the backend checks itself and shows the results.
-- **Testing two people:** a normal window for Ana plus a private (Incognito) window for Ben.
+### Task 19: Reconnect and catch up on missed messages (teaching for the ideas, fast mode for the screens)
+- **Branch:** `feature/reconnect`
+- **Goal:** Parley survives a bad connection. If the line drops (Wi-Fi off, laptop asleep, server restart), the app reconnects by itself, fetches anything it missed, and sends any "Not sent" messages in order, exactly once. This is the demo for interviews.
+- **Mode:**
+  - The three ideas below are taught in friend style: backoff, catch-up by number, and heartbeat. They're the system design part.
+  - The screen parts are fast mode.
+  - Questions come at the end, as "In my words" prompts.
+
+**Step 0 (carry-over from T18):** the read-receipt gap.
+- Send `receipt` to everyone in the chat, **including the reader's own other tabs**.
+- In the app, a receipt about someone else updates ticks. A receipt about me sets that chat's unread to 0.
+- Test: Ben has two tabs, reads in one, and the other tab gets the receipt.
 
 **Example first (Claude Code shows this before any code):**
 ```
- Ben's chat list loads           → app says "delivered 12"   (Ana sees grey ✓✓)
- Ben OPENS the chat, sees #12    → app says "read 12"         (Ana sees teal ✓✓, Ben's unread → 0)
- Ben types "ok"                  → app says "typing" (at most every 3 s)
-                                   server passes it on, saves nothing
-                                   Ana sees "Ben is typing..." for 5 s, or until Ben's message arrives
+ 10:00:00  Ben's Wi-Fi drops. His app has Ana's chat up to #20.
+ 10:00:05  Ana sends #21, #22, #23. The pushes to Ben fail (line is dead). Saved anyway (D9).
+           Ben's app: no "pong" for 10 s → line is dead → try again in 1 s, 2 s, 4 s ... (max 30 s)
+ 10:00:40  Wi-Fi back. Ben's app gets a new ticket, reconnects, gets "hello".
+           Catch-up:  GET /api/chats                              (new previews, unread, new chats)
+                      GET /api/chats/{open chat}/messages?after=20  → #21, #22, #23 (oldest first)
+           Ben's app says "delivered 23" (and "read 23" if he's looking) → Ana's ticks update.
+
+ Ben's own sends while offline:  "hi", "you there?", "ok"  → shown as "waiting" in order
+ 10:00:40  back online → sent one at a time, in order, each with its SAME client_msg_id
+           → no doubles even if one of them actually got through before the drop (D18)
 ```
-Rule of thumb: **delivered** means "it's on my device". **Read** means "it was on my screen in an open chat, with the window in front". The chat list never sends read.
 
 **Steps:**
-1. **Backend: `read`.**
-   - The line accepts `{"type":"read","data":{"chat_id","seq"}}`.
-   - `mark_read` works like `mark_delivered`: members only, forward-only, capped at `last_seq`. It **also lifts `delivered_up_to`** to at least the same number (read implies delivered).
-   - If anything moved, push `receipt` with **both** bookmarks: `{chat_id, user_id, delivered_up_to, read_up_to}`.
-2. **Backend: small fix from T17.** On send, also lift the sender's own `delivered_up_to` (today only their `read_up_to` moves).
-3. **Backend: `typing`.**
-   - The line accepts `{"type":"typing","data":{"chat_id"}}`.
-   - The server checks the person is a member, then pushes `{"type":"typing","data":{chat_id, user_id}}` to the **other** members. Nothing is saved.
-   - Ignore extra typing events from the same line within 1 second.
-4. **Frontend (fast mode):**
-   - **Sending `read`:** when a chat is open, the window is in front (visible and focused) and the newest message is on screen, send `read` with the highest number shown. Send again when new ones arrive while you watch. Set that chat's unread to 0.
-   - **Ticks:** my #N shows teal ✓✓ when the other person's `read_up_to` ≥ N, grey ✓✓ when only `delivered_up_to` ≥ N, and ✓ otherwise.
-   - **Sending `typing`:** while you type, send `typing` at most once every 3 seconds.
-   - **Showing typing:** show "<name> is typing..." with the animated dots in the conversation, and "typing..." in the chat list row. Hide it 5 seconds after the last event, or as soon as that person's message arrives.
-5. **Tests:**
-   - `read` moves both bookmarks, and the receipt carries both.
-   - `read` never goes backwards or past `last_seq`.
-   - A non-member's `read` and `typing` are ignored.
-   - `typing` reaches the other member but not the sender.
-   - A second `typing` inside 1 second is dropped.
-   - The sender's `delivered_up_to` moves on send.
-- **Not in this task:** catching up after a dropped line (T19), online and last-seen (T20), turning read receipts off (v2).
+1. **Backend: `after=` for history.**
+   - `GET /api/chats/{id}/messages?after=N` returns messages numbered above N, **oldest first**, with `limit` (at most 100), `has_more` and `members`.
+   - `before` and `after` together give 422.
+2. **Backend: heartbeat reply.** The line answers `{"type":"ping"}` with `{"type":"pong"}`.
+3. **App: heartbeat.** While the line is open, send `ping` every 25 seconds. If no `pong` comes back within 10 seconds, treat the line as dead: close it and reconnect.
+4. **App: reconnect with backoff.**
+   - When the line drops, wait 1 s, 2 s, 4 s, 8 s ... up to 30 s, plus a little random extra so thousands of apps don't all retry at the same second.
+   - Get a **new ticket** each time.
+   - Try at once when the browser says it's back online, or when the tab comes back to the front.
+   - Reset the wait after a good connection.
+   - The dot is grey, with a small "Reconnecting..." note, while it's down.
+   - Never reconnect after log-out.
+5. **App: catch-up on every hello after a drop.**
+   - Reload the chat list.
+   - For the open chat, fetch `after=<highest number on screen>`, repeating while `has_more`.
+   - Re-send `delivered` and `read`, as T17/T18 already do.
+   - Closed chats load normally when opened.
+6. **App: gap check while connected.** If a pushed message for the open chat is more than one ahead of the highest number on screen (I have #20, a push brings #23), fetch `after=20` to fill the gap.
+7. **App: outbox.**
+   - Sends that fail because you're offline wait in order and show "waiting".
+   - When the line is back, send them **one at a time, in order**, each with its own original `client_msg_id`.
+   - A send refused for a real reason (for example 422) shows "Not sent, tap to retry", as before.
+8. **Tests (backend):**
+   - `after=` returns oldest first with the right `has_more`, and `before` with `after` gives 422.
+   - `ping` gets `pong`.
+   - The two-tab read receipt (step 0).
+- **Not in this task:** online status and last seen (T20), several backend copies (T21).
 - **Done when:**
-  - Ana sends. With Ben's chat **closed**, it shows grey ✓✓. When Ben opens the chat, it turns teal ✓✓, and Ben's unread clears and stays cleared after a reload.
-  - With Ben's window in the background, the message stays grey until he comes back.
-  - "Ben is typing..." shows while he types and goes away after he stops or sends.
-  - All tests pass, CI is green (run link in the report), and "In my words" is filled in **by Adithya, in his own words**.
+  - **Server restart:** with Ana and Ben chatting, stop and restart uvicorn. Both dots go grey, then green again without a reload, and anything sent meanwhile appears.
+  - **Offline sends:** in Ana's DevTools → Network, set "Offline". Ana sends 5 messages, and they show "waiting". Set "No throttling". All 5 arrive at Ben, in order, exactly once (check in psql: 5 new rows).
+  - **Missed messages:** Ben goes Offline, Ana sends 3, Ben goes back online. Ben's open chat shows them without a reload, and Ana's ticks update.
+  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how the app decides a message is "read" and not just "delivered"; why typing is never saved in the database; what Ana's app checks to pick ✓, grey ✓✓ or teal ✓✓.
+"In my words" prompts: how the app knows the line is dead; how catch-up finds exactly the messages you missed; why waiting messages can be re-sent without making doubles.
 
 ---
 
@@ -98,7 +113,7 @@ Rule of thumb: **delivered** means "it's on my device". **Read** means "it was o
 ### Phase 4: Live chat (WebSocket)
 - [x] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)
 - [x] T17. New messages appear instantly; "got it" replies give two ticks (also keep a "Not sent" message in the chat when you switch chats and come back)
-- [ ] T18. Typing indicator and read ticks
+- [x] T18. Typing indicator and read ticks
 - [ ] T19. Reconnect and catch up on missed messages
 
 ### Phase 5: Redis

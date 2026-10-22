@@ -32,7 +32,8 @@ class EventIn(BaseModel):
     """Anything the app sends on the line: {"type": "...", "data": {...}} (D19)."""
 
     type: str
-    data: dict
+    # An event with no data, like {"type": "ping"}, counts as {} (D21).
+    data: dict = {}
 
 
 class BookmarkIn(BaseModel):
@@ -54,6 +55,8 @@ class _Line:
     """What the server remembers about one open line, while it's open."""
 
     user_id: uuid.UUID
+    # The line itself, for answers that go back only to this tab (pong).
+    websocket: WebSocket
     # When this line's last "typing" got through, on the _now() clock. Far in the past at first.
     last_typing: float = float("-inf")
 
@@ -82,13 +85,15 @@ def _others(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> list[uuid.UU
 
 def _save_bookmark(user_id: uuid.UUID, kind: str, bookmark: BookmarkIn) -> tuple[Bookmarks | None, list[uuid.UUID]]:
     """Moves the "delivered" or "read" bookmark and returns (both bookmarks,
-    the other people in the chat). (None, []) if it didn't move."""
+    everyone in the chat). (None, []) if it didn't move."""
     mark = mark_read if kind == "read" else mark_delivered
     with SessionLocal() as db:
         moved = mark(db, bookmark.chat_id, user_id, bookmark.seq)
         if moved is None:
             return None, []
-        return moved, _others(db, bookmark.chat_id, user_id)
+        # Everyone, me too: my other tabs need my new read_up_to for their unread count (D20).
+        # It moved, so I'm a member: no stranger gets the receipt.
+        return moved, member_ids(db, bookmark.chat_id)
 
 
 def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> list[uuid.UUID]:
@@ -99,7 +104,7 @@ def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> list[uuid.UUID]:
 
 async def _on_bookmark(line: _Line, event: EventIn) -> None:
     """"delivered" or "read": move the bookmark and, if it moved, send a
-    receipt to the others in the chat."""
+    receipt to everyone in the chat, my own tabs too."""
     try:
         bookmark = BookmarkIn.model_validate(event.data)
     except ValidationError:
@@ -107,7 +112,7 @@ async def _on_bookmark(line: _Line, event: EventIn) -> None:
 
     # The database code is normal (sync) code (D15), so it runs in a worker
     # thread; the rest of the server keeps going while it waits.
-    moved, others = await anyio.to_thread.run_sync(_save_bookmark, line.user_id, event.type, bookmark)
+    moved, everyone = await anyio.to_thread.run_sync(_save_bookmark, line.user_id, event.type, bookmark)
     if moved is not None:
         # Both bookmarks, so the app can pick grey or teal ticks (D20).
         receipt = {
@@ -119,7 +124,7 @@ async def _on_bookmark(line: _Line, event: EventIn) -> None:
                 "read_up_to": moved.read_up_to,
             },
         }
-        await manager.send_to_users(others, receipt)
+        await manager.send_to_users(everyone, receipt)
 
 
 async def _on_typing(line: _Line, event: EventIn) -> None:
@@ -153,6 +158,10 @@ async def _handle(line: _Line, text: str) -> None:
         await _on_bookmark(line, event)
     elif event.type == "typing":
         await _on_typing(line, event)
+    elif event.type == "ping":
+        # The app's heartbeat: "are you still there?" (D21). Only this tab gets
+        # the answer, and no database is touched, so it costs almost nothing.
+        await line.websocket.send_json({"type": "pong", "data": {}})
 
 
 # A missing ticket counts as a bad one, so it also gets 4401.
@@ -168,7 +177,7 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
         return
 
     manager.connect(user_id, websocket)
-    line = _Line(user_id)
+    line = _Line(user_id, websocket)
     try:
         await websocket.send_json({"type": "hello", "data": {"user_id": str(user_id)}})
         # Keep the line open and handle what the app sends, one event at a
