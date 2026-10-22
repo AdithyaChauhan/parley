@@ -27,15 +27,30 @@ export type ServerMessage = {
   created_at: string
 }
 
+// One person's tick bookmarks in a chat (D9)
+export type MemberBookmarks = {
+  user_id: string
+  delivered_up_to: number // every message up to this number reached their device
+  read_up_to: number
+}
+
 // GET /api/chats/{id}/messages: up to 30, newest first
 export type MessagePage = {
   messages: ServerMessage[]
   has_more: boolean // older messages are waiting above these
+  members: MemberBookmarks[] // everyone's bookmarks, so ticks are right after a reload
 }
 
-// A message on screen. Until the server answers, it has no number (seq) yet.
+// What the server pushes down the live line (D19, D20)
+export type LiveEvent =
+  | { type: "hello"; data: { user_id: string } }
+  | { type: "message.new"; data: ServerMessage }
+  | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number } }
+
+// A message on screen. Until the server answers, it has no id or number (seq) yet.
 // clientMsgId stays the same before and after, so it's the key that matches them.
 export type Message = {
+  id: string | null
   clientMsgId: string
   seq: number | null
   senderId: string
@@ -46,6 +61,7 @@ export type Message = {
 
 export function fromServer(message: ServerMessage): Message {
   return {
+    id: message.id,
     clientMsgId: message.client_msg_id,
     seq: message.seq,
     senderId: message.sender_id,

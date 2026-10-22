@@ -102,5 +102,11 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - One WebSocket per open tab, at `/api/live`. The server uses it to push events; sending messages still goes over HTTP (D3).
 - Getting on: `POST /api/live/ticket` (with the access token) gives a ticket that works once and dies after 30 seconds. The app opens `/api/live?ticket=...`. A bad ticket closes the line with code 4401.
 - Every event is JSON shaped `{"type": "...", "data": {...}}`.
-- Tickets and the "who is on which line" list live in the server's memory for now. With two backend copies (T21) they move to Redis.
+- Tickets live in the server's memory for now and move to Redis in T21. The open lines can't move: each backend copy keeps its own switchboard for the lines it accepted, and Redis pub/sub carries "push this to Ben" between copies (T21).
 - New package: `websockets` (gives uvicorn WebSocket support).
+
+**D20. Live events and ticks**
+- Server to app: `message.new` (a saved message) and `receipt` (someone's bookmark moved).
+- App to server: `delivered` (and `read` in T18), with the chat id and the highest number it has.
+- Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
+- A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).

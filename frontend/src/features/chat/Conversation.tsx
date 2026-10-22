@@ -3,13 +3,15 @@ import { ArrowLeft } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
-import { tintFor, type ChatSummary, type ServerMessage } from "./types"
+import { tintFor, type ChatSummary, type Message, type ServerMessage } from "./types"
 import { UploadView } from "./UploadView"
-import { useMessages } from "./useMessages"
+import { useMessages, type UpdateUnsent } from "./useMessages"
 
 type ConversationProps = {
   chat: ChatSummary
   myId: string
+  unsent: Message[] // my messages in this chat that aren't saved yet
+  updateUnsent: UpdateUnsent
   onSent: (message: ServerMessage) => void
   onBack: () => void
   onOpenPanel: () => void
@@ -17,8 +19,23 @@ type ConversationProps = {
 }
 
 // The middle panel: title and tabs, the messages, and the message box
-export function Conversation({ chat, myId, onSent, onBack, onOpenPanel, phoneVisible }: ConversationProps) {
-  const { messages, hasMore, loading, failed, loadOlder, send, retry } = useMessages(chat.id, myId, onSent)
+export function Conversation({
+  chat,
+  myId,
+  unsent,
+  updateUnsent,
+  onSent,
+  onBack,
+  onOpenPanel,
+  phoneVisible,
+}: ConversationProps) {
+  const { messages, theirDelivered, hasMore, loading, failed, loadOlder, send, retry } = useMessages(
+    chat.id,
+    myId,
+    unsent,
+    updateUnsent,
+    onSent,
+  )
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
@@ -115,6 +132,8 @@ export function Conversation({ chat, myId, onSent, onBack, onOpenPanel, phoneVis
             senderName={chat.name} // a direct chat: anyone who isn't me is the other person
             senderTint={tintFor(chat.id)}
             mine={message.senderId === myId}
+            // ✓✓ once the other person's device has everything up to this number (D20)
+            delivered={message.seq !== null && message.seq <= theirDelivered}
             onRetry={() => retry(message)}
           />
         ))}

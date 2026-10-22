@@ -24,7 +24,7 @@ The full teaching rules below apply to backend and system work (T8 onward, excep
 ## While building
 - One file per step. Before writing it, say in 1–2 sentences what the file is for.
 - Explain at the right depth:
-  - Big ideas (how messages flow, React components and state, database tables, auth, WebSocket, Redis, queues): first show a small concrete example (a mini table with a few rows, or a short timeline), then explain in plain words (short, max ~6 lines), then ask one "how does X work" question (not "why does X matter").
+  - Big ideas (how messages flow, React components and state, database tables, auth, WebSocket, Redis, queues): first show a small concrete example (a mini table with a few rows, or a short timeline), then explain in plain words (short, max ~6 lines), then move on. Don't stop between steps for questions: ask the "how does X work" questions at the end of the task, as prompts for "In my words".
   - Setup and config files (tsconfig, vite.config, package.json, lint settings): 2–3 lines max. Say what it's for and what changed. No question.
   - Never explain syntax trivia (commas, quotes, brackets) unless something breaks.
 - Small setup steps can be grouped into one step, as long as each file still gets its 2–3 lines.

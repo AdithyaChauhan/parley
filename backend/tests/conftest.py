@@ -52,7 +52,10 @@ def test_database():
 def client(test_database):
     """A fresh test browser for one test. Empties every sheet afterwards,
     so every test starts clean."""
-    yield TestClient(app)
+    # "with": one event loop for the whole test, so an HTTP send can push
+    # to a live line the same test opened.
+    with TestClient(app) as test_client:
+        yield test_client
 
     _empty_all_tables()
 

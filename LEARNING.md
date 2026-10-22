@@ -541,7 +541,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
   - `redeem()`: takes the ticket out first, then checks it, so it works only once. An unknown, used or expired ticket gives None.
   - A thread lock: the ticket route runs in a worker thread and the live line on the async side, so two of them could touch the list at the same moment.
   - `_now()`: a clock that only moves forward (`time.monotonic`). Tests swap it to fake the time.
-- `backend/app/live/manager.py`: the switchboard, `lines`: user id â†’ that user's open lines, one per tab.
+- `backend/app/live/manager.py`: the switchboard, `lines`: user id → that user's open lines, one per tab.
   - `connect()`, `disconnect()`: add or remove one line. When a user's last line closes, their row goes.
   - `send_to_user()`: sends an event down every open tab of one user. Not used yet (T17).
   - No lock: only the async side touches it, and that side only switches at an `await`.
@@ -559,7 +559,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - WebSocket: a line that stays open, so the server can speak first. HTTP is letters (ask, answer, done); a WebSocket is a phone call.
 - One-time ticket: a browser can't put an "Authorization" header on a WebSocket, and addresses end up in logs. So the app trades its token for a ticket that works once and dies in 30 seconds, and only the ticket goes in the address.
 - Close codes: a number that says why a line was hung up. Apps can use 4000 to 4999; 4401 means "not logged in". The server must pick up before hanging up, or the browser only sees 1006 ("failed").
-- Switchboard: user id â†’ a set of open lines. A set, because one person can have several tabs.
+- Switchboard: user id → a set of open lines. A set, because one person can have several tabs.
 - Thread lock vs. async: a normal `def` route runs in a worker thread, an `async def` one on the async side. Data touched from both needs a lock. Data touched only from the async side doesn't, because it only switches at an `await`.
 - `finally`: runs however a block ends (normally, with an error, or cancelled), so a closed tab never stays on the switchboard.
 - Faking the clock: `monkeypatch` swaps a function for one test and puts it back afterwards.
@@ -571,3 +571,43 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What I'd check first if it broke: The avatar dot staying grey means checking the Network tab's Socket filter — did /api/live?ticket=... open and receive hello? A 4401 means the ticket expired (30 s) or was already used, so ask for a new one instead of reusing it. A 1006 instead of 4401 usually means the server closed before accepting the WebSocket — FastAPI needs await websocket.accept() even when refusing. A line that opens but never gets hello usually means the route crashed after connect — check the uvicorn log. A closed tab still on the switchboard means the finally block isn't running.
 
 - What still confuses me: Nothing blocking right now. The two-backend question I had is answered: the ticket fails first (a ticket issued on copy A and a line landing on copy B gives 4401 at log-in), and a live send fails silently (Ana's message on copy A never reaches Ben's line on copy B, so he only sees it after a reload). T21 fixes both with Redis for tickets and pub/sub for pushes — the open lines stay in whichever copy accepted them.
+
+---
+
+### Task 17: Messages arrive instantly, and two ticks when delivered
+**What was built**
+- `backend/app/live/manager.py`:
+  - `send_to_user()` now tries each tab on its own. A tab whose send fails is dropped, and the others still get the event. The event is turned into text once, before the loop, so a mistake in the event can't be blamed on the tabs.
+  - `send_to_users()`: the same event to several people.
+  - `push_from_thread()`: for normal (`def`) routes, which run in a worker thread. Hands the push to the async side with `anyio.from_thread.run` and waits. Never raises: a failed push is only logged, because the message is already saved (D20).
+- `backend/app/chats/service.py`:
+  - `member_ids()`: everyone in a chat, meaning who its live events go to.
+  - `mark_delivered()`: moves a person's `delivered_up_to` forward to `seq`, capped at the chat's `last_seq`. One `UPDATE` that only matches a member whose bookmark is behind, so non-members and steps backwards change nothing. Returns the new value, or None if nothing moved.
+- `backend/app/messages/routes.py`: after a new message is saved (201), pushes `message.new` to everyone in the chat, the sender's other tabs too. A resend (200) pushes nothing. The history reply gains `members`.
+- `backend/app/messages/schemas.py`: `MemberOut` (user id and both bookmarks) and `MessagePage.members`.
+- `backend/app/live/routes.py`: the line now reads events from the app (`EventIn`, `DeliveredIn`). `_handle()` ignores anything broken or unknown, so a bad event can't knock the line down. A `delivered` event runs `_save_delivered()` in a worker thread (`anyio.to_thread.run_sync`) with its own short database session. If the bookmark moved, a `receipt` goes to the other people in the chat.
+- `backend/tests/conftest.py`: the `client` fixture uses `with TestClient(app)`, so the HTTP requests and live lines in one test share one event loop.
+- `backend/tests/test_live_messages.py`: 6 tests. `message.new` reaches Ben; `delivered` gives Ana a `receipt` and shows in the history; never backwards or past `last_seq`; a non-member is ignored; a dead line is dropped while the other tab still gets the event; a resend pushes nothing.
+- `.github/workflows/ci.yml`: `timeout-minutes: 10` on both jobs, so a stuck live test can't hang CI for 6 hours.
+- `frontend/src/lib/live.ts`: `useLiveEvents()` lets any component hear pushed events. `reportDelivered()` sends `delivered`, remembers the highest number per chat, and repeats it when the line opens (the chat list often loads first).
+- `frontend/src/features/chat/types.ts`: `MemberBookmarks`, `MessagePage.members`, the `LiveEvent` shapes, and `Message.id`.
+- `frontend/src/features/chat/useMessages.ts`: keeps saved messages (merged by id, in number order) apart from my unsaved ones. Takes in `message.new` for the open chat with no doubles, keeps the other person's `delivered_up_to` (from history and receipts), and reports `delivered` after loading history.
+- `Conversation.tsx`, `MessageBubble.tsx`: my message #N shows ✓✓ when the other person's `delivered_up_to` is N or more.
+- `ChatScreen.tsx`: a pushed message moves its chat to the top (+1 unread if it's theirs and the chat isn't open). A message from a chat I don't have yet reloads the list. The chat list reports `delivered` for each chat's newest message. My unsent messages ("sending" or "Not sent") are kept here, per chat, so they survive switching chats.
+
+**New ideas**
+- Push after save: the server saves first (D9), then pushes to everyone's open lines. A failed push loses nothing, because the message is in the database (T19 catches up).
+- Worker thread and async side, both ways: `anyio.from_thread.run` (a `def` route hands work to the async side) and `anyio.to_thread.run_sync` (the async line hands database work to a worker thread).
+- Bookmarks instead of ticks per message: one number per person per chat. "My #N is ✓✓ when their delivered_up_to is N or more."
+- Forward-only bookmark: a conditional `UPDATE` (`WHERE delivered_up_to < target`). A late or repeated report can never undo progress, and the row lock makes two reports at once safe.
+- Delivered means "on the device": reported when a message reaches the app (live, history or chat list), not when it's read (T18).
+- No doubles: my own message arrives twice (the send's reply and the push). Matching by id and client_msg_id shows it once.
+- Testing "nothing happened": you can't wait for silence, so send a marker and check it's the next thing to arrive.
+- Two users on one laptop: a normal window and an Incognito window, because tabs in the same window share cookies.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: This task made messages arrive instantly on the other person's screen, and shows the sender two ticks once the other device has the message. After a new message is saved, the server pushes message.new to every member's open tabs — including the sender's other tabs — while a resend pushes nothing. A failed push loses nothing, because the message is already saved and T19 will catch up missed ones. Each chat_member row has a delivered_up_to number; when a message reaches a device, the app sends a delivered event, the server moves that bookmark forward with a conditional UPDATE that only matches when the bookmark is behind, and sends a receipt to the other people. My message #N shows two ticks when the other person's delivered_up_to is N or more. No tick is stored per message — just one number per person per chat, and the number can only move forward, so a late or repeated report can never undo progress. Delivered means "on the device", not "read" — read is T18.
+
+- What I'd check first if it broke: No push arriving means checking the Network tab's Socket filter — is the line open, and did message.new arrive? No two ticks means checking delivered_up_to in GET /api/chats/{id}/messages under members — if it's lower than the message's seq, the delivered report never reached the server. A message showing twice means the merge by id and client_msg_id isn't matching the optimistic copy with the pushed copy. CI hanging means checking which step hung, since timeout-minutes should now kill a stuck live test. A crash during push would mean push_from_thread raised, which it should never do, since a failed push must only be logged.
+
+- What still confuses me: When the chat list loads, reportDelivered() runs for each chat's newest message, which moves that person's delivered_up_to to the newest number at once — including messages they haven't scrolled to. I think that's right, because delivered means "reached the device" and the preview itself is evidence it reached the device. But I want to be sure that when T18 arrives, this doesn't accidentally get treated as "read". Delivered and read need to stay separate, and the line between them is the thing I'm watching.
