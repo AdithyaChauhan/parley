@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useAuth, type User } from "@/features/auth/useAuth"
 import { api } from "@/lib/api"
+import { useLiveConnection } from "@/lib/live"
 import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
@@ -20,6 +21,8 @@ export function ChatScreen({ user }: { user: User }) {
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1280)
   const [phoneView, setPhoneView] = useState<PhoneView>("list")
+  // This screen only shows while logged in, so the line opens on log-in and closes on log-out.
+  const connected = useLiveConnection()
 
   // My real chats, newest activity first. The first one opens on its own.
   useEffect(() => {
@@ -76,6 +79,7 @@ export function ChatScreen({ user }: { user: User }) {
         onChatStarted={chatStarted}
         phoneVisible={phoneView === "list"}
         myName={user.name}
+        connected={connected}
         onLogout={logout}
       />
       {openChat ? (

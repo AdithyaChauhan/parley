@@ -97,3 +97,10 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - The database also refuses a second #N in the same chat (unique `chat_id` + `seq`).
 - A send carries the sender app's `client_msg_id`; the database refuses a second copy (unique `sender_id` + `client_msg_id`), and the server returns the first one instead.
 - A direct chat between two people has a unique `direct_key`, so they can't end up with two direct chats.
+
+**D19. The live connection**
+- One WebSocket per open tab, at `/api/live`. The server uses it to push events; sending messages still goes over HTTP (D3).
+- Getting on: `POST /api/live/ticket` (with the access token) gives a ticket that works once and dies after 30 seconds. The app opens `/api/live?ticket=...`. A bad ticket closes the line with code 4401.
+- Every event is JSON shaped `{"type": "...", "data": {...}}`.
+- Tickets and the "who is on which line" list live in the server's memory for now. With two backend copies (T21) they move to Redis.
+- New package: `websockets` (gives uvicorn WebSocket support).

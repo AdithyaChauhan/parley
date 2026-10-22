@@ -28,11 +28,11 @@ type AvatarProps = {
   name: string
   tint: Tint
   size?: keyof typeof sizes
-  online?: boolean
+  status?: "online" | "offline" // a green or grey dot; no dot when left out
 }
 
 // A round avatar with initials on a soft tint (no photos, D8)
-export function Avatar({ name, tint, size = "md", online = false }: AvatarProps) {
+export function Avatar({ name, tint, size = "md", status }: AvatarProps) {
   return (
     <div
       className={cn(
@@ -42,10 +42,11 @@ export function Avatar({ name, tint, size = "md", online = false }: AvatarProps)
       )}
     >
       {initials(name)}
-      {online && (
+      {status && (
         <span
           className={cn(
-            "absolute rounded-full bg-online ring-card",
+            "absolute rounded-full ring-card",
+            status === "online" ? "bg-online" : "bg-rail-icon",
             size === "lg" ? "right-0.5 bottom-0.5 size-3 ring-2" : "right-0 bottom-0 size-2.5 ring-2",
           )}
         />

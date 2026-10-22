@@ -530,3 +530,44 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What I'd check first if it broke: An empty chat list with a 401 means the token expired. A message stuck on "sending" means checking the Network tab — did POST /api/chats/{id}/messages return 201 or 200, or no request at all? A message showing twice means the swap-back by client_msg_id isn't matching. Scrolling up that jumps means the scroll-anchor math is wrong. Wrong times mean the browser isn't converting the UTC strings (ending in Z) to local time.
 
 - What still confuses me: Optimistic send shows the message before the server answers, then swaps in the server's copy. I understand the normal swap. What I'm not sure about: if the user switches to another chat while a message is still sending, does the swap happen correctly when the answer arrives, or does the ignore flag drop it and leave the message stuck on the clock?
+
+---
+
+### Task 16: The live connection (WebSocket) with a one-time ticket
+**What was built**
+- `backend/requirements.txt`: `websockets==17.3`. uvicorn finds it by itself and can then speak WebSocket as well as HTTP.
+- `backend/app/live/tickets.py`: the ticket list, kept in memory for now (D19).
+  - `issue()`: makes a random ticket (`secrets.token_urlsafe`) for this user that dies in 30 seconds. It also throws out stale tickets nobody used, so the list doesn't grow forever.
+  - `redeem()`: takes the ticket out first, then checks it, so it works only once. An unknown, used or expired ticket gives None.
+  - A thread lock: the ticket route runs in a worker thread and the live line on the async side, so two of them could touch the list at the same moment.
+  - `_now()`: a clock that only moves forward (`time.monotonic`). Tests swap it to fake the time.
+- `backend/app/live/manager.py`: the switchboard, `lines`: user id â†’ that user's open lines, one per tab.
+  - `connect()`, `disconnect()`: add or remove one line. When a user's last line closes, their row goes.
+  - `send_to_user()`: sends an event down every open tab of one user. Not used yet (T17).
+  - No lock: only the async side touches it, and that side only switches at an `await`.
+- `backend/app/live/routes.py`:
+  - `POST /api/live/ticket`: needs the access token, replies `{ticket, expires_in: 30}` (`TicketOut`).
+  - WebSocket `/api/live?ticket=...` (`live_line()`): redeems the ticket and picks up. A bad, used, expired or missing ticket: hang up with 4401. A good one: put on the switchboard, sent `{"type": "hello", "data": {"user_id": ...}}`, and held open. `finally` takes it off the switchboard however the line ends.
+- `backend/app/main.py`: the live router plugged into `/api`.
+- `backend/tests/test_live.py`: 5 tests. The ticket route needs a login; a ticket works once (and a made-up one is refused); an expired ticket is refused (clock faked 31 seconds ahead); `hello` carries my id; two tabs give 2 lines, closing one leaves 1, closing both takes the user off the switchboard.
+- `frontend/vite.config.ts`: `ws: true`, so the proxy passes WebSocket lines through as well as normal requests.
+- `frontend/src/lib/live.ts`: `useLiveConnection()` gets a ticket, opens `ws://<same site>/api/live?ticket=...`, returns true after `hello` and false when the line closes. It closes the line when the screen goes away. No auto-reconnect yet (T19).
+- `ChatScreen.tsx`: opens the line. This screen only shows while logged in, so log-in opens it and log-out closes it.
+- `ChatColumn.tsx`, `Avatar.tsx`: the dot on my avatar is real now: green when connected, grey when not. `Avatar` takes `status` ("online" or "offline") instead of `online`.
+
+**New ideas**
+- WebSocket: a line that stays open, so the server can speak first. HTTP is letters (ask, answer, done); a WebSocket is a phone call.
+- One-time ticket: a browser can't put an "Authorization" header on a WebSocket, and addresses end up in logs. So the app trades its token for a ticket that works once and dies in 30 seconds, and only the ticket goes in the address.
+- Close codes: a number that says why a line was hung up. Apps can use 4000 to 4999; 4401 means "not logged in". The server must pick up before hanging up, or the browser only sees 1006 ("failed").
+- Switchboard: user id â†’ a set of open lines. A set, because one person can have several tabs.
+- Thread lock vs. async: a normal `def` route runs in a worker thread, an `async def` one on the async side. Data touched from both needs a lock. Data touched only from the async side doesn't, because it only switches at an `await`.
+- `finally`: runs however a block ends (normally, with an error, or cancelled), so a closed tab never stays on the switchboard.
+- Faking the clock: `monkeypatch` swaps a function for one test and puts it back afterwards.
+- In memory for now: a second backend copy wouldn't see these tickets or lines. They move to Redis in T21 (D19).
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: This task added a live WebSocket line between the browser and the server, so the server can push events instead of only answering requests. Because a browser can't put an Authorization header on a WebSocket and URLs end up in logs, the app trades its access token for a one-time ticket (POST /api/live/ticket, 30-second lifetime), then opens ws://.../api/live?ticket=... with only the ticket in the address. redeem() removes the ticket before checking it, so it works exactly once. On the server, a switchboard (manager.py) maps user id to a set of open lines — one per tab — and removes the user when the last tab closes. A finally block takes the line off the switchboard however it ends. Bad, used, expired or missing tickets all close with 4401. The avatar dot on the screen is green when connected, grey when not.
+
+- What I'd check first if it broke: The avatar dot staying grey means checking the Network tab's Socket filter — did /api/live?ticket=... open and receive hello? A 4401 means the ticket expired (30 s) or was already used, so ask for a new one instead of reusing it. A 1006 instead of 4401 usually means the server closed before accepting the WebSocket — FastAPI needs await websocket.accept() even when refusing. A line that opens but never gets hello usually means the route crashed after connect — check the uvicorn log. A closed tab still on the switchboard means the finally block isn't running.
+
+- What still confuses me: Nothing blocking right now. The two-backend question I had is answered: the ticket fails first (a ticket issued on copy A and a line landing on copy B gives 4401 at log-in), and a live send fails silently (Ana's message on copy A never reaches Ben's line on copy B, so he only sees it after a reload). T21 fixes both with Redis for tickets and pub/sub for pushes — the open lines stay in whichever copy accepted them.
