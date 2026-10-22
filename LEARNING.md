@@ -498,3 +498,35 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 
 - What I'd check first if it broke:
 - What still confuses me:
+
+
+---
+
+### Task 15: Real chats on the screen
+**What was built**
+- `frontend/src/features/chat/types.ts`: the shapes the backend sends (`ChatSummary`, `ServerMessage`, `MessagePage`) and the on-screen `Message`, which has a `status` (sending, failed, sent) and no number until the server answers. `fromServer()` turns one into the other. `tintFor()` picks an avatar color from the chat id, so a chat keeps its color. `Tint` and `Tick` moved here from `fake.ts`.
+- `frontend/src/features/chat/time.ts`: server times are UTC; `clockTime()` shows "11:15" in your own time zone, and `listTime()` shows "11:15", "Yesterday" or "15.09" for the chat list.
+- `frontend/src/features/chat/useMessages.ts`: one open chat's messages. Loads the newest 30 and flips them (oldest on top). `loadOlder()` asks for `before=<smallest number on screen>` until `has_more` is false. `send()` makes a fresh `crypto.randomUUID()`, shows the message at once, then swaps in the server's copy (matched by `client_msg_id`). `retry()` sends again with the same id.
+- `frontend/src/features/chat/NewChatBox.tsx`: the small box under "+". Checks the email in the browser, then `POST /api/chats/direct`. Errors: 404 "No Parley account with that email.", 400 "That's you.", backend down "Can't reach Parley."
+- `ChatScreen.tsx`: loads `GET /api/chats`, opens the first chat, adds a new chat to the list, and moves a chat to the top when you send in it. Sending also sets that chat's unread to 0, matching the server's T14 rule (your reply means you've read everything above it). Just opening a chat doesn't clear it yet (that's T18).
+- `ChatColumn.tsx`, `ChatRow.tsx`: the real list, "Loading chats...", "Start your first chat" with a "+" when empty, and real times and previews.
+- `Conversation.tsx`: shows the messages, loads older ones when you scroll near the top, and keeps the same message in view so nothing jumps. `key={chat.id}` gives each chat a fresh Conversation.
+- `MessageBubble.tsx`: a "sending" look (faded, small clock), one grey tick once saved, and "Not sent, tap to retry" on failure.
+- `components/Ticks.tsx`: a new "sending" clock. `SidePanel.tsx`: real name and "2 members"; file tiles stay fake. `IconRail.tsx`, `Avatar.tsx`: no fake data left.
+- `frontend/src/data/fake.ts`: cut down to the side panel's fake file numbers only.
+
+**New ideas**
+- Optimistic send: show the message before the server answers, like WhatsApp's little clock, then swap in the server's copy.
+- Idempotent retry: the retry reuses the same `client_msg_id`, so if the first try actually reached the server, the server returns that copy instead of saving a second one.
+- Cursor paging on screen: ask for messages "below #41", not "page 2", so new messages never shift what you get and nothing shows twice.
+- Scroll anchoring: before older messages go in on top, remember how far you were from the bottom; after, put the scroll back the same distance from the bottom.
+- UTC on the server, local time in the browser: the server stores one clock for everyone; each browser turns it into its own time zone.
+- A `key` resets a component: a new chat id means React throws away the old Conversation and its messages and starts fresh.
+- Old answers are ignored: if you switch chats before a request finishes, the `ignore` flag drops its answer.
+
+**In my words** (Adithya writes this)
+- What this task does, as if explaining to an interviewer: This task connected the chat screen to the real backend. The chat list loads from GET /api/chats with real names, previews, times and unread counts. Opening a chat loads the newest 30 messages from GET /api/chats/{id}/messages, flips them so the oldest is at the top, and loads older ones with before=<smallest number on screen> when you scroll up. Sending is optimistic: the message appears at once with a small clock, then swaps in the server's copy when the answer arrives, matched by client_msg_id. A failed send shows "Not sent, tap to retry", and the retry reuses the same client_msg_id so a message that actually reached the server isn't saved twice. The new-chat box under "+" takes an email and calls POST /api/chats/direct.
+
+- What I'd check first if it broke: An empty chat list with a 401 means the token expired. A message stuck on "sending" means checking the Network tab — did POST /api/chats/{id}/messages return 201 or 200, or no request at all? A message showing twice means the swap-back by client_msg_id isn't matching. Scrolling up that jumps means the scroll-anchor math is wrong. Wrong times mean the browser isn't converting the UTC strings (ending in Z) to local time.
+
+- What still confuses me: Optimistic send shows the message before the server answers, then swaps in the server's copy. I understand the normal swap. What I'm not sure about: if the user switches to another chat while a message is still sending, does the swap happen correctly when the answer arrives, or does the ignore flag drop it and leave the message stuck on the clock?

@@ -8,6 +8,8 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - After a pull request merges, Adithya tells the planning chat. The planner sends back a new PLAN.md (box ticked, "You are here" moved to the next task). Adithya replaces the file, and that goes in the next task's branch.
 - Only the planner (chat Claude) writes task briefs. Claude Code never edits this file. It can only suggest changes.
 - Adithya may write a file himself if he wants. He tells Claude Code, so it knows.
+- Before merging: copy the CI run link from https://github.com/AdithyaChauhan/parley/actions into the report.
+- `/docs` checks with two people: for each person, log in, paste the token into Authorize, confirm with `GET /api/auth/me`, then do their steps.
 - npm audit's "braces" warnings: dev-only and no fixed version yet. Don't raise them again until a fix exists.
 - Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
 - Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
@@ -17,52 +19,49 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 14: Start a chat, send a message, load history 30 at a time (teaching mode)
-- **Branch:** `feature/messages-api`
-- **Goal:** the first real chat routes. Two logged-in people can start a direct chat, send messages (numbered safely by T13's `add_message`), and load older messages page by page. Tested in `/docs` and by pytest. Screens connect in T15.
-- **Mode:** teaching mode. New style (CLAUDE.md updated): show a small example table first, then explain, then ask a "how does X work" question.
+### Task 15: Real chats on the screen (fast mode)
+- **Branch:** `feature/connect-chats`
+- **Goal:** the chat screen uses real data from T14 instead of fake data. You can start a chat by email, see your real chats, send messages, and scroll up for older ones.
+- **Mode:** frontend fast mode. Summaries in the friend style (WhatsApp examples, under 5 lines).
 
-**Carry-over (do first):** restore the full Task 13 section in LEARNING.md (heading, "What was built", "New ideas") around Adithya's own "In my words" text, which stays exactly as he wrote it.
+**What you'll see in the app when it's done:**
+- The chat list shows your real chats, with last message, time and unread count.
+- The "+" button asks for an email and starts a chat.
+- Open a chat: the newest messages show, oldest at the top. Scroll up and older ones load.
+- Type, then Send: your message appears at once with one grey tick, and stays after a reload.
 
-**Example first: how paging works (Claude Code shows this before writing code).** A chat has messages #1 to #70.
-```
- Request                                 Gets               has_more
- GET /messages                     →     #70 ... #41        true
- GET /messages?before=41           →     #40 ... #11        true
- GET /messages?before=11           →     #10 ... #1         false
-```
-Newest first, 30 at a time, using the message numbers (never page numbers or times), so a new message arriving never shifts a page.
+**Steps:**
+1. **Chat list:** load from `GET /api/chats`.
+   - Show the time in your own time zone (server times are UTC): "11:15", "Yesterday", or a date.
+   - No chats yet: show "Start your first chat" with the "+" button.
+2. **New chat ("+" button):** a small box asking for an email, then `POST /api/chats/direct`.
+   - Add the reply to the list (same shape as a list row) and open it.
+   - Errors under the field:
+     - 404: "No Parley account with that email."
+     - 400: "That's you."
+     - Backend down: "Can't reach Parley."
+3. **Conversation:** load `GET /api/chats/{id}/messages`.
+   - Flip it so the oldest is at the top.
+   - When you scroll to the top, load more with `before=<smallest number on screen>`, and keep the scroll position steady.
+   - Stop when `has_more` is false.
+4. **Send:**
+   - Make a fresh `crypto.randomUUID()` for each new message.
+   - Show it right away with a small "sending" look, then swap in the server's copy (matched by `client_msg_id`) with one grey tick.
+   - If it fails, show "Not sent, tap to retry". The retry uses the **same** `client_msg_id`, so it can never double.
+5. **Side panel:** real chat name and member count. The file tiles stay fake (v2).
+6. **Remove the old fake chats and messages** from the main screen. Keep the fake-data file only if something still needs it.
 
-**Routes (all need the access token; all under `/api`):**
-1. `POST /api/chats/direct` with `{ "email": "..." }`: start a direct chat with that person, or return the one that already exists.
-   - Your own email gives 400, and an unknown email gives 404.
-   - Uses a `direct_key` helper (the two user ids sorted, joined with ":") and adds both people to `chat_members`.
-   - If two "start chat" requests collide on the unique `direct_key`, catch the refusal and return the existing chat (same pattern as `add_message`).
-   - Replies 201 when new, 200 when it already existed.
-2. `GET /api/chats`: my chats, newest activity first. Each has:
-   - `id` and `kind`;
-   - a display name (the other person's name for direct chats);
-   - the last message (number, start of the text, time);
-   - `unread` = `last_seq - read_up_to`.
-3. `POST /api/chats/{chat_id}/messages` with `{ "client_msg_id": "<uuid>", "body": "..." }`:
-   - Not a member of the chat (or no such chat) gives 404, which doesn't reveal that the chat exists.
-   - The body is trimmed, 1 to 4000 characters.
-   - It calls `add_message`. A new message gives 201; a repeat of the same `client_msg_id` gives 200 with the first copy.
-4. `GET /api/chats/{chat_id}/messages?before=N&limit=30`: newest first.
-   - `limit` is at most 100.
-   - The reply is `{ "messages": [...], "has_more": true/false }`.
-   - Not a member gives 404.
-
-**Agreed fixes:** `add_message` returns `(message, created)` so the route can pick 201 or 200; sending #N also sets the sender's own `read_up_to` to N (your own messages are never unread); add `app/messages/schemas.py`.
-
-**Code layout (D5):** `app/chats/schemas.py`, `service.py` (`direct_key`, get-or-create direct chat, list my chats), `routes.py`; `app/messages/routes.py` (send and history), using `add_message`. Plug both routers into the `/api` router.
-
-**Tests (always the `client` fixture):** a test for each rule above. Also a two-user story: A starts a chat with B, A sends 3, B sees them in order, B's `unread` is 3, and C (not a member) gets 404.
-
-- **Not in this task:** read and delivered ticks (T17/T18), groups (v2), live updates (T16+), screens (T15).
-- **Done when:** the two-user story works in `/docs` with two accounts, all tests pass locally and in CI (paste the green run link in the report), and Adithya has filled in "In my words".
-
-Questions for Adithya ("how does X work"): how paging with `before` works; how the server stops a non-member reading a chat; how a repeated send is turned into the first copy.
+- **Known and fine for now:**
+  - New messages from the other person show only when you reopen the chat or reload. Live updates come in T17.
+  - The unread count doesn't clear when you open a chat yet. Read bookmarks come in T18.
+- **Test with two people at once:** use a normal window for Ana and a private (incognito) window for Ben. They don't share cookies, so both stay logged in.
+- **Done when:**
+  - Ana starts a chat with Ben by email and sends 3 messages.
+  - Ben reloads and sees them, then replies.
+  - 40+ messages scroll up smoothly, with no doubles and no jumps.
+  - A send with the backend stopped shows "Not sent", and the retry after starting it again sends exactly one copy.
+  - The 15-minute check: leave the app open 15+ minutes, then open another chat without reloading. It just works.
+  - `npm run build` and lint pass, the PR is green (copy the run link from https://github.com/AdithyaChauhan/parley/actions before merging), and Claude Code has written the LEARNING.md section.
 
 ---
 
@@ -88,8 +87,8 @@ Questions for Adithya ("how does X work"): how paging with `before` works; how t
 
 ### Phase 3: Messages over HTTP
 - [x] T13. Chat tables (start the brief with the table map; add the new tables to the conftest TRUNCATE; route tests always use the `client` fixture): chats, chat members, messages (per-chat numbers, message IDs). The brief must explain how two messages sent at the same moment never get the same number (a lock or a counter column)
-- [ ] T14. Send a message and load history, 30 at a time
-- [ ] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path) (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
+- [x] T14. Send a message and load history, 30 at a time
+- [ ] T15. Connect the chat list and conversation screens to real data (check: leave the app open 15+ minutes, then load chats without reloading, to test the 401 → refresh → retry path)
 
 ### Phase 4: Live chat (WebSocket)
 - [ ] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)
@@ -119,7 +118,7 @@ Questions for Adithya ("how does X work"): how paging with `before` works; how t
 - [ ] T30. Optional, only if ready before the AWS free plan ends (around mid-December 2026): short EKS run with Terraform, and record a demo
 
 ### Phase 10: Show it
-- [ ] T31. README with an architecture diagram, screenshots, a demo video and the load-test results
+- [ ] T31. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)

@@ -1,24 +1,37 @@
 import { useState } from "react"
 import { ChevronDown, ChevronLeft, EllipsisVertical, LogOut, Plus, Search, Settings } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
-import { me, type Chat } from "@/data/fake"
 import { cn } from "@/lib/utils"
 import { ChatRow } from "./ChatRow"
+import { NewChatBox } from "./NewChatBox"
+import type { ChatSummary } from "./types"
 
 type ChatColumnProps = {
-  chats: Chat[]
-  openId: string
+  chats: ChatSummary[] | null // null = still loading
+  loadFailed: boolean
+  openId: string | null
   onSelect: (id: string) => void
+  onChatStarted: (chat: ChatSummary) => void
   phoneVisible: boolean
   myName: string
   onLogout: () => void
 }
 
 // The left column: title, my profile, search box and the list of chats
-export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLogout }: ChatColumnProps) {
+export function ChatColumn({
+  chats,
+  loadFailed,
+  openId,
+  onSelect,
+  onChatStarted,
+  phoneVisible,
+  myName,
+  onLogout,
+}: ChatColumnProps) {
   const [search, setSearch] = useState("")
   const [menuOpen, setMenuOpen] = useState(false)
-  const shown = chats.filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
+  const [newChatOpen, setNewChatOpen] = useState(false)
+  const shown = (chats ?? []).filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
 
   return (
     <section
@@ -64,7 +77,7 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLo
             </div>
           )}
         </div>
-        <Avatar name={myName} tint={me.tint} size="lg" online />
+        <Avatar name={myName} tint="teal" size="lg" online />
         <p className="mt-2 text-name">{myName}</p>
         <button
           type="button"
@@ -87,10 +100,12 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLo
 
       <div className="mt-4 mb-2 flex shrink-0 items-center justify-between">
         <h2>Last chats</h2>
-        <div className="flex items-center gap-2">
+        <div className="relative flex items-center gap-2">
           <button
             type="button"
+            onClick={() => setNewChatOpen((open) => !open)}
             aria-label="New chat"
+            aria-expanded={newChatOpen}
             className="flex size-8 items-center justify-center rounded-lg bg-accent text-primary"
           >
             <Plus className="size-4" />
@@ -98,6 +113,15 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLo
           <button type="button" aria-label="More" className="text-muted-foreground">
             <EllipsisVertical className="size-4" />
           </button>
+          {newChatOpen && (
+            <NewChatBox
+              onStarted={(chat) => {
+                setNewChatOpen(false)
+                onChatStarted(chat)
+              }}
+              onClose={() => setNewChatOpen(false)}
+            />
+          )}
         </div>
       </div>
 
@@ -110,7 +134,24 @@ export function ChatColumn({ chats, openId, onSelect, phoneVisible, myName, onLo
             onSelect={() => onSelect(chat.id)}
           />
         ))}
-        {shown.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No chats found</p>}
+        {loadFailed && <p className="px-4 py-6 text-sm text-muted-foreground">Can't reach Parley. Reload to try again.</p>}
+        {!chats && !loadFailed && <p className="px-4 py-6 text-sm text-muted-foreground">Loading chats...</p>}
+        {chats?.length === 0 && (
+          <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+            <p className="text-muted-foreground">Start your first chat</p>
+            <button
+              type="button"
+              onClick={() => setNewChatOpen(true)}
+              aria-label="New chat"
+              className="flex size-10 items-center justify-center rounded-lg bg-accent text-primary"
+            >
+              <Plus className="size-5" />
+            </button>
+          </div>
+        )}
+        {chats && chats.length > 0 && shown.length === 0 && (
+          <p className="px-4 py-6 text-sm text-muted-foreground">No chats found</p>
+        )}
       </div>
     </section>
   )

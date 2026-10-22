@@ -1,52 +1,67 @@
-import { useState } from "react"
-import { chats as fakeChats, type Chat, type Message } from "@/data/fake"
+import { useEffect, useState } from "react"
 import { useAuth, type User } from "@/features/auth/useAuth"
+import { api } from "@/lib/api"
 import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
+import type { ChatSummary, ServerMessage } from "./types"
 
 // On a phone only one column shows at a time
 type PhoneView = "list" | "chat" | "panel"
 
-// "11:24 AM"
-function timeNow() {
-  return new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-}
-
-// The whole main screen. It holds all the state; the columns only show it.
-// The user is real (T12); chats and messages stay fake until T15.
+// The whole main screen. It holds the chat list and which chat is open;
+// the open chat's messages live in Conversation (useMessages).
 export function ChatScreen({ user }: { user: User }) {
   const { logout } = useAuth()
-  const [chats, setChats] = useState<Chat[]>(fakeChats)
-  const [openId, setOpenId] = useState(fakeChats[0].id)
+  const [chats, setChats] = useState<ChatSummary[] | null>(null) // null = still loading
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [openId, setOpenId] = useState<string | null>(null)
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1280)
   const [phoneView, setPhoneView] = useState<PhoneView>("list")
 
-  const openChat = chats.find((chat) => chat.id === openId) ?? chats[0]
+  // My real chats, newest activity first. The first one opens on its own.
+  useEffect(() => {
+    let ignore = false
+    api<ChatSummary[]>("/chats")
+      .then((list) => {
+        if (ignore) return
+        setChats(list)
+        setOpenId((current) => current ?? list[0]?.id ?? null)
+      })
+      .catch(() => !ignore && setLoadFailed(true))
+    return () => {
+      ignore = true
+    }
+  }, [])
 
+  const openChat = chats?.find((chat) => chat.id === openId) ?? null
+
+  // The unread count stays until read bookmarks arrive (T18)
   function selectChat(id: string) {
     setOpenId(id)
     setPhoneView("chat")
-    // Opening a chat clears its unread count
-    setChats((all) => all.map((chat) => (chat.id === id ? { ...chat, unread: 0 } : chat)))
   }
 
-  // Fake send: add my message with one grey tick. No backend yet (T14).
-  function sendMessage(text: string) {
-    const message: Message = {
-      id: crypto.randomUUID(), // the sender's app makes the ID (D9)
-      senderId: "me",
-      text,
-      time: timeNow(),
-      tick: "sent",
-    }
-    setChats((all) =>
-      all.map((chat) =>
-        chat.id === openId ? { ...chat, day: undefined, messages: [...chat.messages, message] } : chat,
-      ),
-    )
+  // From the "+" box. If we already had this chat, just open it.
+  function chatStarted(chat: ChatSummary) {
+    setChats((all) => {
+      const list = all ?? []
+      return list.some((c) => c.id === chat.id) ? list : [chat, ...list]
+    })
+    selectChat(chat.id)
+  }
+
+  // My message was saved: its chat moves to the top with the new preview.
+  // Sending also counts as reading everything above it (T14), so unread goes to 0, like on the server.
+  function messageSent(message: ServerMessage) {
+    setChats((all) => {
+      const chat = all?.find((c) => c.id === message.chat_id)
+      if (!all || !chat) return all
+      const lastMessage = { seq: message.seq, preview: message.body, created_at: message.created_at }
+      return [{ ...chat, last_message: lastMessage, unread: 0 }, ...all.filter((c) => c.id !== chat.id)]
+    })
   }
 
   return (
@@ -55,26 +70,39 @@ export function ChatScreen({ user }: { user: User }) {
       <IconRail myName={user.name} />
       <ChatColumn
         chats={chats}
-        openId={openChat.id}
+        loadFailed={loadFailed}
+        openId={openId}
         onSelect={selectChat}
+        onChatStarted={chatStarted}
         phoneVisible={phoneView === "list"}
         myName={user.name}
         onLogout={logout}
       />
-      <Conversation
-        chat={openChat}
-        onSend={sendMessage}
-        onBack={() => setPhoneView("list")}
-        onOpenPanel={() => setPhoneView("panel")}
-        phoneVisible={phoneView === "chat"}
-      />
-      <SidePanel
-        chat={openChat}
-        open={panelOpen}
-        onToggle={() => setPanelOpen((open) => !open)}
-        onBack={() => setPhoneView("chat")}
-        phoneVisible={phoneView === "panel"}
-      />
+      {openChat ? (
+        <>
+          {/* key: a new chat gets a fresh Conversation, with its own messages */}
+          <Conversation
+            key={openChat.id}
+            chat={openChat}
+            myId={user.id}
+            onSent={messageSent}
+            onBack={() => setPhoneView("list")}
+            onOpenPanel={() => setPhoneView("panel")}
+            phoneVisible={phoneView === "chat"}
+          />
+          <SidePanel
+            chat={openChat}
+            open={panelOpen}
+            onToggle={() => setPanelOpen((open) => !open)}
+            onBack={() => setPhoneView("chat")}
+            phoneVisible={phoneView === "panel"}
+          />
+        </>
+      ) : (
+        <section className="hidden min-w-0 flex-1 items-center justify-center bg-conversation text-muted-foreground md:my-4 md:mr-4 md:flex md:rounded-panel">
+          {chats ? "Pick a chat, or start one with +" : ""}
+        </section>
+      )}
     </div>
   )
 }
