@@ -33,20 +33,24 @@ export function MessageBubble({ message, senderName, senderTint, mine, receipt, 
   const time = clockTime(message.createdAt)
 
   if (mine) {
+    const unsaved = message.status === "sending" || message.status === "waiting"
     return (
       <div className="flex flex-col items-end gap-2">
         <p className="flex items-center gap-1 text-label">
           You, {time}
-          {message.status !== "failed" && <Ticks status={receipt ?? message.status} />}
+          {/* Waiting also gets the clock: it's still on its way */}
+          {message.status !== "failed" && <Ticks status={receipt ?? (unsaved ? "sending" : "sent")} />}
         </p>
         <div
           className={cn(
             "max-w-[80%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word",
-            message.status === "sending" && "opacity-60",
+            unsaved && "opacity-60",
           )}
         >
           {withMentions(message.body)}
         </div>
+        {/* Offline: it goes out by itself when the line is back (D21) */}
+        {message.status === "waiting" && <p className="text-label">Waiting for connection</p>}
         {message.status === "failed" && (
           <button type="button" onClick={onRetry} className="text-label text-destructive hover:underline">
             Not sent, tap to retry

@@ -109,7 +109,17 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 **D20. Live events and ticks**
 - Server to app: `message.new` (a saved message) and `receipt` (someone's bookmark moved).
 - App to server: `delivered`, `read` and `typing`. `delivered` and `read` carry the chat id and the highest number the app has (for `read`: has shown on screen in an open, focused chat). `read` also lifts `delivered`.
-- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`).
+- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`) and goes to everyone in the chat, including the reader's own other tabs. Unread is always (newest number in the chat) − (my read_up_to).
+- Sending counts as reading: when someone's message is saved as #N, the server moves their own bookmarks to #N without a receipt. So a message from someone at #N also means their bookmarks are at least #N, and the app applies this to pushed messages. History and catch-up pages already carry the real bookmarks.
+- Known simplification: in an offline race (both people's waiting messages go out together), this can show "read" a few seconds before the sender actually sees the other message. Accepted.
 - `typing` is passed on to the other members and never saved.
 - Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
 - A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).
+
+**D21. Reconnect and catch-up**
+- The app sends `ping` every 25 s; the server answers `pong`. No `pong` within 10 s means the line is dead.
+- Reconnect waits 1, 2, 4 ... up to 30 s, plus a little random extra, and gets a new ticket each time.
+- Catch-up uses message numbers, never times: the app asks for `after=<highest number it has with no hole below it>`. A pushed message, or my own send's reply, that skips numbers also triggers a catch-up.
+- When the browser reports "offline", the app closes the line itself and reconnects as soon as it reports "online".
+- `ping`/`pong` keep D19's shape: `pong` is `{"type":"pong","data":{}}`, and an event with no `data` counts as `{}`.
+- Messages sent while offline wait in order and are sent one at a time when the line is back, each with its original `client_msg_id` (no doubles, D18).

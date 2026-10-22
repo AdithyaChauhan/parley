@@ -4,9 +4,9 @@ import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
-import { tintFor, type ChatSummary, type Message, type ServerMessage } from "./types"
+import { tintFor, type ChatSummary, type Message } from "./types"
 import { UploadView } from "./UploadView"
-import { useMessages, type UpdateUnsent } from "./useMessages"
+import { useMessages } from "./useMessages"
 
 // Scrolled up less than this counts as "at the bottom": the newest message is on screen
 const NEAR_BOTTOM_PX = 80
@@ -19,9 +19,9 @@ function hiddenBelow(list: HTMLElement) {
 type ConversationProps = {
   chat: ChatSummary
   myId: string
-  unsent: Message[] // my messages in this chat that aren't saved yet
-  updateUnsent: UpdateUnsent
-  onSent: (message: ServerMessage) => void
+  unsent: Message[] // my messages in this chat that aren't saved yet (the outbox)
+  onSend: (body: string) => void // into the outbox
+  onRetry: (message: Message) => void // "Not sent, tap to retry"
   typing: boolean // the other person is typing here
   onRead: () => void // I've seen everything here: the chat list sets unread to 0
   onBack: () => void
@@ -34,16 +34,19 @@ export function Conversation({
   chat,
   myId,
   unsent,
-  updateUnsent,
-  onSent,
+  onSend,
+  onRetry,
   typing,
   onRead,
   onBack,
   onOpenPanel,
   phoneVisible,
 }: ConversationProps) {
-  const { messages, newestSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, send, retry } =
-    useMessages(chat.id, myId, unsent, updateUnsent, onSent)
+  const { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder } = useMessages(
+    chat.id,
+    myId,
+    unsent,
+  )
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
@@ -83,22 +86,23 @@ export function Conversation({
   }, [typing])
 
   // "Read" (D20): this chat is showing, the window is in front, and the newest
-  // message is on screen. Then tell the server the highest number, and clear the unread count.
+  // message is on screen. Then tell the server the highest number with no hole
+  // below it (D21), and clear the unread count.
   function reportIfRead() {
     const list = listRef.current
     // No height: on a phone the chat can be open but hidden behind the chat list
-    if (!list || list.clientHeight === 0 || newestSeq === 0 || !windowInFront()) return
+    if (!list || list.clientHeight === 0 || gapFreeSeq === 0 || !windowInFront()) return
     if (hiddenBelow(list) > NEAR_BOTTOM_PX) return
-    reportRead(chat.id, newestSeq)
+    reportRead(chat.id, gapFreeSeq)
     onRead()
   }
   const checkRead = useEffectEvent(reportIfRead)
 
-  // The messages load, a new one arrives while you watch, or the chat comes into view on a phone.
+  // The messages load, new ones arrive (live or by catch-up) while you watch, or the chat comes into view on a phone.
   // A layout effect, so the unread count clears before the screen is drawn: no flash of a "1".
   useLayoutEffect(() => {
     checkRead()
-  }, [newestSeq, phoneVisible])
+  }, [gapFreeSeq, phoneVisible])
 
   // You come back to the window or tab: what's on screen now counts as read
   useEffect(() => {
@@ -196,7 +200,7 @@ export function Conversation({
             senderTint={tintFor(chat.id)}
             mine={message.senderId === myId}
             receipt={receiptFor(message.seq)}
-            onRetry={() => retry(message)}
+            onRetry={() => onRetry(message)}
           />
         ))}
       </div>
@@ -214,7 +218,7 @@ export function Conversation({
       )}
 
       <div className="shrink-0 px-4 pb-4">
-        <MessageBox onSend={send} onTyping={() => sendTyping(chat.id)} />
+        <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
       </div>
 
       {dragging && <UploadView chatName={chat.name} isGroup={chat.kind !== "direct"} />}
