@@ -22,13 +22,14 @@ type MessageBubbleProps = {
   senderName: string
   senderTint: Tint
   mine: boolean
-  delivered: boolean // on the other person's device: two grey ticks
+  // How far my message got on the other side: on their device (grey ✓✓), read (teal ✓✓), or not yet
+  receipt: "delivered" | "read" | null
   onRetry: () => void
 }
 
 // One message: a "Name, time" label above a bubble.
 // Their bubble: sharp bottom-left corner, next to the avatar. My bubble: sharp bottom-right corner.
-export function MessageBubble({ message, senderName, senderTint, mine, delivered, onRetry }: MessageBubbleProps) {
+export function MessageBubble({ message, senderName, senderTint, mine, receipt, onRetry }: MessageBubbleProps) {
   const time = clockTime(message.createdAt)
 
   if (mine) {
@@ -36,7 +37,7 @@ export function MessageBubble({ message, senderName, senderTint, mine, delivered
       <div className="flex flex-col items-end gap-2">
         <p className="flex items-center gap-1 text-label">
           You, {time}
-          {message.status !== "failed" && <Ticks status={delivered ? "delivered" : message.status} />}
+          {message.status !== "failed" && <Ticks status={receipt ?? message.status} />}
         </p>
         <div
           className={cn(

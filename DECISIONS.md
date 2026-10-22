@@ -66,6 +66,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
 - Adithya makes every commit and writes the message in his own words. Adding a "Co-Authored-By: Claude" line at the end is optional. Adithya decides each time.
+- PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T31).
 - Private repo; goes public once live chat works.
 
 **D14. Who does what**
@@ -107,6 +108,8 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 
 **D20. Live events and ticks**
 - Server to app: `message.new` (a saved message) and `receipt` (someone's bookmark moved).
-- App to server: `delivered` (and `read` in T18), with the chat id and the highest number it has.
+- App to server: `delivered`, `read` and `typing`. `delivered` and `read` carry the chat id and the highest number the app has (for `read`: has shown on screen in an open, focused chat). `read` also lifts `delivered`.
+- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`).
+- `typing` is passed on to the other members and never saved.
 - Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
 - A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).

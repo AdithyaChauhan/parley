@@ -6,11 +6,12 @@ import { tintFor, type ChatSummary } from "./types"
 type ChatRowProps = {
   chat: ChatSummary
   selected: boolean
+  typing: boolean // the other person is typing: "typing..." replaces the preview
   onSelect: () => void
 }
 
 // One row in the chat list: avatar, name, time, last message and unread count
-export function ChatRow({ chat, selected, onSelect }: ChatRowProps) {
+export function ChatRow({ chat, selected, typing, onSelect }: ChatRowProps) {
   const last = chat.last_message
 
   return (
@@ -29,7 +30,9 @@ export function ChatRow({ chat, selected, onSelect }: ChatRowProps) {
           <span className="shrink-0 text-label text-muted-foreground">{last && listTime(last.created_at)}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
-          <span className="truncate text-sm text-muted-foreground">{last ? last.preview : "No messages yet"}</span>
+          <span className="truncate text-sm text-muted-foreground">
+            {typing ? "typing..." : last ? last.preview : "No messages yet"}
+          </span>
           {chat.unread > 0 && (
             <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-medium text-primary-foreground">
               {chat.unread}

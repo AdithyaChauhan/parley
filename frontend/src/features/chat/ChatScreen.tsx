@@ -8,6 +8,7 @@ import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
 import type { ChatSummary, Message, ServerMessage } from "./types"
 import type { UpdateUnsent } from "./useMessages"
+import { useTyping } from "./useTyping"
 
 // On a phone only one column shows at a time
 type PhoneView = "list" | "chat" | "panel"
@@ -34,6 +35,8 @@ export function ChatScreen({ user }: { user: User }) {
   const [unsent, setUnsent] = useState<Record<string, Message[]>>({})
   // This screen only shows while logged in, so the line opens on log-in and closes on log-out.
   const connected = useLiveConnection()
+  // Who is typing in which chat, for the chat list and the open conversation
+  const typing = useTyping()
 
   // My real chats, newest activity first. The first one opens on its own.
   useEffect(() => {
@@ -53,10 +56,19 @@ export function ChatScreen({ user }: { user: User }) {
 
   const openChat = chats?.find((chat) => chat.id === openId) ?? null
 
-  // The unread count stays until read bookmarks arrive (T18)
+  // Opening a chat doesn't clear its unread count by itself: the Conversation
+  // does that (markRead) once the messages are really on screen (D20).
   function selectChat(id: string) {
     setOpenId(id)
     setPhoneView("chat")
+  }
+
+  // The open chat sent "read": nothing in it is unread any more
+  function markRead(chatId: string) {
+    setChats((all) => {
+      if (!all?.some((chat) => chat.id === chatId && chat.unread > 0)) return all // already 0
+      return all.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat))
+    })
   }
 
   // From the "+" box. If we already had this chat, just open it.
@@ -83,10 +95,11 @@ export function ChatScreen({ user }: { user: User }) {
         ? { seq: message.seq, preview: message.body, created_at: message.created_at }
         : chat.last_message
       // Sending counts as reading everything above it (T14), like on the server.
-      // Their new message adds 1, unless the chat is open on screen.
+      // Their new message adds 1. If the chat is open and you're looking, the
+      // Conversation sends "read" and sets it back to 0 before the screen is drawn.
       let unread = chat.unread
       if (message.sender_id === user.id) unread = 0
-      else if (isNew && chat.id !== openId) unread += 1
+      else if (isNew) unread += 1
       return [{ ...chat, last_message: lastMessage, unread }, ...all.filter((c) => c.id !== chat.id)]
     })
   }
@@ -120,6 +133,7 @@ export function ChatScreen({ user }: { user: User }) {
         openId={openId}
         onSelect={selectChat}
         onChatStarted={chatStarted}
+        typing={typing}
         phoneVisible={phoneView === "list"}
         myName={user.name}
         connected={connected}
@@ -135,6 +149,8 @@ export function ChatScreen({ user }: { user: User }) {
             unsent={unsent[openChat.id] ?? []}
             updateUnsent={updateUnsent}
             onSent={messageArrived}
+            typing={openChat.id in typing}
+            onRead={() => markRead(openChat.id)}
             onBack={() => setPhoneView("list")}
             onOpenPanel={() => setPhoneView("panel")}
             phoneVisible={phoneView === "chat"}

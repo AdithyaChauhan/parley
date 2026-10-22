@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState, type DragEvent } from "react"
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
 import { ArrowLeft } from "lucide-react"
+import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
@@ -7,12 +8,22 @@ import { tintFor, type ChatSummary, type Message, type ServerMessage } from "./t
 import { UploadView } from "./UploadView"
 import { useMessages, type UpdateUnsent } from "./useMessages"
 
+// Scrolled up less than this counts as "at the bottom": the newest message is on screen
+const NEAR_BOTTOM_PX = 80
+
+// How much of the list is below what you can see, in pixels
+function hiddenBelow(list: HTMLElement) {
+  return list.scrollHeight - list.scrollTop - list.clientHeight
+}
+
 type ConversationProps = {
   chat: ChatSummary
   myId: string
   unsent: Message[] // my messages in this chat that aren't saved yet
   updateUnsent: UpdateUnsent
   onSent: (message: ServerMessage) => void
+  typing: boolean // the other person is typing here
+  onRead: () => void // I've seen everything here: the chat list sets unread to 0
   onBack: () => void
   onOpenPanel: () => void
   phoneVisible: boolean
@@ -25,21 +36,20 @@ export function Conversation({
   unsent,
   updateUnsent,
   onSent,
+  typing,
+  onRead,
   onBack,
   onOpenPanel,
   phoneVisible,
 }: ConversationProps) {
-  const { messages, theirDelivered, hasMore, loading, failed, loadOlder, send, retry } = useMessages(
-    chat.id,
-    myId,
-    unsent,
-    updateUnsent,
-    onSent,
-  )
+  const { messages, newestSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, send, retry } =
+    useMessages(chat.id, myId, unsent, updateUnsent, onSent)
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
   const fromBottom = useRef<number | null>(null)
+  // You're at the newest message, so the list keeps the bottom in view
+  const atBottom = useRef(true)
 
   const firstKey = messages[0]?.clientMsgId
   const lastKey = messages.at(-1)?.clientMsgId
@@ -59,12 +69,65 @@ export function Conversation({
     if (list) list.scrollTop = list.scrollHeight
   }, [lastKey])
 
-  // Near the top: load the 30 above
+  // On a phone the chat loads while hidden behind the chat list, and a hidden
+  // list can't scroll. So when it comes into view, show the newest.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (list && phoneVisible) list.scrollTop = list.scrollHeight
+  }, [phoneVisible])
+
+  // "is typing..." came or went, so the list got shorter or taller: if you were at the bottom, stay there
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (list && atBottom.current) list.scrollTop = list.scrollHeight
+  }, [typing])
+
+  // "Read" (D20): this chat is showing, the window is in front, and the newest
+  // message is on screen. Then tell the server the highest number, and clear the unread count.
+  function reportIfRead() {
+    const list = listRef.current
+    // No height: on a phone the chat can be open but hidden behind the chat list
+    if (!list || list.clientHeight === 0 || newestSeq === 0 || !windowInFront()) return
+    if (hiddenBelow(list) > NEAR_BOTTOM_PX) return
+    reportRead(chat.id, newestSeq)
+    onRead()
+  }
+  const checkRead = useEffectEvent(reportIfRead)
+
+  // The messages load, a new one arrives while you watch, or the chat comes into view on a phone.
+  // A layout effect, so the unread count clears before the screen is drawn: no flash of a "1".
+  useLayoutEffect(() => {
+    checkRead()
+  }, [newestSeq, phoneVisible])
+
+  // You come back to the window or tab: what's on screen now counts as read
+  useEffect(() => {
+    const check = () => checkRead()
+    window.addEventListener("focus", check)
+    document.addEventListener("visibilitychange", check)
+    return () => {
+      window.removeEventListener("focus", check)
+      document.removeEventListener("visibilitychange", check)
+    }
+  }, [])
+
+  // Scrolling down to the newest message reads it. Near the top: load the 30 above.
   function handleScroll() {
     const list = listRef.current
-    if (!list || !hasMore || list.scrollTop > 80) return
+    if (!list) return
+    atBottom.current = hiddenBelow(list) <= NEAR_BOTTOM_PX
+    reportIfRead()
+    if (!hasMore || list.scrollTop > 80) return
     fromBottom.current = list.scrollHeight - list.scrollTop
     loadOlder()
+  }
+
+  // My #N: teal ✓✓ once they've read up to N, grey ✓✓ once it's on their device (D20)
+  function receiptFor(seq: number | null) {
+    if (seq === null) return null
+    if (seq <= theirRead) return "read"
+    if (seq <= theirDelivered) return "delivered"
+    return null
   }
 
   function handleDragEnter(e: DragEvent) {
@@ -132,15 +195,26 @@ export function Conversation({
             senderName={chat.name} // a direct chat: anyone who isn't me is the other person
             senderTint={tintFor(chat.id)}
             mine={message.senderId === myId}
-            // ✓✓ once the other person's device has everything up to this number (D20)
-            delivered={message.seq !== null && message.seq <= theirDelivered}
+            receipt={receiptFor(message.seq)}
             onRetry={() => retry(message)}
           />
         ))}
       </div>
 
+      {/* The other person is typing (D20). The three dots bounce one after another. */}
+      {typing && (
+        <div className="flex shrink-0 items-center gap-3 px-4 pb-3 md:px-6">
+          <div className="flex size-9 items-center justify-center gap-1 rounded-full bg-card">
+            <span className="size-1 animate-typing rounded-full bg-muted-foreground" />
+            <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:150ms]" />
+            <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:300ms]" />
+          </div>
+          <p className="text-label">{chat.name} is typing...</p>
+        </div>
+      )}
+
       <div className="shrink-0 px-4 pb-4">
-        <MessageBox onSend={send} />
+        <MessageBox onSend={send} onTyping={() => sendTyping(chat.id)} />
       </div>
 
       {dragging && <UploadView chatName={chat.name} isGroup={chat.kind !== "direct"} />}

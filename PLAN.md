@@ -19,55 +19,54 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 17: Messages arrive instantly, and two ticks when delivered (teaching mode, faster)
-- **Branch:** `feature/live-messages`
-- **Goal:** Ana sends and Ben sees it at once, with no reload. Ana's message goes from one grey tick (saved) to two grey ticks (on Ben's device). Teal "read" ticks come in T18.
-- **Mode:** teaching mode, friend style, faster (CLAUDE.md updated): no stops for questions between steps; the questions come at the end, as prompts for "In my words".
-
-**Carry-over:** Adithya fills the two empty bullets in LEARNING.md Task 14 "In my words".
+### Task 18: Read ticks (teal) and "typing..." (teaching mode, faster)
+- **Branch:** `feature/read-typing`
+- **Goal:**
+  - When Ben actually looks at Ana's messages, her ✓✓ turns teal and his unread count clears for good.
+  - While someone types, the other person sees "Ben is typing..."
+- **Mode:** teaching mode, friend style, faster (questions at the end, as "In my words" prompts). Claude Code runs the backend checks itself and shows the results.
+- **Testing two people:** a normal window for Ana plus a private (Incognito) window for Ben.
 
 **Example first (Claude Code shows this before any code):**
 ```
- 10:00:00  Ana presses Send  → POST /messages → saved as #12 (one grey tick ✓)
- 10:00:00  Server → Ben's open line:   {"type":"message.new","data":{chat_id, message #12}}
- 10:00:00  Ben's app shows #12, then → server: {"type":"delivered","data":{chat_id, "seq":12}}
- 10:00:00  Server sets Ben's delivered_up_to = 12 in chat_members
-           Server → Ana's open line:   {"type":"receipt","data":{chat_id, user_id: Ben, delivered_up_to: 12}}
- 10:00:00  Ana's app: every message of hers up to #12 shows two grey ticks ✓✓
-
- If Ben's app is closed: #12 stays ✓ until Ben opens the app, loads the chat, and his app says "delivered 12".
+ Ben's chat list loads           → app says "delivered 12"   (Ana sees grey ✓✓)
+ Ben OPENS the chat, sees #12    → app says "read 12"         (Ana sees teal ✓✓, Ben's unread → 0)
+ Ben types "ok"                  → app says "typing" (at most every 3 s)
+                                   server passes it on, saves nothing
+                                   Ana sees "Ben is typing..." for 5 s, or until Ben's message arrives
 ```
+Rule of thumb: **delivered** means "it's on my device". **Read** means "it was on my screen in an open chat, with the window in front". The chat list never sends read.
 
 **Steps:**
-1. **Switchboard safety:** `send_to_user` sends to each of the user's lines separately. A line that fails is dropped, and the others still get the event.
-2. **Push on send:** after the message is saved (the commit), push `message.new` to every member of the chat, including the sender's other tabs. Skip the push when the send was a repeat (200).
-   - The send route runs in a worker thread, so hand the push to the async side safely (for example `anyio.from_thread.run`).
-   - A push that fails never fails the send. The message is already saved (D9).
-3. **"delivered" from the app:**
-   - The live line now reads `{"type":"delivered","data":{"chat_id","seq"}}` from the app.
-   - The server checks that the person is a member, then moves their `delivered_up_to` up to `seq`. It **only ever goes forward** (never down), and never past the chat's `last_seq`.
-   - Database work from the async line goes through a worker thread (D15 is sync).
-   - If the bookmark moved, push `receipt` to the other members.
-4. **Bookmarks in the API:** the history reply (`GET .../messages`) gains a `members` list: `[{user_id, delivered_up_to, read_up_to}]`. That way the app can draw the right ticks after a reload too.
-5. **Frontend (fast mode):**
-   - **`message.new`:** if that chat is open, add the message (no doubles: match by id or `client_msg_id`). Otherwise update that row's preview and time, and add 1 to unread if it's not your own. Move the chat to the top.
-   - **Telling the server:** after showing messages from a chat (live, or loaded by history or the chat list), send `delivered` with the highest number you have.
-   - **`receipt`:** redraw ticks. My message #N shows ✓✓ when the other person's `delivered_up_to` is N or more.
-   - **"Not sent" messages** stay in their chat when you switch chats and come back (keep them per chat, above the Conversation).
-6. **Tests** (use `with TestClient(app) as client` so HTTP and live lines share one event loop):
-   - Ben's line receives `message.new` when Ana sends.
-   - Ben's `delivered` moves his bookmark and Ana's line gets `receipt`.
-   - `delivered` never moves backwards and never past `last_seq`.
-   - A non-member's `delivered` is ignored.
-   - A dead line doesn't stop Ben's other tab getting the event.
-   - A repeated send (200) pushes nothing.
-- **Not in this task:** read ticks and typing (T18), catching up after a dropped line (T19), Redis (T20/T21).
+1. **Backend: `read`.**
+   - The line accepts `{"type":"read","data":{"chat_id","seq"}}`.
+   - `mark_read` works like `mark_delivered`: members only, forward-only, capped at `last_seq`. It **also lifts `delivered_up_to`** to at least the same number (read implies delivered).
+   - If anything moved, push `receipt` with **both** bookmarks: `{chat_id, user_id, delivered_up_to, read_up_to}`.
+2. **Backend: small fix from T17.** On send, also lift the sender's own `delivered_up_to` (today only their `read_up_to` moves).
+3. **Backend: `typing`.**
+   - The line accepts `{"type":"typing","data":{"chat_id"}}`.
+   - The server checks the person is a member, then pushes `{"type":"typing","data":{chat_id, user_id}}` to the **other** members. Nothing is saved.
+   - Ignore extra typing events from the same line within 1 second.
+4. **Frontend (fast mode):**
+   - **Sending `read`:** when a chat is open, the window is in front (visible and focused) and the newest message is on screen, send `read` with the highest number shown. Send again when new ones arrive while you watch. Set that chat's unread to 0.
+   - **Ticks:** my #N shows teal ✓✓ when the other person's `read_up_to` ≥ N, grey ✓✓ when only `delivered_up_to` ≥ N, and ✓ otherwise.
+   - **Sending `typing`:** while you type, send `typing` at most once every 3 seconds.
+   - **Showing typing:** show "<name> is typing..." with the animated dots in the conversation, and "typing..." in the chat list row. Hide it 5 seconds after the last event, or as soon as that person's message arrives.
+5. **Tests:**
+   - `read` moves both bookmarks, and the receipt carries both.
+   - `read` never goes backwards or past `last_seq`.
+   - A non-member's `read` and `typing` are ignored.
+   - `typing` reaches the other member but not the sender.
+   - A second `typing` inside 1 second is dropped.
+   - The sender's `delivered_up_to` moves on send.
+- **Not in this task:** catching up after a dropped line (T19), online and last-seen (T20), turning read receipts off (v2).
 - **Done when:**
-  - In two windows, Ana sends and Ben sees it instantly. Ana's tick goes ✓ then ✓✓ within a second.
-  - With Ben's window closed, Ana's message stays ✓. Ben opens the app, and Ana's turns ✓✓ without her reloading.
-  - All tests pass, CI is green (run link in the report), and "In my words" is filled in.
+  - Ana sends. With Ben's chat **closed**, it shows grey ✓✓. When Ben opens the chat, it turns teal ✓✓, and Ben's unread clears and stays cleared after a reload.
+  - With Ben's window in the background, the message stays grey until he comes back.
+  - "Ben is typing..." shows while he types and goes away after he stops or sends.
+  - All tests pass, CI is green (run link in the report), and "In my words" is filled in **by Adithya, in his own words**.
 
-"In my words" prompts: how a new message gets from Ana's send to Ben's screen; how Ana's tick knows Ben's device got it; why a bookmark only moves forward.
+"In my words" prompts: how the app decides a message is "read" and not just "delivered"; why typing is never saved in the database; what Ana's app checks to pick ✓, grey ✓✓ or teal ✓✓.
 
 ---
 
@@ -98,7 +97,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 4: Live chat (WebSocket)
 - [x] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)
-- [ ] T17. New messages appear instantly; "got it" replies give two ticks (also keep a "Not sent" message in the chat when you switch chats and come back)
+- [x] T17. New messages appear instantly; "got it" replies give two ticks (also keep a "Not sent" message in the chat when you switch chats and come back)
 - [ ] T18. Typing indicator and read ticks
 - [ ] T19. Reconnect and catch up on missed messages
 
