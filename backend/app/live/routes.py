@@ -12,7 +12,7 @@ from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.service import Bookmarks, mark_delivered, mark_read, member_ids, partner_ids
 from app.db import SessionLocal
-from app.live import manager, tickets
+from app.live import bus, manager, tickets
 from app.presence import service as presence
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -116,13 +116,13 @@ def _presence_news(user_id: uuid.UUID) -> tuple[list[uuid.UUID], datetime | None
 
 async def _push_presence(user_id: uuid.UUID, online: bool) -> None:
     """Tell everyone who shares a chat with this person that they just came
-    online or went offline. Only this copy's switchboard for now (T21)."""
+    online or went offline, on whichever copy their lines are (D23)."""
     partners, seen = await anyio.to_thread.run_sync(_presence_news, user_id)
     event = {
         "type": "presence",
         "data": {"user_id": str(user_id), "online": online, "last_seen": seen.isoformat() if seen else None},
     }
-    await manager.send_to_users(partners, event)
+    await bus.publish_async(partners, event)
 
 
 async def _tab_alive(line: _Line) -> None:
@@ -153,7 +153,7 @@ async def _on_bookmark(line: _Line, event: EventIn) -> None:
                 "read_up_to": moved.read_up_to,
             },
         }
-        await manager.send_to_users(everyone, receipt)
+        await bus.publish_async(everyone, receipt)
 
 
 async def _on_typing(line: _Line, event: EventIn) -> None:
@@ -172,7 +172,7 @@ async def _on_typing(line: _Line, event: EventIn) -> None:
 
     others = await anyio.to_thread.run_sync(_typing_to, line.user_id, typing.chat_id)
     pushed = {"type": "typing", "data": {"chat_id": str(typing.chat_id), "user_id": str(line.user_id)}}
-    await manager.send_to_users(others, pushed)
+    await bus.publish_async(others, pushed)
 
 
 async def _handle(line: _Line, text: str) -> None:
@@ -198,7 +198,7 @@ async def _handle(line: _Line, text: str) -> None:
 # A missing ticket counts as a bad one, so it also gets 4401.
 @router.websocket("")
 async def live_line(websocket: WebSocket, ticket: str = ""):
-    user_id = tickets.redeem(ticket)
+    user_id = await tickets.redeem(ticket)
 
     # Pick up first, even for a bad ticket: if we refuse before picking up,
     # the browser only sees "failed" (1006) and never our 4401.
@@ -210,7 +210,10 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
     manager.connect(user_id, websocket)
     line = _Line(user_id, websocket)
     try:
-        # Online first, then hello: by the time the app hears hello, everyone
+        # Listen on the radio for this person first, and wait until Redis
+        # confirms (D23): then nothing shouted after hello can be missed.
+        await bus.match_lines(user_id)
+        # Online next, then hello: by the time the app hears hello, everyone
         # who needed the "came online" news already has it.
         await _tab_alive(line)
         await websocket.send_json({"type": "hello", "data": {"user_id": str(user_id)}})
@@ -221,12 +224,14 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
     except WebSocketDisconnect:
         pass  # the tab closed: a normal ending
     finally:
-        # Runs however the line ends, so a closed tab never stays on the switchboard
-        # or in the presence list.
+        # Runs however the line ends, so a closed tab never stays on the switchboard,
+        # on the radio or in the presence list.
         manager.disconnect(user_id, websocket)
         # Shielded: even if the line is being cut off (server shutting down),
         # the goodbye gets up to 5 s to finish. Otherwise the person would look
         # online until their time ran out.
         with anyio.move_on_after(5, shield=True):
+            # Stop listening for them if that was their last tab on this copy.
+            await bus.match_lines(user_id)
             if await presence.tab_closed(user_id, line.tab_id):
                 await _push_presence(user_id, online=False)

@@ -129,6 +129,15 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Redis holds fast, temporary facts (online status, and later tickets and pub/sub). PostgreSQL stays the only home for anything that must never be lost.
 - Online status is per tab: `presence:<user>` is a sorted set of tab id → "alive until" (now + 60 s), refreshed by every ping. Online means at least one tab is still alive. A crashed tab goes offline by itself when its time passes.
 - `last_seen:<user>` is updated on every ping and on close.
+- Chat rows carry `other_user_id` (empty for groups), so a `presence` event can update just the matching row.
+- "Online" is recorded and pushed before `hello` is sent, and the goodbye (`tab_closed` plus the offline push) is shielded for up to 5 s so it finishes even during shutdown.
 - Tests use `TEST_REDIS_URL` (database 15), wipe it after each test, and refuse to run on any other.
 - The async client opens and closes with the app (startup/shutdown in `main.py`).
 - A tab whose time runs out pushes nothing; other apps notice at their next 60 s check, so offline can take up to about 2 minutes after a silent crash.
+
+**D23. Several backend copies (Redis pub/sub)**
+- Every push goes through Redis pub/sub: the sender's copy publishes the event on `user:<id>` for each person who should get it, and every copy delivers what it hears to its own open lines.
+- A copy listens on `user:<id>` only while that person has a line on it (subscribe on the first line, unsubscribe on the last).
+- Pub/sub keeps nothing. A lost event is fine because the message is saved first (D9) and the app catches up by number (D21).
+- Tickets live in Redis (`ticket:<t>`, 30 s timer) and are redeemed with `GETDEL`, so any copy can redeem a ticket any copy made, exactly once.
+- Each copy has a `COPY_NAME`, shown in `/api/health`.

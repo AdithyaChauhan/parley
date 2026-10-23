@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     jwt_secret: str
     # Where Redis lives: online status and last seen (D22).
     redis_url: str
+    # Which backend copy this is, when several run at once (D23). Shown in
+    # /api/health, so you can check which copy a window talks to.
+    copy_name: str = "A"
 
 
 settings = Settings()

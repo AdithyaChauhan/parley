@@ -19,66 +19,59 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 20: Online and "last seen", with Redis (teaching mode, friend style)
-- **Branch:** `feature/presence`
+### Task 21: Two backend copies, live messages cross between them (Redis pub/sub) (teaching mode, friend style)
+- **Branch:** `feature/two-copies`
 - **Goal:**
-  - A green dot and "online" when the other person has Parley open.
-  - "last seen today at 11:15" when they don't.
-  - This brings in **Redis**, the tool Phase 5 is built on (D10).
-- **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the backend checks itself and shows the results.
+  - Run **two copies** of the backend at once. Ana talks to copy A, Ben to copy B, and chat, ticks, typing and online status still work instantly.
+  - Tickets move into Redis, so a ticket made by one copy works on the other.
+  - This is the system design highlight of Parley.
+- **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the checks itself and shows the results.
 
 **Example first (Claude Code shows this before any code):**
-
-What Redis is: a whiteboard kept in memory. It's very fast, and each note can have a timer, after which it wipes itself. PostgreSQL is the filing cabinet (safe, permanent). Redis is the whiteboard (fast, temporary). "Online" is a whiteboard kind of fact.
-
 ```
- Redis key  presence:<Ben>   (a "sorted set": each open tab, with an "alive until" time)
-   tab        alive until
-   tab-a1     10:01:25        ← every ping (25 s) pushes this 60 s ahead
-   tab-b7     10:01:10
+ Today (one copy): Ana sends → copy A saves #30 → copy A's switchboard → Ben's line. Works.
 
- Ben is online  =  at least one tab whose "alive until" is still in the future.
- Ben closes tab-a1          → its row is removed. tab-b7 still alive → still online.
- Ben's laptop crashes       → no goodbye at all, but tab-b7's time passes → offline by itself.
- Redis key  last_seen:<Ben> = 10:00:25   (updated on every ping, so it's right even after a crash)
+ Two copies, no pub/sub:
+   Ana ── copy A        Ben ── copy B
+   Ana sends → copy A saves #30 → copy A's switchboard: "Ben? Not on my lines." → Ben sees nothing. ✗
+
+ Two copies WITH Redis pub/sub (a radio: shout on a channel, whoever listens hears it):
+   copy A: "Ben is on my lines"  → listens on channel user:<Ben>   (only while Ben has a line here)
+   copy B: "Ana is on my lines"  → listens on channel user:<Ana>
+   Ana sends → copy A saves #30 (PostgreSQL first, D9)
+             → copy A shouts message.new on user:<Ben> and user:<Ana>
+             → copy B hears user:<Ben> → Ben's line ✓      copy A hears user:<Ana> → Ana's other tabs ✓
 ```
-Why per tab, not one "online" flag: one flag breaks with two tabs (closing one would say offline) and with a crash (nobody says goodbye). The timer fixes both, and it keeps working with two backend copies in T21, because Redis is shared.
+Pub/sub doesn't remember anything. If no copy is listening, the shout is lost. That's fine, because the message is already saved and T19's catch-up fetches anything missed (D20, D21).
 
 **Steps:**
-1. **Redis in Docker Compose:**
-   - A `redis` service using the official image, pinned to a current stable version (checked in its docs), with a health check (`redis-cli ping`).
-   - `REDIS_URL` and `TEST_REDIS_URL` (`redis://localhost:6379/15`) go in `.env` and `.env.example`. Tests refuse to run unless `TEST_REDIS_URL` points at database 15, like the `_test` rule.
-   - The async Redis client opens when the app starts and closes when it stops (in `main.py`), so each test's event loop gets a working client.
-   - CI gets a Redis service too.
-2. **Package:** `redis` (redis-py), pinned (D22). It has a normal client for normal routes and an async one for the live line.
-3. **`app/presence/service.py`** (D5 folder). Each change returns whether the person just came online or just went offline.
-   - `tab_alive(user_id, tab_id)`: add or refresh the tab's "alive until" (now + 60 s), keep the key's own timer at 60 s, and update `last_seen`.
-   - `tab_closed(user_id, tab_id)`: remove the tab.
-   - `is_online(user_id)` and `last_seen(user_id)`: clear out dead tabs first, then answer.
-4. **Live line:**
-   - On hello, call `tab_alive`. On every `ping`, call `tab_alive` again. When the line ends, call `tab_closed`.
-   - When someone comes online or goes offline, push `presence` `{user_id, online, last_seen}` to everyone who shares a chat with them (through this copy's switchboard; T21 adds the other copies).
-5. **API:** the chat list rows (and `POST /api/chats/direct`) gain `online` and `last_seen` for the other person in direct chats.
-6. **App (fast mode):**
-   - Green dot on the avatar in chat rows and the conversation header.
-   - The header says "online", or "last seen today at 11:15" / "yesterday at 09:02" / "15.09 at 18:40", or "last seen recently" if unknown.
-   - `presence` events update it live.
-   - The open chat re-checks every 60 s, which catches crashed tabs that never said goodbye.
-7. **Tests** (real Redis, wiped after each test):
-   - One tab: online; closed: offline.
-   - Two tabs, close one: still online.
-   - A tab that stops pinging goes offline after its time passes (fake the clock).
-   - `last_seen` is set.
-   - Coming online and going offline push `presence` to a chat partner, but not to a stranger.
-   - The chat list shows `online` / `last_seen`.
-- **Not in this task:** two backend copies and pub/sub (T21), hiding your last seen (v2), group presence (v2).
+1. **Tickets in Redis:**
+   - `issue` stores `ticket:<t>` with the user id and a 30 s Redis timer.
+   - `redeem` uses `GETDEL`, which reads and deletes in one go, so a ticket still works only once, even if two copies try it at the same moment.
+2. **Which copy am I:** a `COPY_NAME` setting (default "A"), shown in `GET /api/health`, so you can check which copy a window talks to.
+3. **`app/live/bus.py`, the radio:**
+   - `publish(user_ids, event)` shouts the event on `user:<id>` for each person. There's a normal version for normal routes (no more `anyio.from_thread` hand-off) and an async one for the live line.
+   - `listen()` runs in the background for the copy's whole life (started in `main.py`'s lifespan). It hands each event it hears to the local switchboard. If Redis drops, it waits a moment and starts listening again.
+4. **Switchboard:**
+   - On a user's first line on this copy, subscribe to `user:<id>`. When their last line here closes, unsubscribe.
+   - Every push now goes through `bus.publish`, never straight to the switchboard: `message.new`, `receipt`, `typing` and `presence`.
+5. **Running two copies locally:**
+   - Copy A: `uvicorn app.main:app --port 8000` with `COPY_NAME=A`. Copy B: `--port 8001` with `COPY_NAME=B`.
+   - The Vite proxy target comes from a setting (default 8000). A second Vite runs on port 5174 pointing at 8001.
+   - Ana uses http://localhost:5173 (copy A). Ben uses http://localhost:5174 in Incognito (copy B).
+6. **Tests:**
+   - A ticket from Redis works once, a second redeem gets nothing, and the 30 s timer is set.
+   - A push still reaches the other person's line after going through Redis and back.
+   - Unsubscribe happens when the last line closes.
+   - The listener keeps going after a bad event.
+   - All 63 existing tests still pass.
+- **Not in this task:** automatic switch-over when a copy dies (that needs Nginx in front, T26), spam limits (T22).
 - **Done when:**
-  - Ana and Ben (normal window plus Incognito): Ben sees Ana "online". Ana closes her window: Ben sees "last seen today at ..." within a second, with no reload.
-  - Ana opens two tabs and closes one: still online.
-  - A tab that goes silent (in Ana's tab: DevTools → Sources → press F8 to pause it; her pings stop but the line stays open): within about 2 minutes Ben sees her offline (60 s alive + up to 60 s until Ben's check).
+  - Ana on 5173 (copy A) and Ben on 5174 (copy B): `/api/health` shows A and B. Messages, ✓ → ✓✓ → teal, typing and online status all work instantly between them.
+  - Stop copy A: Ana's dot goes grey, and Ben keeps working. Start copy A again: Ana reconnects and catches up, with nothing lost and no doubles.
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: what Redis is and why "online" lives there and not in PostgreSQL; how the "alive until" times handle two tabs and a crash; how Ben's screen learns that Ana went offline.
+"In my words" prompts: why two copies broke live chat before pub/sub; how a message from copy A reaches Ben's line on copy B; why losing a pub/sub shout is OK in Parley.
 
 ---
 
@@ -114,7 +107,7 @@ Why per tab, not one "online" flag: one flag breaks with two tabs (closing one w
 - [x] T19. Reconnect and catch up on missed messages
 
 ### Phase 5: Redis
-- [ ] T20. Online and last seen, with automatic expiry
+- [x] T20. Online and last seen, with automatic expiry
 - [ ] T21. Two backend copies; live messages cross between them (pub/sub)
 - [ ] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
 
@@ -124,7 +117,7 @@ Why per tab, not one "online" flag: one flag breaks with two tabs (closing one w
 
 ### Phase 7: Run it like production
 - [ ] T25. Dockerfiles and Docker Compose for every part
-- [ ] T26. Nginx in front of several backend copies (turn on `secure=True` for the refresh cookie once HTTPS is on)
+- [ ] T26. Nginx in front of several backend copies (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it
 - [ ] T26b. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.
