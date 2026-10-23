@@ -903,3 +903,68 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 
 **In my words** (Adithya writes this)
 - Why the read bookmark gets an HTTP door but typing doesn't: "Read" is permanent state. If the server doesn't know Ben read a message, his unread badges will pop back up, and Ana's ticks will stay grey instead of turning teal. It must be saved, so it gets an HTTP fallback. "Typing" is just a temporary animation that only matters for 3 seconds. If the live line is down, and typing takes 60 seconds to reach the server via HTTP, the person has already finished typing and sent the message. It's pointless, so we don't bother.
+
+### Task 23: Notification worker with retries and a failed-jobs queue (RabbitMQ)
+**What was built**
+- `docker-compose.yml`: RabbitMQ (`rabbitmq:4.3.7-management`, D25). Port 5672 for programs, 15672 for the web page. Its user and password come from `.env` (the built-in `guest` only works inside the container). A named volume and a fixed hostname, so parked jobs survive `docker compose down`. The health check is `check_port_connectivity`: "healthy" means the port really takes connections, not just that RabbitMQ is booting.
+- `.env.example`: `RABBITMQ_USER`, `RABBITMQ_PASSWORD`, `RABBITMQ_URL` (vhost `/`, written `%2F`) and `TEST_RABBITMQ_URL` (vhost `parley_test`), plus the two one-time commands that make the test vhost.
+- `backend/requirements.txt`: `pika==1.4.4`.
+- `backend/app/config.py`: `rabbitmq_url`, `notify_wait_ms` (5 s), `notify_retry_ms` (10 s, 1 min, 5 min) and `notify_fake_fail_times` (0). In milliseconds, so tests can use a few hundred.
+- `backend/app/notify/queues.py` (new), every box in one place:
+  - `NOTIFY` (the worker reads only this), `WAIT`, `RETRIES` (`.10s`, `.1m`, `.5m`), `FAILED`.
+  - `declare(channel)`: makes every box, durable. The wait and retry boxes each get a timer (`x-message-ttl`) and a dead-letter route back into `notify`. Declaring a box that's already there with the same settings does nothing; a different timer is refused (error 406).
+  - `connect(url)`: one try, at most 1 s to reach RabbitMQ and 2 s to log in.
+  - `send_job(channel, box, body, headers)`: puts one persistent job in a box. With confirms on, it waits for RabbitMQ's "got it". The publisher, the worker and replay all use it.
+- `backend/app/notify/publisher.py` (new), the backend's side:
+  - `publish(message, recipient_ids)`: one job per recipient into `notify.wait`, `{message_id, chat_id, seq, recipient_id}`, header `attempt: 1`. Never the text (D12). Never raises.
+  - One shared connection behind a lock, because pika isn't thread-safe and sync routes run on many threads. A send waits at most 1 s for the lock, or that notification is lost.
+  - A connection that went stale (RabbitMQ restarted, or it closed an idle one) gets one fresh try.
+  - The boxes are declared on every new connection, so the backend starts and chats fine with RabbitMQ down, and the boxes appear as soon as it's back.
+  - After a failed connect, `_skip_until` skips publishing for 10 s and logs "RabbitMQ is down" once, so an outage adds 1 s to one send, not to every send. Only "can't connect" counts as down; any other error (like a 406) is logged with its real reason.
+  - `reset()`: forgets the connection and the skip, for tests.
+- `backend/app/messages/routes.py`: after a new message is saved and pushed, `notify.publish()` for every member except the sender. A resend (200) publishes nothing.
+- `backend/app/notify/notifier.py` (new):
+  - `LogNotifier.send(user_id, user_name, title)`: logs "notify Ben: New message from Ana". T24 swaps in real browser push with the same `send()`.
+  - `fake_fail(attempt)`: with `NOTIFY_FAKE_FAIL_TIMES=N`, tries 1 to N fail on purpose (`NotifyFailed`).
+- `backend/app/notify/worker.py` (new), run as `python -m app.notify.worker`:
+  - `parse(body)`: reads a job. Bad JSON, a missing field or a bad id raises `BrokenJob`.
+  - `handle(job, attempt)`: one query for the recipient's `read_up_to` and name, one for the sender's name. Message or member gone: skip. `read_up_to >= seq`: "skip: already read". Redis `notified:<message>:<user>` there: "skip: already notified". Otherwise `fake_fail`, then the notifier, then the Redis note with a 24 h timer. If the note can't be written after a send, it only logs a warning: retrying would notify again.
+  - `on_job(...)`: a broken job goes straight to `notify.failed`. Any other failure (the notifier, PostgreSQL, Redis) goes to the next retry box with `attempt + 1`, or to `notify.failed` with `last_error` after try 4. The ack always comes last, after RabbitMQ confirmed the new copy.
+  - `open_channel()` (confirms, declare, prefetch 10), `consume(channel, should_stop)` (wakes up every second to check whether to stop; tests use it too), `serve()` (reconnects with 1, 2, 4 ... 30 s waits), `main()` (Ctrl+C stops it; closing the connection hands any unacked job back). pika's own tracebacks are silenced; the worker logs one line per event instead.
+- `backend/app/notify/replay.py` (new), run as `python -m app.notify.replay`: counts what's parked right now and moves exactly that many from `notify.failed` to `notify` with attempt 1, acking each one only after the new copy is confirmed. The count stops a broken job (which parks itself again at once) from going round and round.
+- `backend/tests/conftest.py`: reads `TEST_RABBITMQ_URL` and refuses any vhost but `parley_test`. The app gets a 1 s wait, retries of 0.1, 0.2 and 0.3 s, and fake fails forced to 0. Each run deletes and remakes the test boxes (so changed timers never hit a 406). After each test every box is emptied and the publisher reset. A new `rabbit` fixture gives a channel with confirms on.
+- Tests (98 in all):
+  - `test_notify_publish.py` (new): a send puts one job for Ben (none for Ana, none for a resend) in `notify.wait`, with no text. RabbitMQ down: the send gives 201 and is saved. Two quick sends while down: only the first tries to connect, and the warning is logged once.
+  - `test_notify_worker.py` (new): sent and noted in Redis; skipped when Ben read it through the HTTP door; a job that runs twice notifies once; fake fails at 2: sent on try 3; at 10: parked after try 4 with `last_error`; broken jobs (not JSON, missing fields) parked at once with no retry; replay moves a parked job back and it's sent; a worker stopped mid-job (before its ack): a new worker gets the same job and sends it.
+- `.github/workflows/ci.yml`: a RabbitMQ service that makes `parley_test` at start (`RABBITMQ_DEFAULT_VHOST`), and the two URLs.
+- Checked by hand:
+  - Ben's tab closed: about 5 s after Ana's send, the worker logs "notify Ben Ortiz: New message from Ana Lima". Ben's window focused within 5 s: "skip: already read" (a split-screen window that isn't focused doesn't count as read, D20).
+  - Worker stopped, 3 messages sent, worker started: all 3 sent.
+  - `NOTIFY_FAKE_FAIL_TIMES=2`: try 1 failed at 00:06:47, try 2 failed at 00:06:57, try 3 sent at 00:07:57.
+  - `NOTIFY_FAKE_FAIL_TIMES=10`: tries at 00:08:35, 00:08:45, 00:09:45 and 00:14:45, then parked in `notify.failed` with `attempt: 4` and `last_error`. With a normal worker, replay printed "Moved 1 jobs" and the job was sent as try 1.
+  - RabbitMQ stopped, 3 quick sends: all 201 and saved; the first took 1.15 s (one connect try), the next two 0.05 s (skipping). Started again: the next send put its job in `notify.wait` with no warning.
+  - RabbitMQ restarted under a running worker: "Lost RabbitMQ", then 1, 2, 4, 8 s, then "Worker ready". Under the backend: the next send went through on a fresh connection, and a persistent job survived the restart.
+
+**New ideas**
+- Message queue: a post office between programs. The backend drops a job and moves on; the worker picks it up when it can. If the worker is off, jobs wait instead of being lost.
+- Queue (box), durable, persistent: a durable box survives a RabbitMQ restart; a persistent job inside it is written to disk, so it survives too. You need both.
+- Ack: the worker's "done, delete it". Until then the job is only lent out (Unacked). If the worker's connection dies, RabbitMQ puts it back.
+- At least once: acking last means a job is never lost, but can run twice (a crash after sending, before the ack). The Redis note `notified:<message>:<user>` makes the second run do nothing. That's called making the job idempotent.
+- Publisher confirms: RabbitMQ's "got it" for each job the backend sends. Without it, a job could vanish on the way and nobody would know.
+- Prefetch: how many unacked jobs RabbitMQ lends the worker at once (10), so it isn't flooded and several workers could share the work.
+- TTL and dead-lettering: a box's timer (`x-message-ttl`). When it runs out, the job is "dead-lettered": sent on to another box (`notify`). That's how a job waits 10 s, 1 min or 5 min with no code sleeping.
+- One timer per box, not per job: RabbitMQ only checks the job at the front of a box. Mixing 5 min and 10 s jobs in one box would make the 10 s ones wait behind the 5 min one.
+- Default exchange: the built-in exchange `""` delivers a job straight to the box with the same name as its routing key.
+- Vhost: a separate set of boxes inside one RabbitMQ, like Redis's numbered databases. Dev uses `/`, tests use `parley_test`.
+- Parked jobs (a dead-letter queue) and replay: jobs that kept failing wait in `notify.failed` with their last error, instead of being retried forever or lost. Once the cause is fixed, replay sends them all back.
+- Broken vs failing: a job with bad JSON will never work, so retrying only wastes time; a job whose notifier is down may work later, so it's retried.
+- A small circuit breaker: after RabbitMQ refuses once, stop trying for 10 s. Fast failure for everyone instead of a 1 s wait on every send.
+- Thread safety: pika's connection can only be used by one thread at a time; a lock makes the others take turns.
+- The outbox pattern (not built yet, D25): today a job is lost if RabbitMQ is down at the moment of a send. Writing the job into PostgreSQL in the same transaction as the message, and sending it from there later, would close that gap.
+
+**In my words** (Adithya writes this)
+- How a job waits 10 s, 1 min or 5 min with no sleeping code: We use RabbitMQ's built-in timers (TTL and dead-lettering) instead of writing code that sleeps. We create separate holding boxes (queues) for each wait time. When a job fails, we drop it into the box for its next wait. The job sits there doing nothing until the timer on that box hits zero. At that exact moment, RabbitMQ automatically picks the job up and routes it back to the main worker queue. We use separate boxes for each time so a job waiting 5 minutes doesn't block a job waiting 10 seconds.
+
+- Why the worker acks only at the end, why that means a job can run twice, and how "already notified" stops a double: If the worker told RabbitMQ it was "done" before sending the notification, a crash would mean the notification is lost forever. By acking only after the notification is sent, RabbitMQ ensures the job is never lost—if the worker crashes, RabbitMQ just gives the job to someone else. But this means if it crashes right after sending but before acking, the job runs twice. To stop a double notification, the worker saves a "notified" note in Redis. If it runs again, it sees the note and skips the send.
+
+- What `notify.failed` and replay are for, and why a broken job skips the retries: `notify.failed` is a parking lot for jobs that failed all their retries. Instead of losing them or retrying forever, we save them there with their final error. Replay is a command we can run later to take all those parked jobs and put them back in the queue once we fix the bug. However, if a job has bad data (like a missing field or invalid JSON), it is physically impossible to ever succeed. So we skip the wait and send it straight to the parking lot to save time.

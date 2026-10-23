@@ -21,5 +21,17 @@ class Settings(BaseSettings):
     # /api/health, so you can check which copy a window talks to.
     copy_name: str = "A"
 
+    # Where RabbitMQ lives: notification jobs (D25).
+    rabbitmq_url: str
+    # How long a job waits before the worker looks at it, so a message read
+    # live is skipped (D25). In milliseconds, so tests can use a few hundred.
+    notify_wait_ms: int = 5_000
+    # How long to wait before try 2, 3 and 4: 10 s, 1 min, 5 min. Each one is
+    # a queue's timer, so changing one means deleting that queue first (D25).
+    notify_retry_ms: list[int] = [10_000, 60_000, 300_000]
+    # For demos and tests: every job fails its first N tries on purpose.
+    # 2 shows retries working; 10 sends a job all the way to notify.failed.
+    notify_fake_fail_times: int = 0
+
 
 settings = Settings()

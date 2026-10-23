@@ -44,6 +44,21 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4.3.7-management
+        env:
+          RABBITMQ_DEFAULT_USER: parley
+          RABBITMQ_DEFAULT_PASS: ci-only-password
+          # Made at first start, so the tests' parley_test vhost exists (D25).
+          RABBITMQ_DEFAULT_VHOST: parley_test
+        ports:
+          - 5672:5672
+        # Healthy only once the port takes connections, not just when it's booting.
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 20
 
     # The runner has no .env. These values are fake and only work inside
     # this throwaway run, so they are safe to commit.
@@ -54,6 +69,9 @@ jobs:
       # Database 15: the tests refuse any other number (D22).
       REDIS_URL: redis://localhost:6379/15
       TEST_REDIS_URL: redis://localhost:6379/15
+      # The parley_test vhost: the tests refuse any other (D25).
+      RABBITMQ_URL: amqp://parley:ci-only-password@localhost:5672/parley_test
+      TEST_RABBITMQ_URL: amqp://parley:ci-only-password@localhost:5672/parley_test
 
     defaults:
       run:
