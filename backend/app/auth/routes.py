@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.auth.security import (
     verify_password,
 )
 from app.db import get_db
+from app.limits import service as limits
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,6 +31,12 @@ _DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
 
 
 # --- Helpers ---
+
+
+def _ip(request: Request) -> str:
+    """Who is asking, for the per-IP limits (D24). Behind Nginx (T26) this is
+    Nginx's own address, unless uvicorn runs with --proxy-headers trusting it."""
+    return request.client.host if request.client else "unknown"
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -78,7 +85,9 @@ def _find_session(
 
 
 @router.post("/signup", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
-def signup(body: SignupRequest, response: Response, db: Session = Depends(get_db)):
+def signup(body: SignupRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    limits.enforce(limits.SIGNUP_IP, _ip(request))
+
     user = User(name=body.name, email=body.email, password_hash=hash_password(body.password))
     db.add(user)
     try:
@@ -92,13 +101,21 @@ def signup(body: SignupRequest, response: Response, db: Session = Depends(get_db
 
 
 @router.post("/login", response_model=TokenOut)
-def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    # Both counted before the password is checked (D24): a locked email is
+    # refused even with the right password, and never costs a slow hash check.
+    limits.enforce(limits.LOGIN_IP, _ip(request))
+    limits.enforce(limits.LOGIN_EMAIL, body.email)
+
     user = db.scalar(select(User).where(User.email == body.email))
 
     password_hash = user.password_hash if user else _DUMMY_PASSWORD_HASH
     if not verify_password(body.password, password_hash) or user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password")
 
+    # A good log-in: this email's count starts again from 0, so only
+    # failures since the last good log-in count.
+    limits.clear(limits.key(limits.LOGIN_EMAIL, body.email))
     return _start_session(db, user, response)
 
 

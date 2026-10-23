@@ -20,11 +20,14 @@ export function setOnLoggedOut(callback: () => void) {
 export class ApiError extends Error {
   status: number
   body: unknown
+  // For a 429 "too many" (D24): seconds to wait before trying again, from the Retry-After header
+  retryAfter: number | null
 
-  constructor(status: number, body: unknown) {
+  constructor(status: number, body: unknown, retryAfter: number | null = null) {
     super(`Request failed with status ${status}`)
     this.status = status
     this.body = body
+    this.retryAfter = retryAfter
   }
 }
 
@@ -57,6 +60,12 @@ async function readBody(response: Response): Promise<unknown> {
   } catch {
     return null // empty or not JSON
   }
+}
+
+// Retry-After in whole seconds, or null if the reply has none
+function readRetryAfter(response: Response): number | null {
+  const seconds = Number(response.headers.get("Retry-After"))
+  return seconds > 0 ? seconds : null
 }
 
 // --- Refresh: swap the refresh cookie for a new access token ---
@@ -116,6 +125,6 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
     }
   }
 
-  if (!response.ok) throw new ApiError(response.status, await readBody(response))
+  if (!response.ok) throw new ApiError(response.status, await readBody(response), readRetryAfter(response))
   return (response.status === 204 ? null : await response.json()) as T
 }

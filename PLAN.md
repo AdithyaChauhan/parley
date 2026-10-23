@@ -19,59 +19,71 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 21: Two backend copies, live messages cross between them (Redis pub/sub) (teaching mode, friend style)
-- **Branch:** `feature/two-copies`
+### Task 22: Spam limits, and "Parley keeps working when Redis is down" (teaching mode, friend style)
+- **Branch:** `feature/limits`
 - **Goal:**
-  - Run **two copies** of the backend at once. Ana talks to copy A, Ben to copy B, and chat, ticks, typing and online status still work instantly.
-  - Tickets move into Redis, so a ticket made by one copy works on the other.
-  - This is the system design highlight of Parley.
+  1. Stop abuse: too many messages, password guessing, and fishing for emails. A server answers "slow down" (429) instead of doing the work.
+  2. Decide and build what happens when Redis is down. Chatting must keep working: only the live extras pause.
 - **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the checks itself and shows the results.
 
 **Example first (Claude Code shows this before any code):**
 ```
- Today (one copy): Ana sends → copy A saves #30 → copy A's switchboard → Ben's line. Works.
+ Redis key  limit:send:<Ana>   (a sorted set of send times, like presence in D22)
+   10:00:00.1, 10:00:00.4, ... 20 sends in the last 10 s
+ 21st send at 10:00:06 → server: 429 "Too many messages", Retry-After: 4
+                         (the oldest of the 20 leaves the 10 s window at 10:00:10)
+ Each send: drop times older than 10 s → count → if under 20, add this one. All in one Redis transaction.
 
- Two copies, no pub/sub:
-   Ana ── copy A        Ben ── copy B
-   Ana sends → copy A saves #30 → copy A's switchboard: "Ben? Not on my lines." → Ben sees nothing. ✗
-
- Two copies WITH Redis pub/sub (a radio: shout on a channel, whoever listens hears it):
-   copy A: "Ben is on my lines"  → listens on channel user:<Ben>   (only while Ben has a line here)
-   copy B: "Ana is on my lines"  → listens on channel user:<Ana>
-   Ana sends → copy A saves #30 (PostgreSQL first, D9)
-             → copy A shouts message.new on user:<Ben> and user:<Ana>
-             → copy B hears user:<Ben> → Ben's line ✓      copy A hears user:<Ana> → Ana's other tabs ✓
+ Redis down:
+   Ana sends        → saved in PostgreSQL as usual (201). The live push is lost, and catch-up fixes it later (D21).
+   Chat list        → works, online shows "last seen recently" (unknown)
+   Live line ticket → 503 "Live updates unavailable", and the app keeps retrying with its backoff (D21)
+   Limits           → let requests through, and log it (better a little spam than no chat at all)
 ```
-Pub/sub doesn't remember anything. If no copy is listening, the shout is lost. That's fine, because the message is already saved and T19's catch-up fetches anything missed (D20, D21).
+
+**The limits (D24):**
+
+| What | Limit | Counted per |
+|---|---|---|
+| Send a message | 20 per 10 seconds | user |
+| Log in (wrong password) | 5 failures per 15 minutes | email |
+| Log in (any attempt) | 30 per 15 minutes | IP address |
+| Sign up | 5 per hour | IP address |
+| Start a chat by email | 20 per minute | user |
+| Get a live ticket | 10 per minute | user |
 
 **Steps:**
-1. **Tickets in Redis:**
-   - `issue` stores `ticket:<t>` with the user id and a 30 s Redis timer.
-   - `redeem` uses `GETDEL`, which reads and deletes in one go, so a ticket still works only once, even if two copies try it at the same moment.
-2. **Which copy am I:** a `COPY_NAME` setting (default "A"), shown in `GET /api/health`, so you can check which copy a window talks to.
-3. **`app/live/bus.py`, the radio:**
-   - `publish(user_ids, event)` shouts the event on `user:<id>` for each person. There's a normal version for normal routes (no more `anyio.from_thread` hand-off) and an async one for the live line.
-   - `listen()` runs in the background for the copy's whole life (started in `main.py`'s lifespan). It hands each event it hears to the local switchboard. If Redis drops, it waits a moment and starts listening again.
-4. **Switchboard:**
-   - On a user's first line on this copy, subscribe to `user:<id>`. When their last line here closes, unsubscribe.
-   - Every push now goes through `bus.publish`, never straight to the switchboard: `message.new`, `receipt`, `typing` and `presence`.
-5. **Running two copies locally:**
-   - Copy A: `uvicorn app.main:app --port 8000` with `COPY_NAME=A`. Copy B: `--port 8001` with `COPY_NAME=B`.
-   - The Vite proxy target comes from a setting (default 8000). A second Vite runs on port 5174 pointing at 8001.
-   - Ana uses http://localhost:5173 (copy A). Ben uses http://localhost:5174 in Incognito (copy B).
-6. **Tests:**
-   - A ticket from Redis works once, a second redeem gets nothing, and the 30 s timer is set.
-   - A push still reaches the other person's line after going through Redis and back.
-   - Unsubscribe happens when the last line closes.
-   - The listener keeps going after a bad event.
-   - All 63 existing tests still pass.
-- **Not in this task:** automatic switch-over when a copy dies (that needs Nginx in front, T26), spam limits (T22).
+1. **`app/limits/service.py`:** `hit(key, limit, window_seconds)` returns allowed, or "wait N seconds". It uses a sliding window in one Redis transaction, with a timer on the key so idle keys vanish. If Redis is down, it allows the request and logs a warning.
+2. **Apply the limits** from the table above.
+   - A 429 reply carries a `Retry-After` header.
+   - A successful log-in clears that email's failure count.
+   - Once an email is locked, even the right password gets 429 until the time passes.
+   - The IP comes from `request.client.host`. Behind Nginx (T26) that becomes the proxy's IP, so the T26 brief must set uvicorn's `--proxy-headers` and trust only Nginx.
+3. **Redis down, done properly:**
+   - Chat list presence: `online: false`, `last_seen: null`.
+   - Ticket: 503.
+   - Publish: already never raises (D20).
+   - The live listener keeps retrying (T21).
+4. **App (fast mode):**
+   - A send that gets 429 stays "waiting", is sent again after `Retry-After`, and keeps its order (outbox).
+   - Log-in and sign-up 429 shows "Too many tries. Try again in N minutes."
+   - The "+" box 429 shows "Slow down a moment."
+   - Ticket 503 counts as "line down", so it just keeps backing off.
+5. **Tests:**
+   - The 21st send in 10 s gives 429 with `Retry-After`, and it works again after the window (expire the key for real, as T21 did).
+   - The 6th wrong password locks that email, even with the right password, but not other emails.
+   - A good log-in clears the count.
+   - Sign-up's per-IP limit works.
+   - **Redis down** (point the client at a dead port or make it raise): a send still gives 201 and the row is saved, the chat list gives 200 with `online: false`, a ticket gives 503, and limits let requests through.
+- **Not in this task:** CAPTCHA, email verification, banning accounts.
 - **Done when:**
-  - Ana on 5173 (copy A) and Ben on 5174 (copy B): `/api/health` shows A and B. Messages, ✓ → ✓✓ → teal, typing and online status all work instantly between them.
-  - Stop copy A: Ana's dot goes grey, and Ben keeps working. Start copy A again: Ana reconnects and catches up, with nothing lost and no doubles.
+  - Pasting and sending 25 quick messages: about 20 go at once, and the rest wait and then go, in order, with no doubles.
+  - 6 wrong passwords show "Too many tries".
+  - **Redis stopped** (`docker compose stop redis`): Ana can still send, and Ben sees it after a reload. The dots go grey with "Reconnecting...".
+  - **Redis started again:** live updates come back by themselves, and catch-up fills the gap.
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: why two copies broke live chat before pub/sub; how a message from copy A reaches Ben's line on copy B; why losing a pub/sub shout is OK in Parley.
+"In my words" prompts: how the sliding window counts the last 10 seconds; why limits let requests through when Redis is down but PostgreSQL doesn't get the same treatment; why a wrong-password limit is per email and also per IP.
 
 ---
 
@@ -108,7 +120,7 @@ Pub/sub doesn't remember anything. If no copy is listening, the shout is lost. T
 
 ### Phase 5: Redis
 - [x] T20. Online and last seen, with automatic expiry
-- [ ] T21. Two backend copies; live messages cross between them (pub/sub)
+- [x] T21. Two backend copies; live messages cross between them (pub/sub)
 - [ ] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
 
 ### Phase 6: RabbitMQ
@@ -117,12 +129,12 @@ Pub/sub doesn't remember anything. If no copy is listening, the shout is lost. T
 
 ### Phase 7: Run it like production
 - [ ] T25. Dockerfiles and Docker Compose for every part
-- [ ] T26. Nginx in front of several backend copies (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
+- [ ] T26. Nginx in front of several backend copies (run uvicorn with --proxy-headers trusting only Nginx, so rate limits see the real IP) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it
 - [ ] T26b. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.
 - [ ] T27. Prometheus metrics and a Grafana dashboard
-- [ ] T28. Load test with 1,000 fake users; write up the results with the laptop's specs
+- [ ] T28. Load test with 1,000 fake users; write up the results with the laptop's specs (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
 
 ### Phase 9: Kubernetes
 - [ ] T29. Run Parley on local Kubernetes

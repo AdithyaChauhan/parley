@@ -819,3 +819,53 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - How a message from copy A reaches Ben's line on copy B: We use Redis as a radio (pub/sub). Copy A saves the message, then publishes (shouts) it to a Redis channel named after Ben. Copy B is subscribed (listening) to Ben's channel because Ben's line is connected there. Copy B hears the event and sends it down Ben's WebSocket.
 
 - Why losing a pub/sub shout is OK in Parley: Because Redis pub/sub doesn't save anything; if nobody hears the shout, it vanishes. That is perfectly fine because we always save the message to PostgreSQL first (the filing cabinet). If the live radio shout is lost, the app just uses its catch-up logic (after=<number>) to ask the database for anything it missed.
+
+### Task 22: Spam limits, and Parley keeps working when Redis is down
+**What was built**
+- `backend/app/limits/service.py` (new), the limit counter (D24):
+  - `Rule` and the six limits in one place: `SEND` (20 per 10 s per user), `LOGIN_EMAIL` (5 tries per 15 min per email), `LOGIN_IP` (30 per 15 min per IP), `SIGNUP_IP` (5 per hour per IP), `START_CHAT` (20 per minute per user), `TICKET` (10 per minute per user).
+  - `hit(key, limit, window_seconds)`: the sliding window. One Redis transaction drops times older than the window, adds "now" (with a random name, so two at the same instant are two entries), counts, reads the oldest, and resets the key's timer. Over the limit: it takes "now" back out and returns the seconds until the oldest leaves the window. Returns 0 for "go ahead". Redis down: logs a warning and allows.
+  - `clear(key)`: deletes the key (a good log-in wipes its email's tries). Safe when Redis is down.
+  - `enforce(rule, who)`: for the routes. A refusal becomes 429 with `Retry-After`.
+  - `key(rule, who)`: `limit:send:<id>`, `limit:login_email:<email>`, ...
+- `backend/app/auth/routes.py`: sign-up counts per IP. Log-in counts per IP and per email **before** the password check, and a good log-in clears the email's count, so it means "tries since the last good log-in". A locked email gets 429 even with the right password, and never costs a slow hash check. `_ip()` reads `request.client.host` (T26 must set `--proxy-headers`, or every request looks like Nginx).
+- `backend/app/messages/routes.py`: the send limit, first in the route, so a flood never reaches the database.
+- `backend/app/chats/routes.py`: the start-chat limit (fishing for emails).
+- `backend/app/live/routes.py`: the ticket limit; a ticket answers 503 "Live updates unavailable" when Redis is down. An open line whose ping hits a dead Redis logs one warning and closes with 1011 (the app reconnects with its backoff), and the goodbye can't crash.
+- `backend/app/presence/service.py`:
+  - Both Redis clients give up fast. Out of the box, one call to a dead Redis took 49 s (10 tries with growing waits). Now: at most 1 s to connect. The normal client makes one try (a send waits on it; it swaps a dead connection for a fresh one by itself after a restart). The async client keeps one quick second try, because without it every open line would drop once after a Redis restart.
+  - `statuses(user_ids)`: online and last seen for the whole chat list in one trip to Redis (a pipeline), replacing `is_online()` (two calls per row). Redis down: every row is `UNKNOWN` (`online: false`, `last_seen: null`), which the app shows as "last seen recently".
+- `backend/app/chats/service.py`: the chat list reads its rows first, then calls `statuses()` once.
+- `backend/migrations/env.py`: Alembic's logging set-up no longer silences loggers that already exist (`disable_existing_loggers=False`). The tests run migrations inside the same Python as the app, so before this, no app warning ever reached the test output.
+- App:
+  - `frontend/src/lib/api.ts`: `ApiError` carries `retryAfter`, read from the `Retry-After` header.
+  - `frontend/src/features/chat/useOutbox.ts`: a 429 on a send marks it and everything after it "waiting", sleeps for `Retry-After`, then goes on from the oldest. The queue stays busy while it waits, so nothing overtakes, and each message keeps its `client_msg_id` (no doubles).
+  - `frontend/src/features/auth/serverErrors.ts`: "Too many tries. Try again in N minutes." on log-in and sign-up.
+  - `frontend/src/features/chat/NewChatBox.tsx`: "Slow down a moment."
+  - `frontend/src/features/chat/useMessages.ts`: when the chat list knows a newer message number than the open chat shows, the chat catches up. While the live line is down, the list's 60 s re-check is the only news, so without this the open chat went stale.
+  - `frontend/src/features/chat/Conversation.tsx`: when the list brings back an unread count for the chat you're looking at (your "read" waits in the app while the line is down), the chat clears it again, if the newest message is really on screen.
+  - `live.ts` didn't change: a failed ticket, 503 included, already counts as "line down".
+- Tests (76 in all):
+  - `test_limits.py` (new): the 21st send gives 429 with `Retry-After` and works again after the window (the key's timer cut to 1 ms with `PEXPIRE`, as in T21); the refused send was never saved. The 6th try locks the email even with the right password, but not other emails. A good log-in clears the count. Sign-up's per-IP limit. 50 requests at the same moment against a limit of 20: exactly 20 get through.
+  - `test_redis_down.py` (new): the normal client points at a dead address with the same give-up-fast settings. A send still gives 201 and the rows are saved, even past a limit of 1, with the warning logged. The chat list gives 200 with online unknown. A ticket gives 503. An open line closes with 1011.
+  - `test_message_routes.py`: the 70-message paging test lifts the send limit for itself with `monkeypatch`.
+- Checked by hand: 30-odd quick sends: 20 went, one got 429, it and the rest waited and went in order, with no doubles. 6 wrong passwords: "Too many tries", the right password locked too, unlocked by clearing the keys. Redis stopped: Ana sends (a few seconds on Windows), Ben's open chat shows it within a minute without a reload, single tick, "last seen recently", "Reconnecting...". Redis started: both windows online again by themselves, the tick turns double, live messages flow.
+
+**New ideas**
+- Rate limit: a cap on how often someone may do something. Over the cap, the server answers 429 "Too many requests" instead of doing the work, and `Retry-After` says how many seconds to wait.
+- Sliding window: count only what happened in the last N seconds, measured from now. A sorted set of times does it: drop the ones too old, count the rest. Unlike a fixed "per minute" bucket, there's no edge where 20 at 0:59 and 20 at 1:00 both get through.
+- Add, then take back: a Redis transaction can't say "only add if under 20", so every request adds itself first and counts. If it's over, it removes itself. Each request's count includes everyone who came at the same moment, so a 21st can never slip through.
+- A timer on the key (`EXPIRE`): once nobody hits it for a whole window, everything in it is too old anyway, so Redis wipes it. Idle keys vanish by themselves.
+- What to count per: sends per user (one spammer); wrong passwords per email (guessing one account from many computers); log-ins per IP (one computer guessing many accounts); sign-ups per IP (one computer making many accounts).
+- Fail open vs fail closed: when Redis is down, limits let requests through (better a little spam than no chat), but PostgreSQL down still fails, because without it nothing can be saved. A helper may fail open; the truth can't.
+- Give up fast: a client that retries for 49 s turns "Redis is down" into "Parley is down". A short connect timeout and few retries keep a dead helper cheap.
+- Retries are a trade-off: a quick second try survives an old connection after a restart, but doubles the wait when the server is really gone. Measured both before choosing per client.
+- One trip for many: a pipeline sends many commands together and reads all the answers at once, so the chat list costs one Redis trip instead of two per row.
+- Logging and Alembic: `fileConfig()` switches off every logger that already exists unless told not to. That hid the app's warnings in tests.
+- A lint false alarm: React's lint rule flagged `catchUp()` in an effect, but it only changes state after its first `await`. The rule is switched off for that one line, with the reason written down.
+- Windows vs Linux: on Windows, a connection to a port nobody listens on takes about 1 s per address to fail (and `localhost` tries two addresses). On Linux it fails instantly. Using `127.0.0.1` halves it in dev.
+
+**In my words** (Adithya writes this)
+- How the sliding window counts the last 10 seconds:
+- Why limits let requests through when Redis is down, but PostgreSQL doesn't get the same treatment:
+- Why a wrong-password limit is per email and also per IP:

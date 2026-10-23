@@ -1,7 +1,9 @@
 import { useRef, useState } from "react"
-import { api, isUnreachable } from "@/lib/api"
+import { api, ApiError, isUnreachable } from "@/lib/api"
 import { announce, useLiveEvents } from "@/lib/live"
 import type { Message, ServerMessage } from "./types"
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // My messages that aren't saved yet, per chat, in the order I wrote them (D21).
 // Every send goes through here, one at a time per chat, so a new message never
@@ -9,6 +11,8 @@ import type { Message, ServerMessage } from "./types"
 // keeps sending after you switch chats, and a "Not sent" message is still there when you come back.
 //   - No answer (offline, or the server is down): the message waits, with
 //     everything after it, until the line is back. Then they go out in order.
+//   - Too many sends (429, D24): the same "waiting", but it goes again by itself
+//     after the server's Retry-After, still in order.
 //   - A real refusal (like 422): "Not sent, tap to retry", and the next one goes on.
 // Each message keeps its clientMsgId for every try, so if one did get through
 // before the drop, the server hands back that first copy instead of a double (D18).
@@ -46,9 +50,18 @@ export function useOutbox(myId: string) {
           // the chat list moves, and a skipped number starts a catch-up (D21)
           announce({ type: "message.new", data: reply })
         } catch (error) {
+          const waitAll = () =>
+            update(chatId, (list) => list.map((m) => (m.status === "failed" ? m : { ...m, status: "waiting" })))
+          if (error instanceof ApiError && error.status === 429) {
+            // Slow down: this one and everything after it wait, then the loop
+            // picks up the oldest again. The queue stays busy meanwhile, so nothing overtakes it.
+            waitAll()
+            await sleep((error.retryAfter ?? 1) * 1000)
+            continue
+          }
           if (isUnreachable(error)) {
             // Offline: this one and everything after it wait for the line
-            update(chatId, (list) => list.map((m) => (m.status === "failed" ? m : { ...m, status: "waiting" })))
+            waitAll()
             return
           }
           mark("failed")

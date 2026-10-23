@@ -9,6 +9,7 @@ from app.auth.models import User
 from app.chats.models import ChatMember
 from app.chats.service import get_member, member_ids
 from app.db import get_db
+from app.limits import service as limits
 from app.live import bus
 from app.messages.models import Message
 from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
@@ -32,6 +33,8 @@ def send_message(
     me: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # First, so a flood of sends is turned away before it touches the database (D24).
+    limits.enforce(limits.SEND, me.id)
     _check_member(db, chat_id, me)
 
     message, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)

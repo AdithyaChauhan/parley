@@ -10,6 +10,11 @@ export function serverErrors(error: unknown): FormErrors {
   if (error instanceof ApiError) {
     if (error.status === 401) return { fields: { password: "Wrong email or password." }, form: "" }
     if (error.status === 409) return { fields: { email: "That email is already taken." }, form: "" }
+    if (error.status === 429) {
+      // Locked for a while (D24): Retry-After says how long, in seconds
+      const minutes = Math.max(1, Math.ceil((error.retryAfter ?? 60) / 60))
+      return { fields: {}, form: `Too many tries. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.` }
+    }
     if (error.status === 422) {
       const fields = fieldProblems(error.body)
       if (Object.keys(fields).length > 0) return { fields, form: "" }
