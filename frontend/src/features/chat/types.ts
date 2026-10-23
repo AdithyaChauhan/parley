@@ -14,6 +14,9 @@ export type ChatSummary = {
   name: string // the other person's name in a direct chat
   last_message: { seq: number; preview: string; created_at: string } | null
   unread: number
+  other_user_id: string | null // the other person in a direct chat, to match presence news
+  online: boolean // the other person has Parley open right now (D22)
+  last_seen: string | null // when their app was last seen; null = unknown
 }
 
 // One message as the server sends it
@@ -47,6 +50,7 @@ export type LiveEvent =
   | { type: "message.new"; data: ServerMessage }
   | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number; read_up_to: number } }
   | { type: "typing"; data: { chat_id: string; user_id: string } }
+  | { type: "presence"; data: { user_id: string; online: boolean; last_seen: string | null } } // came online or went offline (D22)
   | { type: "pong"; data: Record<string, never> } // the answer to the app's heartbeat ping (D21)
 
 // A message on screen. Until the server answers, it has no id or number (seq) yet.

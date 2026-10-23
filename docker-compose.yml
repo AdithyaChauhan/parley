@@ -15,5 +15,17 @@ services:
       timeout: 5s
       retries: 5
 
+  # The whiteboard: fast, temporary facts like "Ana is online" (D22).
+  # No volume on purpose: losing them on a restart is fine.
+  redis:
+    image: redis:8.10.2
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   db_data:

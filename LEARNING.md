@@ -721,3 +721,57 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why waiting messages can be re-sent without making doubles:
   Short version: Each message has a unique ID, so the server ignores copies.
   Full version: Every message gets a unique ID (client_msg_id) the moment you hit send. If you send it while offline, it waits in a queue (the outbox). When it retries, it sends that exact same ID. If the first try actually did reach the server, the server sees the same ID, refuses to save it twice, and just returns the first copy.
+
+---
+
+### Task 20: Online and "last seen", with Redis
+**What was built**
+- `docker-compose.yml`: a `redis` service (`redis:8.10.2`, the current stable) with a `redis-cli ping` health check. No volume: losing the notes on a restart is fine.
+- `.env.example`: `REDIS_URL` (database 0, the app) and `TEST_REDIS_URL` (database 15, tests only).
+- `backend/requirements.txt`: `redis==8.1.0` (redis-py). One package, two clients: normal and async (D22).
+- `backend/app/config.py`: reads `redis_url`.
+- `backend/app/presence/service.py` (new, D5 folder):
+  - `tab_alive()`: in one transaction, wipes dead tabs, counts the alive ones, sets this tab's "alive until" to now + 60 s, resets the key's own 60 s timer, and writes `last_seen`. Returns True if no tab was alive before (just came online).
+  - `tab_closed()`: in one transaction, removes the tab, wipes dead tabs and writes `last_seen`. Returns True if no tab is left (offline now), including when this tab's time had already run out.
+  - `is_online()` and `last_seen()`: for the chat list, with the normal client. `is_online()` wipes dead tabs first.
+  - `start()` / `stop()`: make and close the async client. `_now()`: a real clock time that tests can fake.
+- `backend/app/main.py`: a `lifespan` that calls `presence.start()` when the server starts and `presence.stop()` when it stops, so the async client lives in the server's own event loop.
+- `backend/app/chats/service.py`:
+  - `partner_ids()`: everyone who shares at least one chat with a person, once each.
+  - `list_my_chats()`: each row gets `other_user_id`, `online` and `last_seen` for the other person in a direct chat.
+- `backend/app/chats/schemas.py`: `ChatOut` gains `other_user_id`, `online` and `last_seen`. `other_user_id` wasn't in the brief: without it, the app can't tell which row a `presence` event is about.
+- `backend/app/live/routes.py`:
+  - `_Line.tab_id`: the server names each line (= each tab).
+  - `_tab_alive()`: called on connect (before `hello`) and after every `pong`. Pushes `presence` only when the person just came online.
+  - When the line ends: `tab_closed()`, and `presence` (offline) if no tab is left. This goodbye is shielded for up to 5 s, so it isn't cut off when the line is being cancelled.
+  - `_push_presence()`: `{user_id, online, last_seen}` to everyone in `partner_ids()`, through this copy's switchboard (T21 adds the other copies).
+- `backend/tests/conftest.py`: reads `TEST_REDIS_URL`, refuses anything but database 15, points the app at it, and wipes it (`FLUSHDB`) after each test.
+- `backend/tests/test_presence.py` (new, 7 tests): one tab online then offline; close one of two tabs, still online; a silent tab goes offline after a faked 61 s; a ping keeps a tab alive; `last_seen` is the exact (faked) close time; online and offline news reach a partner but not a stranger, and a ping while online is no news; the chat list and `POST /api/chats/direct` show `other_user_id`, `online` and `last_seen`.
+- `backend/tests/test_live_messages.py`: 5 tests where Ana's line is open when Ben (or Cara) connects now first read the "came online" event.
+- `.github/workflows/ci.yml`: a throwaway Redis service, and both Redis addresses set to database 15.
+- `frontend/src/features/chat/types.ts`: chat rows have `other_user_id`, `online`, `last_seen`; a new `presence` event.
+- `frontend/src/features/chat/time.ts`: `lastSeenText()`: "last seen today at 11:15", "yesterday at 09:02", "15.09 at 18:40", or "last seen recently". `listTime()` now shares `dayLabel()` with it.
+- `ChatRow.tsx`: a green dot on the avatar while the other person is online.
+- `Conversation.tsx`: the header gets the avatar (with the dot), and "online" or "last seen ..." under the name.
+- `ChatScreen.tsx`: `presence` events update the matching row (by `other_user_id`). While a chat is open, the chat list reloads every 60 s, which catches tabs that went silent without a goodbye.
+
+**New ideas**
+- Redis: a whiteboard kept in memory. Very fast, and a note can have a timer after which it wipes itself. PostgreSQL is the filing cabinet: safe and permanent. "Online" changes all the time and is fine to lose, so it lives in Redis (D22).
+- Redis databases: one Redis server has numbered databases (0–15). The app uses 0, tests use 15, and the tests refuse any other number before they wipe anything.
+- Sorted set: a list of names, each with a number (a "score"), kept in order. Here: tab id → "alive until" time. "Remove everything with a score up to now" wipes every dead tab in one command.
+- Per tab, not one flag: one "online" flag breaks with two tabs (closing one says offline) and with a crash (nobody says goodbye). One row per tab with its own "alive until" fixes both.
+- Timers instead of goodbyes: a ping every 25 s pushes "alive until" 60 s ahead. A tab that stops pinging simply runs out. The key's own timer means Redis even wipes the whole note if every tab goes silent.
+- Transaction (MULTI): Redis runs a list of commands in one go, with nothing from another tab in between. So "count the alive tabs, then add mine" can't be fooled by a second tab doing the same at the same moment.
+- Only push changes: a ping while already online is no news, so nothing is pushed. Only "came online" and "went offline" travel.
+- Silent crash: nothing happens on the server when a tab's time runs out, so nobody is told. The apps notice at their next 60 s check (up to about 2 minutes in total, D22).
+- Event loops and async clients: an async Redis client only works inside the event loop it was made in. So it's made when the app starts (lifespan), not when the file is loaded.
+- Order matters: record "online" and push the news before saying `hello`. Then when an app hears `hello`, everyone who needed the news already has it. (A test found this: Ben's line got news meant for before he connected.)
+- Shielded cleanup: when a line is cancelled, every `await` in its clean-up would stop at once. A shield lets the goodbye finish, with a 5 s limit so it can never hang.
+- Real clock vs forward-only clock: the typing limit uses `time.monotonic()` (only measures gaps). Presence uses `time.time()`, a real time, because `last_seen` is shown to people and every backend copy must agree on it.
+
+**In my words** (Adithya writes this)
+- What Redis is, and why "online" lives there and not in PostgreSQL: Redis is a fast, in-memory whiteboard, while PostgreSQL is a slow, permanent filing cabinet. "Online" status changes every few seconds and is fine to lose if the server restarts. Keeping it in PostgreSQL would mean constant, unnecessary disk writes. Redis keeps it in memory and can automatically delete notes after a timer runs out.
+
+- How the "alive until" times handle two tabs and a crash: We don't just have one "online" flag; we keep a separate timer for every tab. If you have two tabs open, closing one leaves the other timer running, so you stay online. If your laptop crashes, you never send a "goodbye", but because every ping pushes your timer 60 seconds into the future, the server just waits for that time to pass and automatically wipes the dead tab.
+
+- How Ben's screen learns that Ana went offline (when she closes the tab, and when her tab goes silent): If Ana closes her tab normally, the server gets a "goodbye", deletes her tab, and instantly pushes a presence event to Ben (so he sees it in about 1 second). If her tab goes silent (a crash), there is no goodbye. The server waits for the 60-second timer to expire, and Ben's app checks the chat list every 60 seconds. So, Ben finds out at his next check, which can take up to about 2 minutes total.

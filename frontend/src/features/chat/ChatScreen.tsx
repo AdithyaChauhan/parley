@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useEffectEvent, useState } from "react"
 import { useAuth, type User } from "@/features/auth/useAuth"
 import { api } from "@/lib/api"
 import { reportDelivered, useLiveConnection, useLiveEvents } from "@/lib/live"
@@ -98,6 +98,24 @@ export function ChatScreen({ user }: { user: User }) {
     )
   }
 
+  // Someone I share a chat with came online or went offline (D22)
+  function presenceChanged(userId: string, online: boolean, lastSeen: string | null) {
+    setChats(
+      (all) =>
+        all && all.map((chat) => (chat.other_user_id === userId ? { ...chat, online, last_seen: lastSeen } : chat)),
+    )
+  }
+
+  // While a chat is open, check everyone's online status again every 60 s.
+  // A crashed tab never says goodbye, so no "offline" news ever comes for it:
+  // only its time running out on the server tells (D22).
+  const recheckPresence = useEffectEvent(() => reloadChats())
+  useEffect(() => {
+    if (!openId) return
+    const timer = window.setInterval(recheckPresence, 60_000)
+    return () => clearInterval(timer)
+  }, [openId])
+
   // From the "+" box. If we already had this chat, just open it.
   function chatStarted(chat: ChatSummary) {
     setChats((all) => {
@@ -132,9 +150,14 @@ export function ChatScreen({ user }: { user: User }) {
   // A chat I don't have yet (someone just started it with me): load the list again.
   // A receipt about me: I read something, here or in another tab.
   // A hello: on the line again, so catch up on the list (D21).
+  // Presence: someone's green dot turns on or off.
   useLiveEvents((event) => {
     if (event.type === "hello") {
       reloadChats()
+      return
+    }
+    if (event.type === "presence") {
+      presenceChanged(event.data.user_id, event.data.online, event.data.last_seen)
       return
     }
     if (event.type === "receipt" && event.data.user_id === user.id) {

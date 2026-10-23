@@ -9,6 +9,7 @@ from app.auth.models import User
 from app.chats.models import Chat, ChatMember
 from app.chats.schemas import ChatOut, LastMessageOut
 from app.messages.models import Message
+from app.presence import service as presence
 
 # How many letters of the last message the chat list shows.
 PREVIEW_LENGTH = 100
@@ -61,6 +62,19 @@ def get_member(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> ChatMembe
 def member_ids(db: Session, chat_id: uuid.UUID) -> list[uuid.UUID]:
     """Everyone in this chat: the people its live events go to."""
     return list(db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)))
+
+
+def partner_ids(db: Session, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """Everyone who shares at least one chat with this person: the people who
+    see them in their chat list, so they get their "online" news (D22)."""
+    my_chats = select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
+    return list(
+        db.scalars(
+            select(ChatMember.user_id)
+            .where(ChatMember.chat_id.in_(my_chats), ChatMember.user_id != user_id)
+            .distinct()  # once each, even if we share several chats
+        )
+    )
 
 
 class Bookmarks(NamedTuple):
@@ -134,11 +148,11 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
     """My chat list, newest activity first. Pass chat_id to get just that one row."""
     other_member = aliased(ChatMember)
     query = (
-        select(Chat, ChatMember.read_up_to, User.name, Message)
+        select(Chat, ChatMember.read_up_to, User.id, User.name, Message)
         .select_from(Chat)
         # Only chats I'm in, with my bookmark.
         .join(ChatMember, and_(ChatMember.chat_id == Chat.id, ChatMember.user_id == me.id))
-        # Direct chats: the other person's row, then their name.
+        # Direct chats: the other person's row, then their id and name.
         .outerjoin(
             other_member,
             and_(
@@ -157,7 +171,7 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
         query = query.where(Chat.id == chat_id)
 
     chats = []
-    for chat, read_up_to, other_name, last in db.execute(query):
+    for chat, read_up_to, other_id, other_name, last in db.execute(query):
         last_message = None
         if last is not None:
             last_message = LastMessageOut(
@@ -171,6 +185,10 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
                 name=other_name or chat.title,
                 last_message=last_message,
                 unread=chat.last_seq - read_up_to,
+                other_user_id=other_id,
+                # From Redis, not the database: a fast, temporary fact (D22).
+                online=other_id is not None and presence.is_online(other_id),
+                last_seen=presence.last_seen(other_id) if other_id is not None else None,
             )
         )
     return chats

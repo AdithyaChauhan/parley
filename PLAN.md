@@ -19,69 +19,66 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 19: Reconnect and catch up on missed messages (teaching for the ideas, fast mode for the screens)
-- **Branch:** `feature/reconnect`
-- **Goal:** Parley survives a bad connection. If the line drops (Wi-Fi off, laptop asleep, server restart), the app reconnects by itself, fetches anything it missed, and sends any "Not sent" messages in order, exactly once. This is the demo for interviews.
-- **Mode:**
-  - The three ideas below are taught in friend style: backoff, catch-up by number, and heartbeat. They're the system design part.
-  - The screen parts are fast mode.
-  - Questions come at the end, as "In my words" prompts.
-
-**Step 0 (carry-over from T18):** the read-receipt gap.
-- Send `receipt` to everyone in the chat, **including the reader's own other tabs**.
-- In the app, a receipt about someone else updates ticks. A receipt about me sets that chat's unread to 0.
-- Test: Ben has two tabs, reads in one, and the other tab gets the receipt.
+### Task 20: Online and "last seen", with Redis (teaching mode, friend style)
+- **Branch:** `feature/presence`
+- **Goal:**
+  - A green dot and "online" when the other person has Parley open.
+  - "last seen today at 11:15" when they don't.
+  - This brings in **Redis**, the tool Phase 5 is built on (D10).
+- **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the backend checks itself and shows the results.
 
 **Example first (Claude Code shows this before any code):**
-```
- 10:00:00  Ben's Wi-Fi drops. His app has Ana's chat up to #20.
- 10:00:05  Ana sends #21, #22, #23. The pushes to Ben fail (line is dead). Saved anyway (D9).
-           Ben's app: no "pong" for 10 s → line is dead → try again in 1 s, 2 s, 4 s ... (max 30 s)
- 10:00:40  Wi-Fi back. Ben's app gets a new ticket, reconnects, gets "hello".
-           Catch-up:  GET /api/chats                              (new previews, unread, new chats)
-                      GET /api/chats/{open chat}/messages?after=20  → #21, #22, #23 (oldest first)
-           Ben's app says "delivered 23" (and "read 23" if he's looking) → Ana's ticks update.
 
- Ben's own sends while offline:  "hi", "you there?", "ok"  → shown as "waiting" in order
- 10:00:40  back online → sent one at a time, in order, each with its SAME client_msg_id
-           → no doubles even if one of them actually got through before the drop (D18)
+What Redis is: a whiteboard kept in memory. It's very fast, and each note can have a timer, after which it wipes itself. PostgreSQL is the filing cabinet (safe, permanent). Redis is the whiteboard (fast, temporary). "Online" is a whiteboard kind of fact.
+
 ```
+ Redis key  presence:<Ben>   (a "sorted set": each open tab, with an "alive until" time)
+   tab        alive until
+   tab-a1     10:01:25        ← every ping (25 s) pushes this 60 s ahead
+   tab-b7     10:01:10
+
+ Ben is online  =  at least one tab whose "alive until" is still in the future.
+ Ben closes tab-a1          → its row is removed. tab-b7 still alive → still online.
+ Ben's laptop crashes       → no goodbye at all, but tab-b7's time passes → offline by itself.
+ Redis key  last_seen:<Ben> = 10:00:25   (updated on every ping, so it's right even after a crash)
+```
+Why per tab, not one "online" flag: one flag breaks with two tabs (closing one would say offline) and with a crash (nobody says goodbye). The timer fixes both, and it keeps working with two backend copies in T21, because Redis is shared.
 
 **Steps:**
-1. **Backend: `after=` for history.**
-   - `GET /api/chats/{id}/messages?after=N` returns messages numbered above N, **oldest first**, with `limit` (at most 100), `has_more` and `members`.
-   - `before` and `after` together give 422.
-2. **Backend: heartbeat reply.** The line answers `{"type":"ping"}` with `{"type":"pong"}`.
-3. **App: heartbeat.** While the line is open, send `ping` every 25 seconds. If no `pong` comes back within 10 seconds, treat the line as dead: close it and reconnect.
-4. **App: reconnect with backoff.**
-   - When the line drops, wait 1 s, 2 s, 4 s, 8 s ... up to 30 s, plus a little random extra so thousands of apps don't all retry at the same second.
-   - Get a **new ticket** each time.
-   - Try at once when the browser says it's back online, or when the tab comes back to the front.
-   - Reset the wait after a good connection.
-   - The dot is grey, with a small "Reconnecting..." note, while it's down.
-   - Never reconnect after log-out.
-5. **App: catch-up on every hello after a drop.**
-   - Reload the chat list.
-   - For the open chat, fetch `after=<highest number on screen>`, repeating while `has_more`.
-   - Re-send `delivered` and `read`, as T17/T18 already do.
-   - Closed chats load normally when opened.
-6. **App: gap check while connected.** If a pushed message for the open chat is more than one ahead of the highest number on screen (I have #20, a push brings #23), fetch `after=20` to fill the gap.
-7. **App: outbox.**
-   - Sends that fail because you're offline wait in order and show "waiting".
-   - When the line is back, send them **one at a time, in order**, each with its own original `client_msg_id`.
-   - A send refused for a real reason (for example 422) shows "Not sent, tap to retry", as before.
-8. **Tests (backend):**
-   - `after=` returns oldest first with the right `has_more`, and `before` with `after` gives 422.
-   - `ping` gets `pong`.
-   - The two-tab read receipt (step 0).
-- **Not in this task:** online status and last seen (T20), several backend copies (T21).
+1. **Redis in Docker Compose:**
+   - A `redis` service using the official image, pinned to a current stable version (checked in its docs), with a health check (`redis-cli ping`).
+   - `REDIS_URL` and `TEST_REDIS_URL` (`redis://localhost:6379/15`) go in `.env` and `.env.example`. Tests refuse to run unless `TEST_REDIS_URL` points at database 15, like the `_test` rule.
+   - The async Redis client opens when the app starts and closes when it stops (in `main.py`), so each test's event loop gets a working client.
+   - CI gets a Redis service too.
+2. **Package:** `redis` (redis-py), pinned (D22). It has a normal client for normal routes and an async one for the live line.
+3. **`app/presence/service.py`** (D5 folder). Each change returns whether the person just came online or just went offline.
+   - `tab_alive(user_id, tab_id)`: add or refresh the tab's "alive until" (now + 60 s), keep the key's own timer at 60 s, and update `last_seen`.
+   - `tab_closed(user_id, tab_id)`: remove the tab.
+   - `is_online(user_id)` and `last_seen(user_id)`: clear out dead tabs first, then answer.
+4. **Live line:**
+   - On hello, call `tab_alive`. On every `ping`, call `tab_alive` again. When the line ends, call `tab_closed`.
+   - When someone comes online or goes offline, push `presence` `{user_id, online, last_seen}` to everyone who shares a chat with them (through this copy's switchboard; T21 adds the other copies).
+5. **API:** the chat list rows (and `POST /api/chats/direct`) gain `online` and `last_seen` for the other person in direct chats.
+6. **App (fast mode):**
+   - Green dot on the avatar in chat rows and the conversation header.
+   - The header says "online", or "last seen today at 11:15" / "yesterday at 09:02" / "15.09 at 18:40", or "last seen recently" if unknown.
+   - `presence` events update it live.
+   - The open chat re-checks every 60 s, which catches crashed tabs that never said goodbye.
+7. **Tests** (real Redis, wiped after each test):
+   - One tab: online; closed: offline.
+   - Two tabs, close one: still online.
+   - A tab that stops pinging goes offline after its time passes (fake the clock).
+   - `last_seen` is set.
+   - Coming online and going offline push `presence` to a chat partner, but not to a stranger.
+   - The chat list shows `online` / `last_seen`.
+- **Not in this task:** two backend copies and pub/sub (T21), hiding your last seen (v2), group presence (v2).
 - **Done when:**
-  - **Server restart:** with Ana and Ben chatting, stop and restart uvicorn. Both dots go grey, then green again without a reload, and anything sent meanwhile appears.
-  - **Offline sends:** in Ana's DevTools → Network, set "Offline". Ana sends 5 messages, and they show "waiting". Set "No throttling". All 5 arrive at Ben, in order, exactly once (check in psql: 5 new rows).
-  - **Missed messages:** Ben goes Offline, Ana sends 3, Ben goes back online. Ben's open chat shows them without a reload, and Ana's ticks update.
+  - Ana and Ben (normal window plus Incognito): Ben sees Ana "online". Ana closes her window: Ben sees "last seen today at ..." within a second, with no reload.
+  - Ana opens two tabs and closes one: still online.
+  - A tab that goes silent (in Ana's tab: DevTools → Sources → press F8 to pause it; her pings stop but the line stays open): within about 2 minutes Ben sees her offline (60 s alive + up to 60 s until Ben's check).
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how the app knows the line is dead; how catch-up finds exactly the messages you missed; why waiting messages can be re-sent without making doubles.
+"In my words" prompts: what Redis is and why "online" lives there and not in PostgreSQL; how the "alive until" times handle two tabs and a crash; how Ben's screen learns that Ana went offline.
 
 ---
 
@@ -114,12 +111,12 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T16. WebSocket connection with a one-time ticket (explain the ticket idea on its own first)
 - [x] T17. New messages appear instantly; "got it" replies give two ticks (also keep a "Not sent" message in the chat when you switch chats and come back)
 - [x] T18. Typing indicator and read ticks
-- [ ] T19. Reconnect and catch up on missed messages
+- [x] T19. Reconnect and catch up on missed messages
 
 ### Phase 5: Redis
 - [ ] T20. Online and last seen, with automatic expiry
 - [ ] T21. Two backend copies; live messages cross between them (pub/sub)
-- [ ] T22. Spam limits
+- [ ] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
 
 ### Phase 6: RabbitMQ
 - [ ] T23. Notification worker with retries and a failed-jobs queue

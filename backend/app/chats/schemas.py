@@ -34,3 +34,10 @@ class ChatOut(BaseModel):
     # Empty (null) for a chat with no messages yet.
     last_message: LastMessageOut | None
     unread: int
+    # The other person in a direct chat (null for groups), so the app can match
+    # their live "presence" news to this row.
+    other_user_id: uuid.UUID | None
+    # Direct chats: is the other person online now, and when their app was
+    # last seen (D22). False and null for groups (v2); null if never seen.
+    online: bool
+    last_seen: datetime | None
