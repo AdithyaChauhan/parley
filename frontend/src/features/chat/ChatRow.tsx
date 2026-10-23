@@ -23,7 +23,8 @@ export function ChatRow({ chat, selected, typing, onSelect }: ChatRowProps) {
         selected ? "bg-row-selected" : "hover:bg-row-selected/60",
       )}
     >
-      <Avatar name={chat.name} tint={tintFor(chat.id)} />
+      {/* A green dot only while they're online, like WhatsApp (D22) */}
+      <Avatar name={chat.name} tint={tintFor(chat.id)} status={chat.online ? "online" : undefined} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-name leading-tight">{chat.name}</span>

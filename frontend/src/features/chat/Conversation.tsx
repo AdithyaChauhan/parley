@@ -1,9 +1,11 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
 import { ArrowLeft } from "lucide-react"
+import { Avatar } from "@/components/Avatar"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
+import { lastSeenText } from "./time"
 import { tintFor, type ChatSummary, type Message } from "./types"
 import { UploadView } from "./UploadView"
 import { useMessages } from "./useMessages"
@@ -168,8 +170,21 @@ export function Conversation({
         >
           <ArrowLeft className="size-4" />
         </button>
-        <button type="button" onClick={onOpenPanel} className="min-w-0 truncate text-left text-header md:cursor-default">
-          {chat.name}
+        <button
+          type="button"
+          onClick={onOpenPanel}
+          className="flex min-w-0 items-center gap-3 text-left md:cursor-default"
+        >
+          <Avatar name={chat.name} tint={tintFor(chat.id)} status={chat.online ? "online" : undefined} />
+          <span className="min-w-0">
+            <span className="block truncate text-header leading-tight">{chat.name}</span>
+            {/* Online or last seen, for direct chats (D22) */}
+            {chat.kind === "direct" && (
+              <span className="block truncate text-label text-muted-foreground">
+                {chat.online ? "online" : lastSeenText(chat.last_seen)}
+              </span>
+            )}
+          </span>
         </button>
         <div className="ml-auto hidden gap-1 md:flex">
           <button type="button" className="h-10 rounded-lg bg-tab-active px-6 text-primary">

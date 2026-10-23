@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # The private key that signs access tokens. Anyone who has it can make
     # valid tokens, so it lives only in .env.
     jwt_secret: str
+    # Where Redis lives: online status and last seen (D22).
+    redis_url: str
 
 
 settings = Settings()

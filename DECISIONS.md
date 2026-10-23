@@ -123,3 +123,12 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - When the browser reports "offline", the app closes the line itself and reconnects as soon as it reports "online".
 - `ping`/`pong` keep D19's shape: `pong` is `{"type":"pong","data":{}}`, and an event with no `data` counts as `{}`.
 - Messages sent while offline wait in order and are sent one at a time when the line is back, each with its original `client_msg_id` (no doubles, D18).
+
+**D22. Redis and online status**
+- Redis (official image, pinned version) runs in Docker Compose. Python talks to it with the `redis` package: the normal client in normal routes, the async client on the live line.
+- Redis holds fast, temporary facts (online status, and later tickets and pub/sub). PostgreSQL stays the only home for anything that must never be lost.
+- Online status is per tab: `presence:<user>` is a sorted set of tab id → "alive until" (now + 60 s), refreshed by every ping. Online means at least one tab is still alive. A crashed tab goes offline by itself when its time passes.
+- `last_seen:<user>` is updated on every ping and on close.
+- Tests use `TEST_REDIS_URL` (database 15), wipe it after each test, and refuse to run on any other.
+- The async client opens and closes with the app (startup/shutdown in `main.py`).
+- A tab whose time runs out pushes nothing; other apps notice at their next 60 s check, so offline can take up to about 2 minutes after a silent crash.

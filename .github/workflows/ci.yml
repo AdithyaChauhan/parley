@@ -19,7 +19,7 @@ jobs:
     # Stop a stuck run after 10 minutes instead of GitHub's 6 hours.
     timeout-minutes: 10
 
-    # A throwaway Postgres just for this run, deleted when the job ends.
+    # A throwaway Postgres and Redis just for this run, deleted when the job ends.
     services:
       db:
         image: postgres:17
@@ -35,6 +35,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:8.10.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     # The runner has no .env. These values are fake and only work inside
     # this throwaway run, so they are safe to commit.
@@ -42,6 +51,9 @@ jobs:
       DATABASE_URL: postgresql+psycopg://parley:ci-only-password@localhost:5432/parley_test
       TEST_DATABASE_URL: postgresql+psycopg://parley:ci-only-password@localhost:5432/parley_test
       JWT_SECRET: ci-only-fake-secret-never-used-anywhere-real-0123456789
+      # Database 15: the tests refuse any other number (D22).
+      REDIS_URL: redis://localhost:6379/15
+      TEST_REDIS_URL: redis://localhost:6379/15
 
     defaults:
       run:

@@ -1,6 +1,7 @@
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
 import anyio.to_thread
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -9,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user
 from app.auth.models import User
-from app.chats.service import Bookmarks, mark_delivered, mark_read, member_ids
+from app.chats.service import Bookmarks, mark_delivered, mark_read, member_ids, partner_ids
 from app.db import SessionLocal
 from app.live import manager, tickets
+from app.presence import service as presence
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -59,6 +61,8 @@ class _Line:
     websocket: WebSocket
     # When this line's last "typing" got through, on the _now() clock. Far in the past at first.
     last_typing: float = float("-inf")
+    # One line = one open tab. The server names it, for the presence list (D22).
+    tab_id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
 def _now() -> float:
@@ -100,6 +104,31 @@ def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> list[uuid.UUID]:
     """Who gets this person's "typing": the others in the chat. [] for a non-member."""
     with SessionLocal() as db:
         return _others(db, chat_id, user_id)
+
+
+def _presence_news(user_id: uuid.UUID) -> tuple[list[uuid.UUID], datetime | None]:
+    """Who gets this person's online/offline news (everyone who shares a chat
+    with them), and their last seen."""
+    with SessionLocal() as db:
+        partners = partner_ids(db, user_id)
+    return partners, presence.last_seen(user_id)
+
+
+async def _push_presence(user_id: uuid.UUID, online: bool) -> None:
+    """Tell everyone who shares a chat with this person that they just came
+    online or went offline. Only this copy's switchboard for now (T21)."""
+    partners, seen = await anyio.to_thread.run_sync(_presence_news, user_id)
+    event = {
+        "type": "presence",
+        "data": {"user_id": str(user_id), "online": online, "last_seen": seen.isoformat() if seen else None},
+    }
+    await manager.send_to_users(partners, event)
+
+
+async def _tab_alive(line: _Line) -> None:
+    """Hello or ping: this tab is still here. Pushes news only if that's a change."""
+    if await presence.tab_alive(line.user_id, line.tab_id):
+        await _push_presence(line.user_id, online=True)
 
 
 async def _on_bookmark(line: _Line, event: EventIn) -> None:
@@ -162,6 +191,8 @@ async def _handle(line: _Line, text: str) -> None:
         # The app's heartbeat: "are you still there?" (D21). Only this tab gets
         # the answer, and no database is touched, so it costs almost nothing.
         await line.websocket.send_json({"type": "pong", "data": {}})
+        # Pong first, so Redis never slows down the heartbeat.
+        await _tab_alive(line)
 
 
 # A missing ticket counts as a bad one, so it also gets 4401.
@@ -179,6 +210,9 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
     manager.connect(user_id, websocket)
     line = _Line(user_id, websocket)
     try:
+        # Online first, then hello: by the time the app hears hello, everyone
+        # who needed the "came online" news already has it.
+        await _tab_alive(line)
         await websocket.send_json({"type": "hello", "data": {"user_id": str(user_id)}})
         # Keep the line open and handle what the app sends, one event at a
         # time. When the tab closes, this raises WebSocketDisconnect.
@@ -187,5 +221,12 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
     except WebSocketDisconnect:
         pass  # the tab closed: a normal ending
     finally:
-        # Runs however the line ends, so a closed tab never stays on the switchboard.
+        # Runs however the line ends, so a closed tab never stays on the switchboard
+        # or in the presence list.
         manager.disconnect(user_id, websocket)
+        # Shielded: even if the line is being cut off (server shutting down),
+        # the goodbye gets up to 5 s to finish. Otherwise the person would look
+        # online until their time ran out.
+        with anyio.move_on_after(5, shield=True):
+            if await presence.tab_closed(user_id, line.tab_id):
+                await _push_presence(user_id, online=False)

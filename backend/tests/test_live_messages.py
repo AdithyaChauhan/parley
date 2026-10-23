@@ -58,6 +58,7 @@ def test_bens_delivered_moves_his_bookmark_and_ana_gets_a_receipt(client, sign_u
         _send(client, ana, chat_id, body)
 
     with _open_line(client, ana) as anas_line, _open_line(client, ben) as bens_line:
+        assert anas_line.receive_json()["type"] == "presence"  # Ben came online (T20)
         bens_line.send_json({"type": "delivered", "data": {"chat_id": chat_id, "seq": 2}})
 
         assert anas_line.receive_json() == {
@@ -78,6 +79,7 @@ def test_bens_read_moves_both_bookmarks_and_ana_gets_a_receipt(client, sign_up):
         _send(client, ana, chat_id, body)
 
     with _open_line(client, ana) as anas_line, _open_line(client, ben) as bens_line:
+        assert anas_line.receive_json()["type"] == "presence"  # Ben came online (T20)
         bens_line.send_json({"type": "read", "data": {"chat_id": chat_id, "seq": 2}})
 
         # Read lifts delivered too, and the receipt carries both.
@@ -209,6 +211,7 @@ def test_typing_reaches_ana_but_not_ben(client, sign_up):
     chat_id = _start_chat(client, ana, "ben@example.com")
 
     with _open_line(client, ana) as anas_line, _open_line(client, ben) as bens_line:
+        assert anas_line.receive_json()["type"] == "presence"  # Ben came online (T20)
         bens_line.send_json({"type": "typing", "data": {"chat_id": chat_id}})
         assert anas_line.receive_json() == {"type": "typing", "data": {"chat_id": chat_id, "user_id": ben_id}}
 
@@ -225,6 +228,7 @@ def test_a_non_members_typing_is_ignored(client, sign_up):
     _send(client, ana, caras_chat, "hi Cara")
 
     with _open_line(client, ana) as anas_line, _open_line(client, cara) as caras_line:
+        assert anas_line.receive_json()["type"] == "presence"  # Cara came online (T20)
         caras_line.send_json({"type": "typing", "data": {"chat_id": bens_chat}})  # not her chat
         # A marker on the same line, so it's handled after the typing: her read in her own chat.
         caras_line.send_json({"type": "read", "data": {"chat_id": caras_chat, "seq": 1}})
@@ -239,6 +243,7 @@ def test_a_second_typing_inside_one_second_is_dropped(client, sign_up, monkeypat
     typing = {"type": "typing", "data": {"chat_id": chat_id}}
 
     with _open_line(client, ana) as anas_line, _open_line(client, ben) as bens_line:
+        assert anas_line.receive_json()["type"] == "presence"  # Ben came online (T20)
         bens_line.send_json(typing)
         bens_line.send_json(typing)  # straight after: dropped
         bens_line.send_json({"type": "read", "data": {"chat_id": chat_id, "seq": 1}})  # a marker
