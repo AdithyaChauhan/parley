@@ -1,10 +1,12 @@
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
 import anyio.to_thread
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+import redis
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
@@ -12,14 +14,20 @@ from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.service import Bookmarks, mark_delivered, mark_read, member_ids, partner_ids
 from app.db import SessionLocal
+from app.limits import service as limits
 from app.live import bus, manager, tickets
 from app.presence import service as presence
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/live", tags=["live"])
 
 # The hang-up code for a bad, used or expired ticket (D19). Codes 4000-4999
 # are free for apps to use; 4401 echoes HTTP's 401 "not logged in".
 BAD_TICKET = 4401
+# The standard code for "the server hit a problem": here, Redis went down.
+# The app reconnects with its backoff, like after any drop (D21).
+SERVER_PROBLEM = 1011
 
 # A second "typing" from the same line this soon after the last one is dropped.
 TYPING_GAP_SECONDS = 1
@@ -72,7 +80,14 @@ def _now() -> float:
 
 @router.post("/ticket", response_model=TicketOut)
 def new_ticket(me: User = Depends(get_current_user)):
-    return TicketOut(ticket=tickets.issue(me.id), expires_in=tickets.TICKET_SECONDS)
+    limits.enforce(limits.TICKET, me.id)
+    try:
+        ticket = tickets.issue(me.id)
+    except redis.RedisError:
+        # Tickets and the radio both live in Redis, so without it there is no
+        # live line. The app counts this as "line down" and keeps backing off (D24).
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Live updates unavailable")
+    return TicketOut(ticket=ticket, expires_in=tickets.TICKET_SECONDS)
 
 
 def _others(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> list[uuid.UUID]:
@@ -223,6 +238,12 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
             await _handle(line, await websocket.receive_text())
     except WebSocketDisconnect:
         pass  # the tab closed: a normal ending
+    except redis.RedisError:
+        # Redis went down (a ping couldn't mark the tab alive). Without it this
+        # line can't hear pushes, so end it on purpose; the app reconnects once
+        # Redis is back, and catches up by number (D21, D24).
+        log.warning("Redis is down, closing a live line")
+        await websocket.close(code=SERVER_PROBLEM)
     finally:
         # Runs however the line ends, so a closed tab never stays on the switchboard,
         # on the radio or in the presence list.
@@ -231,7 +252,11 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
         # the goodbye gets up to 5 s to finish. Otherwise the person would look
         # online until their time ran out.
         with anyio.move_on_after(5, shield=True):
-            # Stop listening for them if that was their last tab on this copy.
-            await bus.match_lines(user_id)
-            if await presence.tab_closed(user_id, line.tab_id):
-                await _push_presence(user_id, online=False)
+            try:
+                # Stop listening for them if that was their last tab on this copy.
+                await bus.match_lines(user_id)
+                if await presence.tab_closed(user_id, line.tab_id):
+                    await _push_presence(user_id, online=False)
+            except redis.RedisError:
+                # Redis is down: the tab's "alive until" time runs out by itself.
+                log.warning("Redis is down, skipped a line's goodbye")

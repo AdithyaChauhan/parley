@@ -25,7 +25,8 @@ function gapFree(saved: Message[]) {
 // then my unsaved ones from the outbox (useOutbox). Loads the newest 30, loads
 // older ones on request, takes in new messages and ticks pushed live (D20), and
 // catches up on anything missed while the line was down (D21).
-export function useMessages(chatId: string, myId: string, unsent: Message[]) {
+// listSeq: the newest number the chat list knows for this chat.
+export function useMessages(chatId: string, myId: string, unsent: Message[], listSeq: number) {
   const [saved, setSaved] = useState<Message[]>([])
   // The other person's bookmarks: my messages up to "delivered" get grey ✓✓, up to "read" teal ✓✓
   const [theirDelivered, setTheirDelivered] = useState(0)
@@ -95,6 +96,19 @@ export function useMessages(chatId: string, myId: string, unsent: Message[]) {
       catchingUp.current = false
     }
   }
+
+  // The chat list knows a newer message than this chat shows: catch up to it.
+  // While the live line is down (Redis down, D24), the list's 60 s re-check is
+  // the only news that comes, so the open chat follows it instead of going stale.
+  const followList = useEffectEvent(() => {
+    if (!loading && !failed && listSeq > gapFreeSeq) catchUp(gapFreeSeq)
+  })
+  useEffect(() => {
+    // catchUp only changes state after it hears back from the server (after
+    // its first await), but the lint rule can't see past the await.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    followList()
+  }, [listSeq])
 
   useLiveEvents((event) => {
     // On the line again: get what was missed while it was down (D21).

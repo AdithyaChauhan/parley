@@ -7,6 +7,7 @@ from app.auth.models import User
 from app.chats.schemas import ChatOut, StartDirectChatRequest
 from app.chats.service import get_or_create_direct_chat, list_my_chats
 from app.db import get_db
+from app.limits import service as limits
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -18,6 +19,8 @@ def start_direct_chat(
     me: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Trying email after email to find out who has an account is "fishing" (D24).
+    limits.enforce(limits.START_CHAT, me.id)
     if body.email == me.email:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You can't start a chat with yourself")
 

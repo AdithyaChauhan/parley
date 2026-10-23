@@ -8,6 +8,7 @@ import type { ChatSummary } from "./types"
 function startChatError(error: unknown) {
   if (error instanceof ApiError && error.status === 404) return "No Parley account with that email."
   if (error instanceof ApiError && error.status === 400) return "That's you."
+  if (error instanceof ApiError && error.status === 429) return "Slow down a moment."
   if (isUnreachable(error)) return "Can't reach Parley."
   return "Something went wrong. Try again."
 }

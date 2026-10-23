@@ -1,5 +1,7 @@
 import uuid
 
+from app.limits import service as limits
+
 
 def _start_chat(client, me, email) -> str:
     response = client.post("/api/chats/direct", json={"email": email}, headers=me)
@@ -76,7 +78,10 @@ def test_message_routes_need_a_login(client):
     ).status_code == 401
 
 
-def test_scrolling_up_loads_30_at_a_time_by_number(client, sign_up):
+def test_scrolling_up_loads_30_at_a_time_by_number(client, sign_up, monkeypatch):
+    # This test is about paging, not limits: lift the send limit (D24) just
+    # for it, so all 70 sends go through.
+    monkeypatch.setattr(limits, "SEND", limits.Rule("send", 1000, 10))
     ana = sign_up("Ana")
     sign_up("Ben")
     chat_id = _start_chat(client, ana, "ben@example.com")

@@ -65,7 +65,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 **D13. Git workflow**
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
-- Adithya makes every commit and writes the message in his own words. Adding a "Co-Authored-By: Claude" line at the end is optional. Adithya decides each time.
+- Adithya makes every commit and writes the message in his own words. Commits never have a "Co-Authored-By: Claude" line.
 - PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T31).
 - Private repo; goes public once live chat works.
 
@@ -141,3 +141,11 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Pub/sub keeps nothing. A lost event is fine because the message is saved first (D9) and the app catches up by number (D21).
 - Tickets live in Redis (`ticket:<t>`, 30 s timer) and are redeemed with `GETDEL`, so any copy can redeem a ticket any copy made, exactly once.
 - Each copy has a `COPY_NAME`, shown in `/api/health`.
+- Pub/sub ignores Redis database numbers, so dev (db 0) and tests (db 15) share channel names. That's harmless because user ids are random UUIDs.
+- Subscribe and unsubscribe on a copy go through one lock. Check it under load in T28.
+
+**D24. Limits, and when Redis is down**
+- Limits use a sliding window in Redis (a sorted set of times, one transaction per check). Too many gives 429 with `Retry-After`.
+- Sends: 20 per 10 s per user. Wrong passwords: 5 per 15 min per email (cleared by a good log-in; locked emails refuse even the right password until the time passes). Any log-in: 30 per 15 min per IP. Sign-ups: 5 per hour per IP. Start-chat: 20 per minute per user. Tickets: 10 per minute per user.
+- Redis is a helper, PostgreSQL is the truth. When Redis is down: sends and history keep working (live pushes are lost and caught up later), online shows as unknown, tickets answer 503, and limits let requests through with a logged warning.
+- The app treats 429 on a send like "waiting": it tries again after `Retry-After`, in order.

@@ -48,6 +48,7 @@ export function Conversation({
     chat.id,
     myId,
     unsent,
+    chat.last_message?.seq ?? 0,
   )
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -101,10 +102,13 @@ export function Conversation({
   const checkRead = useEffectEvent(reportIfRead)
 
   // The messages load, new ones arrive (live or by catch-up) while you watch, or the chat comes into view on a phone.
+  // Also when the chat list brings back an unread count for this open chat: while
+  // the line is down, my "read" waits in the app (it's sent on reconnect), so
+  // the server still counts them as unread.
   // A layout effect, so the unread count clears before the screen is drawn: no flash of a "1".
   useLayoutEffect(() => {
     checkRead()
-  }, [gapFreeSeq, phoneVisible])
+  }, [gapFreeSeq, phoneVisible, chat.unread])
 
   // You come back to the window or tab: what's on screen now counts as read
   useEffect(() => {

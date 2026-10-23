@@ -170,13 +170,20 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
     if chat_id is not None:
         query = query.where(Chat.id == chat_id)
 
+    rows = list(db.execute(query))
+    # Everyone's online status in one trip to Redis, not one per row (D24).
+    # From Redis, not the database: a fast, temporary fact (D22).
+    found = presence.statuses([other_id for _, _, other_id, _, _ in rows if other_id is not None])
+
     chats = []
-    for chat, read_up_to, other_id, other_name, last in db.execute(query):
+    for chat, read_up_to, other_id, other_name, last in rows:
         last_message = None
         if last is not None:
             last_message = LastMessageOut(
                 seq=last.seq, preview=last.body[:PREVIEW_LENGTH], created_at=last.created_at
             )
+        # Groups (v2) have no other person, so nobody to be online.
+        status = found.get(other_id, presence.UNKNOWN)
         chats.append(
             ChatOut(
                 id=chat.id,
@@ -186,9 +193,8 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
                 last_message=last_message,
                 unread=chat.last_seq - read_up_to,
                 other_user_id=other_id,
-                # From Redis, not the database: a fast, temporary fact (D22).
-                online=other_id is not None and presence.is_online(other_id),
-                last_seen=presence.last_seen(other_id) if other_id is not None else None,
+                online=status.online,
+                last_seen=status.last_seen,
             )
         )
     return chats
