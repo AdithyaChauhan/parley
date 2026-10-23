@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.responses import JSONResponse
@@ -8,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
+from app.config import settings
 from app.db import get_db
+from app.live import bus
 from app.live.routes import router as live_router
 from app.messages.routes import router as messages_router
 from app.presence import service as presence
@@ -20,7 +23,15 @@ async def lifespan(app: FastAPI):
     # The live line's Redis client is made here, inside the server's own event
     # loop, and closed on the way out (D22).
     presence.start()
+    # The radio (D23): its listener runs in the background for the copy's
+    # whole life, handing what it hears to this copy's own lines.
+    await bus.start()
+    listener = asyncio.create_task(bus.listen())
     yield
+    listener.cancel()
+    with suppress(asyncio.CancelledError):
+        await listener
+    await bus.stop()
     await presence.stop()
 
 
@@ -33,7 +44,7 @@ api = APIRouter(prefix="/api")
 
 @api.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "copy": settings.copy_name}
 
 
 @api.get("/health/db")

@@ -9,7 +9,7 @@ from app.auth.models import User
 from app.chats.models import ChatMember
 from app.chats.service import get_member, member_ids
 from app.db import get_db
-from app.live.manager import push_from_thread
+from app.live import bus
 from app.messages.models import Message
 from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
 from app.messages.service import add_message
@@ -36,9 +36,10 @@ def send_message(
 
     message, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
     if created:
-        # Saved first (D9), then pushed to everyone in the chat, my other tabs too (D20).
+        # Saved first (D9), then shouted to everyone in the chat, my other tabs
+        # too (D20), on whichever copy their lines are (D23).
         event = {"type": "message.new", "data": MessageOut.model_validate(message).model_dump(mode="json")}
-        push_from_thread(member_ids(db, chat_id), event)
+        bus.publish(member_ids(db, chat_id), event)
     else:
         # A resend: here is the first copy. It pushes nothing; the first copy was already pushed.
         response.status_code = status.HTTP_200_OK

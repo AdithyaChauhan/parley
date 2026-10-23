@@ -185,8 +185,12 @@ def test_a_dead_line_doesnt_stop_bens_other_tab(client, sign_up):
         manager.connect(ben_id, dead_tab)
 
         assert _send(client, ana, chat_id, "still there?").status_code == 201
-
         assert bens_tab.receive_json()["data"]["body"] == "still there?"
+
+        # The radio delivers in the background now (D23), so wait for one more
+        # push: once it arrives, the first delivery has surely finished.
+        _send(client, ana, chat_id, "and now?")
+        assert bens_tab.receive_json()["data"]["body"] == "and now?"
         assert dead_tab not in manager.lines[ben_id]  # dropped from the switchboard
 
 

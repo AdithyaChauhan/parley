@@ -775,3 +775,47 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - How the "alive until" times handle two tabs and a crash: We don't just have one "online" flag; we keep a separate timer for every tab. If you have two tabs open, closing one leaves the other timer running, so you stay online. If your laptop crashes, you never send a "goodbye", but because every ping pushes your timer 60 seconds into the future, the server just waits for that time to pass and automatically wipes the dead tab.
 
 - How Ben's screen learns that Ana went offline (when she closes the tab, and when her tab goes silent): If Ana closes her tab normally, the server gets a "goodbye", deletes her tab, and instantly pushes a presence event to Ben (so he sees it in about 1 second). If her tab goes silent (a crash), there is no goodbye. The server waits for the 60-second timer to expire, and Ben's app checks the chat list every 60 seconds. So, Ben finds out at his next check, which can take up to about 2 minutes total.
+
+---
+
+### Task 21: Two backend copies, live messages cross between them (Redis pub/sub)
+**What was built**
+- `backend/app/live/tickets.py`: tickets live in Redis as `ticket:<t>` with a 30 s Redis timer. `redeem()` uses `GETDEL` (read and delete in one step), so any copy can redeem a ticket any copy made, exactly once. The in-memory list, its lock and its clean-up loop are gone.
+- `backend/app/config.py`, `main.py`: a `COPY_NAME` setting (default "A"), shown in `GET /api/health` as `"copy"`.
+- `backend/app/live/bus.py` (new), the radio:
+  - `publish()` (normal client, for normal routes) and `publish_async()` (async client, for the live line) shout an event on `user:<id>` for each person, in one trip to Redis (a pipeline). Neither ever raises: a failed push must not fail a send (D20).
+  - `match_lines()`: listen on `user:<id>` exactly while that person has a line on this copy. On subscribe it waits for Redis's "subscribed" confirmation. A lock and "look at the lines right now" stop a closing tab and an opening tab from crossing.
+  - `listen()`: one background loop for the copy's whole life. It hands each event it hears to this copy's own lines, wakes up lines waiting for their confirmation, skips bad events, and listens again 1 s after Redis drops (redis-py subscribes to every channel again by itself).
+  - `start()` / `stop()`: the listening connection, the lock and the bookkeeping are made in the server's event loop.
+- `backend/app/live/manager.py`: only this copy's own lines now. `send_to_user()` sends ready-made text. `send_to_users()` and `push_from_thread()` are gone.
+- `backend/app/main.py`: the lifespan also starts the radio and runs `listen()` in the background, and cancels it and closes the radio on the way out.
+- `backend/app/live/routes.py`: a new line runs `match_lines()` (listen, confirmed), then "online", then `hello`. Its end runs `match_lines()` inside the shielded goodbye. `receipt`, `typing` and `presence` go through `publish_async()`.
+- `backend/app/messages/routes.py`: `message.new` goes through `publish()`. No more hand-off from the worker thread to the async side.
+- `frontend/vite.config.ts`: the proxy target comes from `PARLEY_API_PORT` (default 8000), so a second Vite on 5174 can talk to copy B on 8001.
+- Tests (67 in all):
+  - `test_live.py`: the expiry test lets Redis expire the ticket for real (timer cut to 1 ms with `PEXPIRE`), because Redis's clock can't be faked. New: a ticket sits in Redis with a timer of 30 s or less and is gone once used.
+  - `test_health.py`: expects `"copy": "A"`.
+  - `test_live_messages.py`: the dead-line test waits for a second push before checking, because delivery now happens in the background.
+  - `test_bus.py` (new): a shout published straight into Redis (as another copy would) reaches Ben's line; this copy listens for Ben only while he has a line here (two tabs, close one, close both); bad events are skipped and the next good one still arrives.
+- Checked by hand: the listener survives a Redis restart. Two copies (A on 8000 via 5173, B on 8001 via 5174): messages, ticks, typing and online status cross. Stopping copy A turns Ana grey on Ben's screen; starting it again catches Ana up, with nothing lost and no doubles.
+
+**New ideas**
+- Several copies of one backend: the same code running two (later many) times, to share the load and survive one copy dying. Anything a copy keeps only in its own memory (tickets, the switchboard) is invisible to the others.
+- What can't move and what can: an open line (WebSocket) is stuck to the copy that accepted it. A ticket is just data, so it moves into Redis, where every copy can see it.
+- Pub/sub, a radio: `PUBLISH user:<Ben>` shouts on a channel; every connection that did `SUBSCRIBE user:<Ben>` hears it. The sender doesn't know or care where Ben is.
+- Channel per person, listened to only where needed: a copy subscribes to `user:<Ben>` while Ben has a line there, so it never hears about people it can't deliver to.
+- Pub/sub keeps nothing: a shout nobody hears is gone. That's fine here, because the message is saved first (D9) and the app catches up by number (D21). Pub/sub carries the "now", PostgreSQL keeps the truth.
+- Every push goes through the radio, even when both people are on the same copy. One path for everything means no special cases, and the tests exercise the real path.
+- Wait for the confirmation: Redis confirms a subscription a moment after we ask. Saying `hello` only after the confirmation means nothing shouted after `hello` can slip past.
+- A background task: `listen()` runs alongside everything else for the copy's whole life, started and stopped by the lifespan.
+- One bad event mustn't stop the radio: each event is handled inside its own try/except, so the loop goes on for everyone else.
+- Atomic "read and delete" (`GETDEL`): two copies trying the same ticket at the same moment can't both win.
+- Pub/sub ignores Redis database numbers: channels are shared between database 0 and 15. Harmless here, because user ids are random UUIDs.
+- Cookies ignore port numbers: localhost:5173 and localhost:5174 share cookies, so two people need two separate windows (normal + Incognito).
+
+**In my words** (Adithya writes this)
+- Why two copies broke live chat before pub/sub: Because a server only knows about WebSockets that are physically connected to it. If Ana was connected to Copy A and Ben was connected to Copy B, Copy A would save Ana's message but look at its own local switchboard, see no Ben, and drop the push. Copy B had Ben's line, but never knew a message existed.
+
+- How a message from copy A reaches Ben's line on copy B: We use Redis as a radio (pub/sub). Copy A saves the message, then publishes (shouts) it to a Redis channel named after Ben. Copy B is subscribed (listening) to Ben's channel because Ben's line is connected there. Copy B hears the event and sends it down Ben's WebSocket.
+
+- Why losing a pub/sub shout is OK in Parley: Because Redis pub/sub doesn't save anything; if nobody hears the shout, it vanishes. That is perfectly fine because we always save the message to PostgreSQL first (the filing cabinet). If the live radio shout is lost, the app just uses its catch-up logic (after=<number>) to ask the database for anything it missed.

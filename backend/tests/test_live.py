@@ -1,9 +1,11 @@
+import time
 import uuid
 
 import pytest
 from fastapi import WebSocketDisconnect
 
-from app.live import manager, tickets
+from app.live import manager
+from app.presence import service as presence
 
 
 def _ticket(client, me) -> str:
@@ -44,14 +46,29 @@ def test_a_ticket_works_once(client, sign_up):
     assert _hang_up_code(client, "made-up") == 4401
 
 
-def test_an_expired_ticket_is_refused(client, sign_up, monkeypatch):
+def test_an_expired_ticket_is_refused(client, sign_up):
     ticket = _ticket(client, sign_up("Ana"))
 
-    # Fake the clock: jump 31 seconds ahead instead of waiting.
-    later = tickets._now() + 31
-    monkeypatch.setattr(tickets, "_now", lambda: later)
+    # Redis keeps the 30 s timer, and its clock can't be faked. So shorten
+    # the timer to 1 millisecond instead of waiting, and let Redis expire it.
+    presence.client.pexpire(f"ticket:{ticket}", 1)
+    time.sleep(0.01)
 
     assert _hang_up_code(client, ticket) == 4401
+
+
+def test_a_ticket_lives_in_redis_for_30_seconds_and_is_gone_once_used(client, sign_up):
+    ticket = _ticket(client, sign_up("Ana"))
+    key = f"ticket:{ticket}"
+
+    # In Redis, so any backend copy can redeem it (D23), with its own timer.
+    assert 0 < presence.client.ttl(key) <= 30
+
+    with client.websocket_connect(f"/api/live?ticket={ticket}") as line:
+        assert line.receive_json()["type"] == "hello"
+
+    # GETDEL took it out, so a second redeem, on any copy, finds nothing.
+    assert presence.client.exists(key) == 0
 
 
 def test_a_good_ticket_gets_hello_with_my_id(client, sign_up):

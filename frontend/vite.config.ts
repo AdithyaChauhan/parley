@@ -14,9 +14,11 @@ export default defineConfig({
   // Pass /api/... on to FastAPI, so the browser sees one site (D17)
   // and the refresh cookie works without cross-site settings.
   // ws: true also passes the live line (WebSocket at /api/live) through (D19).
+  // PARLEY_API_PORT picks the backend copy (D23): 8000 (copy A) unless set,
+  // for example PARLEY_API_PORT=8001 for copy B.
   server: {
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8000', ws: true },
+      '/api': { target: `http://127.0.0.1:${process.env.PARLEY_API_PORT ?? '8000'}`, ws: true },
     },
   },
 })
