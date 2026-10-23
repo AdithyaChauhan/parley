@@ -14,6 +14,7 @@ from app.live import bus
 from app.messages.models import Message
 from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
 from app.messages.service import add_message
+from app.notify import publisher as notify
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 
@@ -39,10 +40,13 @@ def send_message(
 
     message, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
     if created:
+        members = member_ids(db, chat_id)
         # Saved first (D9), then shouted to everyone in the chat, my other tabs
         # too (D20), on whichever copy their lines are (D23).
         event = {"type": "message.new", "data": MessageOut.model_validate(message).model_dump(mode="json")}
-        bus.publish(member_ids(db, chat_id), event)
+        bus.publish(members, event)
+        # And a "notify them if they don't read it" job for everyone but me (D25).
+        notify.publish(message, [user_id for user_id in members if user_id != me.id])
     else:
         # A resend: here is the first copy. It pushes nothing; the first copy was already pushed.
         response.status_code = status.HTTP_200_OK

@@ -13,18 +13,20 @@ ENV_FILE = BACKEND_DIR.parent / ".env"
 
 
 class _TestSettings(BaseSettings):
-    # Reads TEST_DATABASE_URL and TEST_REDIS_URL from the shell (CI) or from .env (laptop).
+    # Reads TEST_DATABASE_URL, TEST_REDIS_URL and TEST_RABBITMQ_URL from the shell (CI) or from .env (laptop).
     # We can't use app.config here: importing it would build the app's
     # settings with the real DATABASE_URL before we get to change it.
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     test_database_url: str
     test_redis_url: str
+    test_rabbitmq_url: str
 
 
 _test_settings = _TestSettings()
 TEST_DATABASE_URL = _test_settings.test_database_url
 TEST_REDIS_URL = _test_settings.test_redis_url
+TEST_RABBITMQ_URL = _test_settings.test_rabbitmq_url
 
 # The tests empty tables, so refuse to run against anything but a test database.
 if not make_url(TEST_DATABASE_URL).database.endswith("_test"):
@@ -34,16 +36,28 @@ if not make_url(TEST_DATABASE_URL).database.endswith("_test"):
 if urlparse(TEST_REDIS_URL).path != "/15":
     raise RuntimeError("TEST_REDIS_URL must point at Redis database 15, like redis://localhost:6379/15")
 
+# And RabbitMQ: the tests empty its boxes, so only the parley_test vhost (D25).
+if urlparse(TEST_RABBITMQ_URL).path != "/parley_test":
+    raise RuntimeError("TEST_RABBITMQ_URL must point at the parley_test vhost, like amqp://...:5672/parley_test")
+
 # The app reads DATABASE_URL once, when it is first imported. A real
 # environment variable wins over .env, so setting it here, before any test
 # imports the app, points the whole app at the test database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["REDIS_URL"] = TEST_REDIS_URL
+os.environ["RABBITMQ_URL"] = TEST_RABBITMQ_URL
+# Timers of a second or less, not minutes. 1 s for the first wait, so a test
+# can still catch a new job in notify.wait.
+os.environ["NOTIFY_WAIT_MS"] = "1000"
+os.environ["NOTIFY_RETRY_MS"] = "[100, 200, 300]"
+# Off, even if .env has it on for a demo. Tests that want it set it themselves.
+os.environ["NOTIFY_FAKE_FAIL_TIMES"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402  (must come after the line above)
 
 from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.notify import publisher, queues  # noqa: E402
 from app.presence import service as presence  # noqa: E402
 
 
@@ -53,12 +67,28 @@ def _empty_all_tables():
         connection.execute(text("TRUNCATE users, sessions, chats, chat_members, messages"))
     # And the whiteboard: every presence and last seen note (Redis database 15).
     presence.client.flushdb()
+    # And the post office: every box in the parley_test vhost, and the
+    # publisher's connection and 10 s skip.
+    connection = queues.connect()
+    channel = connection.channel()
+    for box in queues.ALL:
+        channel.queue_purge(box)
+    connection.close()
+    publisher.reset()
 
 
 @pytest.fixture(scope="session")
 def test_database():
     """Build the tables once per test run, with the same migrations as the real database."""
     command.upgrade(Config(str(BACKEND_DIR / "alembic.ini")), "head")
+    # Fresh boxes with the short test timers. A box made earlier with other
+    # timers would be refused (error 406), so delete them all first (D25).
+    connection = queues.connect()
+    channel = connection.channel()
+    for box in queues.ALL:
+        channel.queue_delete(box)
+    queues.declare(channel)
+    connection.close()
 
 
 @pytest.fixture
@@ -97,3 +127,16 @@ def db(test_database):
         yield session
 
     _empty_all_tables()
+
+
+@pytest.fixture
+def rabbit(test_database):
+    """A channel to the parley_test vhost, with confirms on, like the worker's.
+    Empties every box afterwards, so every test starts clean."""
+    connection = queues.connect()
+    channel = connection.channel()
+    channel.confirm_delivery()
+    yield channel
+    for box in queues.ALL:
+        channel.queue_purge(box)
+    connection.close()

@@ -27,5 +27,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # The post office for notification jobs (D25). Port 5672 is for programs,
+  # 15672 is the web page (log in with the user and password below).
+  rabbitmq:
+    image: rabbitmq:4.3.7-management
+    # RabbitMQ files its data under its own name, which comes from the
+    # hostname. A fixed one means it finds its old data after a rebuild.
+    hostname: parley-rabbitmq
+    environment:
+      # The built-in guest user only works inside the container, so make our own.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    # Unlike Redis, a volume: parked jobs in notify.failed must survive
+    # `docker compose down`.
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      # Healthy only once the port takes connections, not just when it's booting.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
 volumes:
   db_data:
+  rabbitmq_data:

@@ -19,55 +19,6 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 22b: Fix: reads and ticks reach the server without the live line (teaching mode for the backend, fast mode for the app)
-- **Branch:** `fix/receipts-over-http`
-- **The bug (found by Adithya in T22's Redis-down check):**
-  - Redis stops, so the live line is down.
-  - Ben opens Ana's chat. The app wants to send "read #42", but the live line is its only way to send that, so it never reaches the server.
-  - The server still says Ben read up to #41, so unread = 42 − 41 = 1.
-  - Ben goes back to the chat list, and the badge "1" comes back.
-  - It also breaks T23: the worker checks `read_up_to` and would notify Ben about a message he already read.
-- **Why:** `read_up_to` lives in PostgreSQL (the truth), but the only way to move it goes through Redis (ticket and live line). Redis is only a helper (D24), so the bookmark must not depend on it.
-
-**Example first (Claude Code shows this before any code):**
-```
- live line open?  yes → send {"type":"read","data":{"chat_id":..,"seq":42}} on the line (as today)
-                  no  → POST /api/chats/<chat_id>/read {"seq": 42} → saved in PostgreSQL → 200
-                        both doors call the same function: forward only, never past last_seq
- badge = newest − max(server's read_up_to, highest number this app has already shown)
-       → never jumps back while a read is on its way
-```
-
-**Steps:**
-1. **Backend:**
-   - Add `POST /api/chats/{chat_id}/read` and `POST /api/chats/{chat_id}/delivered`, each taking `{"seq": N}` (the same name the live line already uses).
-   - Both call the same function the live line uses today, with the same rules: only members (404 otherwise), forward only, never past `last_seq`, `read` also lifts `delivered`, and the receipt is pushed via the bus (never raises). Each returns both bookmarks.
-   - If the bookmark didn't move, push no receipt (check whether that's already true on the live line, and make both doors match).
-   - No new rate limit: it's one small update that only moves forward.
-2. **App (fast mode):**
-   - `read` and `delivered` go over the live line when it's open, and over HTTP once the line is known to be down (it dropped, or a connect failed). They don't use HTTP while the line is first connecting.
-   - If HTTP fails too (offline), the app keeps the highest number per chat and sends it once it's back online or reconnected.
-   - The unread badge uses the higher of the server's `read_up_to` and what this app has already shown.
-   - Messages that arrive through the chat-list catch-up (T22) also send `delivered`.
-3. **Tests:**
-   - HTTP read and delivered: they move forward only, are capped at `last_seq`, and a non-member gets 404. Read lifts delivered.
-   - With Redis down, they still give 200 and the bookmark is saved.
-   - After an HTTP read, the chat list shows unread 0.
-   - A read that doesn't move the bookmark pushes nothing.
-- **Added during the task (approved):** while the line is down, the open chat re-checks `messages?after=<gap-free seq>` every 60 s (in `useMessages.ts`), so Ana's ticks update within about a minute during an outage (D24).
-- **Done when:**
-  - `docker compose stop redis`: Ana sends, and Ben sees it within about a minute. Ben opens the chat and goes back, and there's no badge. Reload, and still no badge.
-  - Still during the outage: once Ben reads it, Ana's tick turns teal within about a minute.
-  - `docker compose start redis`: once both reconnect, Ana's message shows read (teal) without Ben doing anything.
-  - With Redis up, ticks and typing work as before.
-  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
-
-"In my words" prompt: why the read bookmark gets an HTTP door but typing doesn't.
-
----
-
-## Next up (don't start until Task 22b is merged)
-
 ### Task 23: Notification worker with retries and a failed-jobs queue (RabbitMQ) (teaching mode, friend style)
 - **Branch:** `feature/notify-worker`
 - **Goal:** when Ana messages Ben and Ben doesn't read it within a few seconds, a separate worker program "notifies" Ben. If the notifier fails, the job is retried later. If it keeps failing, it's parked in a failed-jobs queue instead of being lost or retried forever. In this task the notifier only writes a log line. T24 swaps in real browser push.
@@ -172,7 +123,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T20. Online and last seen, with automatic expiry
 - [x] T21. Two backend copies; live messages cross between them (pub/sub)
 - [x] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
-- [ ] T22b. Fix: reads and ticks reach the server without the live line (HTTP door for `read` and `delivered`)
+- [x] T22b. Fix: reads and ticks reach the server without the live line (HTTP door for `read` and `delivered`)
 
 ### Phase 6: RabbitMQ
 - [ ] T23. Notification worker with retries and a failed-jobs queue

@@ -164,4 +164,8 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Each job waits 5 s first (`notify.wait`), then is skipped if the recipient has already read it.
 - Retries wait 10 s, 1 min, then 5 min, using queues with their own timers that fall back into `notify`. After try 4 the job goes to `notify.failed`. A broken job goes straight there. `replay` sends failed jobs back.
 - Delivery is "at least once": the worker acks only after finishing, so a job can run twice. Redis `notified:<message>:<user>` (24 h) stops a double notification.
+- Setup: `rabbitmq:4.3.7-management` (4.4.0 was only 3 days old), `pika==1.4.4`. The RabbitMQ user and password come from `.env` (the built-in guest user only works inside the container). It has a named volume and a fixed hostname, so parked jobs survive `docker compose down`. Tests use the `parley_test` vhost only.
+- The publisher declares the queues each time it connects (the first send, and after every reconnect), so the backend starts and chats fine with RabbitMQ down. One shared connection behind a lock (wait at most 1 s). After a failed connect, it skips publishing for 10 s and logs it once, so an outage doesn't add 1 s to every send.
+- Timers live on the queues: changing one means deleting that queue first (RabbitMQ refuses a different timer, error 406).
+- The notifier gets the recipient's id and name (`send(user_id, user_name, title)`). A job whose message or member is gone is skipped, not retried.
 - The send never waits on RabbitMQ: if publishing fails, the message is still saved and returned, and that notification is lost. Accepted for now. The full fix (an outbox table written in the same transaction as the message) is a known next step.
