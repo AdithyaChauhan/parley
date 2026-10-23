@@ -109,10 +109,14 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 **D20. Live events and ticks**
 - Server to app: `message.new` (a saved message) and `receipt` (someone's bookmark moved).
 - App to server: `delivered`, `read` and `typing`. `delivered` and `read` carry the chat id and the highest number the app has (for `read`: has shown on screen in an open, focused chat). `read` also lifts `delivered`.
-- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`) and goes to everyone in the chat, including the reader's own other tabs. Unread is always (newest number in the chat) − (my read_up_to).
+- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`) and goes to everyone in the chat, including the reader's own other tabs. Unread is always (newest number in the chat) − (my read_up_to). The app uses the higher of the server's read_up_to and what it has already shown, so a badge never comes back while a read is on its way.
 - Sending counts as reading: when someone's message is saved as #N, the server moves their own bookmarks to #N without a receipt. So a message from someone at #N also means their bookmarks are at least #N, and the app applies this to pushed messages. History and catch-up pages already carry the real bookmarks.
 - Known simplification: in an offline race (both people's waiting messages go out together), this can show "read" a few seconds before the sender actually sees the other message. Accepted.
 - `typing` is passed on to the other members and never saved.
+- `delivered` and `read` also have an HTTP door: `POST /api/chats/{chat_id}/delivered` and `/read`, body `{"seq": N}` (the same name the live line uses). The reply carries both bookmarks. Bookmarks (kept in PostgreSQL) never depend on Redis. `typing` stays live-only, since an old "typing..." is useless.
+- One shared function, `save_bookmark`, serves both doors: it saves the bookmark, then pushes the receipt with the normal Redis client (also when called from the live line's worker thread).
+- The app uses the HTTP door only once the line is known to be down (it dropped, or a connect failed, such as a ticket 503). It doesn't use it while the line is first connecting. It sends only what the server hasn't confirmed yet.
+- A bookmark that doesn't move pushes no receipt.
 - Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
 - A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).
 
@@ -123,12 +127,14 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - When the browser reports "offline", the app closes the line itself and reconnects as soon as it reports "online".
 - `ping`/`pong` keep D19's shape: `pong` is `{"type":"pong","data":{}}`, and an event with no `data` counts as `{}`.
 - Messages sent while offline wait in order and are sent one at a time when the line is back, each with its original `client_msg_id` (no doubles, D18).
+- The open chat also catches up when the chat list (re-checked every 60 s) shows a higher message number than it has. So during an outage, Ben sees Ana's message within about a minute with no reload.
 
 **D22. Redis and online status**
 - Redis (official image, pinned version) runs in Docker Compose. Python talks to it with the `redis` package: the normal client in normal routes, the async client on the live line.
 - Redis holds fast, temporary facts (online status, and later tickets and pub/sub). PostgreSQL stays the only home for anything that must never be lost.
 - Online status is per tab: `presence:<user>` is a sorted set of tab id → "alive until" (now + 60 s), refreshed by every ping. Online means at least one tab is still alive. A crashed tab goes offline by itself when its time passes.
 - `last_seen:<user>` is updated on every ping and on close.
+- Locally, `REDIS_URL` uses `127.0.0.1`, not `localhost` (on Windows, `localhost` costs about 1 s per try when Redis is down).
 - Chat rows carry `other_user_id` (empty for groups), so a `presence` event can update just the matching row.
 - "Online" is recorded and pushed before `hello` is sent, and the goodbye (`tab_closed` plus the offline push) is shielded for up to 5 s so it finishes even during shutdown.
 - Tests use `TEST_REDIS_URL` (database 15), wipe it after each test, and refuse to run on any other.
@@ -149,3 +155,13 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Sends: 20 per 10 s per user. Wrong passwords: 5 per 15 min per email (cleared by a good log-in; locked emails refuse even the right password until the time passes). Any log-in: 30 per 15 min per IP. Sign-ups: 5 per hour per IP. Start-chat: 20 per minute per user. Tickets: 10 per minute per user.
 - Redis is a helper, PostgreSQL is the truth. When Redis is down: sends and history keep working (live pushes are lost and caught up later), online shows as unknown, tickets answer 503, and limits let requests through with a logged warning.
 - The app treats 429 on a send like "waiting": it tries again after `Retry-After`, in order.
+- Redis clients give up fast: 1 s connect timeout. The normal client tries once. The async (live line) client keeps one quick retry, so lines survive a Redis restart.
+- When Redis drops, open live lines close cleanly (code 1011) and the app reconnects with its backoff (D21).
+- During a Redis outage, bookmarks still save (HTTP door, D20). While the live line is down, the open chat also asks for `messages?after=<gap-free seq>` every 60 s, in step with the chat list's re-check. That reply carries both bookmarks, so the other person's ticks update within about a minute, and instantly again once the line is back.
+
+**D25. Notifications (RabbitMQ)**
+- RabbitMQ carries notification jobs to a separate worker. Python uses `pika`. Jobs carry ids and numbers only, never message text (D12).
+- Each job waits 5 s first (`notify.wait`), then is skipped if the recipient has already read it.
+- Retries wait 10 s, 1 min, then 5 min, using queues with their own timers that fall back into `notify`. After try 4 the job goes to `notify.failed`. A broken job goes straight there. `replay` sends failed jobs back.
+- Delivery is "at least once": the worker acks only after finishing, so a job can run twice. Redis `notified:<message>:<user>` (24 h) stops a double notification.
+- The send never waits on RabbitMQ: if publishing fails, the message is still saved and returned, and that notification is lost. Accepted for now. The full fix (an outbox table written in the same transaction as the message) is a known next step.

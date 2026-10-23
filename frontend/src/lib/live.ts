@@ -14,6 +14,14 @@ const listeners = new Set<(event: LiveEvent) => void>()
 const delivered = new Map<string, number>()
 // The same for "read": the highest number shown on screen, per chat
 const read = new Map<string, number>()
+const wanted = { delivered, read }
+// What the server is known to have, per chat: sent on the line, or answered
+// by the HTTP door. Only what's above it still needs sending (D20).
+const confirmed = { delivered: new Map<string, number>(), read: new Map<string, number>() }
+// The line is known to be down: it dropped, or a connect failed (like a
+// ticket 503 while Redis is down). Then bookmarks take the HTTP door (D20).
+// Not while it's first connecting: hello sends everything then.
+let lineDown = false
 // When this tab last sent "typing", per chat (milliseconds)
 const lastTyping = new Map<string, number>()
 
@@ -36,12 +44,35 @@ function send(type: string, data: object) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type, data }))
 }
 
+// Gets this chat's "delivered" or "read" to the server, through whichever door is open (D20)
+function sendBookmark(kind: "delivered" | "read", chatId: string) {
+  const seq = wanted[kind].get(chatId) ?? 0
+  if (seq <= (confirmed[kind].get(chatId) ?? 0)) return // the server has it already
+  if (socket?.readyState === WebSocket.OPEN) {
+    send(kind, { chat_id: chatId, seq })
+    confirmed[kind].set(chatId, seq)
+  } else if (lineDown) {
+    // The HTTP door. If that fails too (offline), it stays unconfirmed and goes
+    // again after the next drop, when the browser is back online, or on reconnect.
+    api(`/chats/${chatId}/${kind}`, { method: "POST", body: { seq } })
+      .then(() => confirmed[kind].set(chatId, Math.max(seq, confirmed[kind].get(chatId) ?? 0)))
+      .catch(() => {})
+  }
+}
+
+// Everything the server doesn't have yet, in every chat
+function sendAllBookmarks() {
+  for (const kind of ["delivered", "read"] as const) {
+    for (const chatId of wanted[kind].keys()) sendBookmark(kind, chatId)
+  }
+}
+
 // "This device has every message in this chat up to #seq" (D20).
 // Only a higher number than before is sent; the server ignores anything else anyway.
 export function reportDelivered(chatId: string, seq: number) {
   if (seq <= (delivered.get(chatId) ?? 0)) return
   delivered.set(chatId, seq)
-  send("delivered", { chat_id: chatId, seq })
+  sendBookmark("delivered", chatId)
 }
 
 // "I've seen every message in this chat up to #seq, on screen" (D20). Only the
@@ -49,7 +80,13 @@ export function reportDelivered(chatId: string, seq: number) {
 export function reportRead(chatId: string, seq: number) {
   if (seq <= (read.get(chatId) ?? 0)) return
   read.set(chatId, seq)
-  send("read", { chat_id: chatId, seq })
+  sendBookmark("read", chatId)
+}
+
+// The highest number this tab has shown on screen in this chat. The chat
+// list never counts those as unread, even before the server has heard (D20).
+export function shownUpTo(chatId: string) {
+  return read.get(chatId) ?? 0
 }
 
 // "I'm typing in this chat", at most once every 3 seconds. Never saved (D20).
@@ -136,11 +173,14 @@ export function useLiveConnection() {
           // The server took our ticket: a good connection, so the next drop waits 1 s again
           clearTimeout(pongTimer)
           failures = 0
+          lineDown = false
           setStatus("online")
           startHeartbeat()
-          // Tell it what this tab already has
-          for (const [chatId, seq] of delivered) send("delivered", { chat_id: chatId, seq })
-          for (const [chatId, seq] of read) send("read", { chat_id: chatId, seq })
+          // Tell it everything this tab has, even what went out before: a send on
+          // a dying line can be lost. Anything the server already has, it ignores.
+          confirmed.delivered.clear()
+          confirmed.read.clear()
+          sendAllBookmarks()
         }
         // hello goes to the listeners too: it's their cue to catch up (D21)
         announce(event)
@@ -157,6 +197,10 @@ export function useLiveConnection() {
       socket = null
       if (stopped) return
       setStatus("reconnecting")
+      // Known to be down now (a drop, or a failed connect such as a ticket 503):
+      // whatever the server doesn't have yet goes through the HTTP door (D20)
+      lineDown = true
+      sendAllBookmarks()
       const wait = Math.min(FIRST_WAIT_MS * 2 ** failures, LONGEST_WAIT_MS) + Math.random() * RANDOM_EXTRA_MS
       failures += 1
       clearTimeout(retryTimer)
@@ -183,7 +227,10 @@ export function useLiveConnection() {
     }
 
     // Skip the wait and try now: the network is back, or the tab is in front again (D21)
-    const onOnline = () => connect()
+    const onOnline = () => {
+      connect()
+      sendAllBookmarks() // the HTTP door, if the line is still down
+    }
     const onVisible = () => {
       if (document.visibilityState === "visible") connect()
     }
@@ -209,6 +256,9 @@ export function useLiveConnection() {
       // Someone else may log in next in this tab
       delivered.clear()
       read.clear()
+      confirmed.delivered.clear()
+      confirmed.read.clear()
+      lineDown = false
       lastTyping.clear()
     }
   }, [])

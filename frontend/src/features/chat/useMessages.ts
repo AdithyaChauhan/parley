@@ -25,8 +25,14 @@ function gapFree(saved: Message[]) {
 // then my unsaved ones from the outbox (useOutbox). Loads the newest 30, loads
 // older ones on request, takes in new messages and ticks pushed live (D20), and
 // catches up on anything missed while the line was down (D21).
-// listSeq: the newest number the chat list knows for this chat.
-export function useMessages(chatId: string, myId: string, unsent: Message[], listSeq: number) {
+// The chat list's side of things, for the re-check below
+type ListCheck = {
+  seq: number // the newest number the chat list knows for this chat
+  checks: number // goes up each time the chat list re-checks the server
+  lineDown: boolean // the live line dropped or failed
+}
+
+export function useMessages(chatId: string, myId: string, unsent: Message[], list: ListCheck) {
   const [saved, setSaved] = useState<Message[]>([])
   // The other person's bookmarks: my messages up to "delivered" get grey ✓✓, up to "read" teal ✓✓
   const [theirDelivered, setTheirDelivered] = useState(0)
@@ -97,18 +103,22 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
     }
   }
 
-  // The chat list knows a newer message than this chat shows: catch up to it.
-  // While the live line is down (Redis down, D24), the list's 60 s re-check is
-  // the only news that comes, so the open chat follows it instead of going stale.
-  const followList = useEffectEvent(() => {
-    if (!loading && !failed && listSeq > gapFreeSeq) catchUp(gapFreeSeq)
+  // Each time the chat list re-checks the server (every 60 s while a chat is
+  // open), this chat re-checks too, with one request for either reason:
+  //   - the list knows a newer message than this chat shows (D21), or
+  //   - the live line is down, so nothing is pushed: the page also carries the
+  //     other person's bookmarks, so my ticks move within a minute (D24).
+  // Once the line is back, only the first reason is left: pushes do the rest.
+  const recheck = useEffectEvent(() => {
+    if (loading || failed) return
+    if (list.seq > gapFreeSeq || list.lineDown) catchUp(gapFreeSeq)
   })
   useEffect(() => {
     // catchUp only changes state after it hears back from the server (after
     // its first await), but the lint rule can't see past the await.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    followList()
-  }, [listSeq])
+    recheck()
+  }, [list.checks])
 
   useLiveEvents((event) => {
     // On the line again: get what was missed while it was down (D21).
