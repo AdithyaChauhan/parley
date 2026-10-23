@@ -866,6 +866,8 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Windows vs Linux: on Windows, a connection to a port nobody listens on takes about 1 s per address to fail (and `localhost` tries two addresses). On Linux it fails instantly. Using `127.0.0.1` halves it in dev.
 
 **In my words** (Adithya writes this)
-- How the sliding window counts the last 10 seconds:
-- Why limits let requests through when Redis is down, but PostgreSQL doesn't get the same treatment:
-- Why a wrong-password limit is per email and also per IP:
+- How the sliding window counts the last 10 seconds: Every time you send a message, the app writes down the exact time in Redis. To check the limit, it first deletes any timestamps older than 10 seconds. Then it counts how many are left. If the count is over 20, it deletes your new timestamp and rejects the request. Because the window slides with you, you can't cheat the system by sending 20 messages at the end of a minute and 20 at the start of the next.
+
+- Why limits let requests through when Redis is down, but PostgreSQL doesn't get the same treatment: Redis only holds temporary helpers like spam limits and online dots. If Redis dies, it is better to let a little spam through than to crash the whole app (failing open). PostgreSQL, however, holds the actual messages. If the database is down, we cannot save anything, and a chat app that can't save messages is useless. So we must fail closed and show an error.
+
+- Why a wrong-password limit is per email and also per IP: They stop two different attacks. The per-email limit stops someone from guessing Ana's password from 1,000 different computers. The per-IP limit stops someone from using one computer to guess 1,000 different people's passwords. You need both to block targeted attacks and broad spray attacks.
