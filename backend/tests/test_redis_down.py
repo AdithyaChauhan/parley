@@ -82,6 +82,67 @@ def test_the_chat_list_still_loads_with_online_unknown(client, sign_up, stop_red
         assert row["last_seen"] is None
 
 
+def test_an_http_read_still_saves(client, sign_up, stop_redis):
+    ana, ben = sign_up("Ana"), sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+    _send(client, ana, chat_id)
+    stop_redis()
+
+    # The HTTP door (D20): the bookmark is in PostgreSQL, so no Redis is needed.
+    # Only the receipt push is lost; Ana's ticks fill in when her line is back.
+    reply = client.post(f"/api/chats/{chat_id}/read", json={"seq": 1}, headers=ben)
+    assert reply.status_code == 200
+    assert reply.json() == {"delivered_up_to": 1, "read_up_to": 1}
+    # Saved: no badge for Ben, even with Redis still down.
+    assert client.get("/api/chats", headers=ben).json()[0]["unread"] == 0
+
+
+def _my_id(client, me) -> str:
+    return client.get("/api/auth/me", headers=me).json()["id"]
+
+
+def _anas_recheck(client, ana, chat_id, after):
+    """What Ana's open chat asks every 60 s while her line is down (D24):
+    the messages after her gap-free number, and both people's bookmarks."""
+    reply = client.get(f"/api/chats/{chat_id}/messages?after={after}", headers=ana)
+    assert reply.status_code == 200
+    return reply.json()
+
+
+def _bookmarks_of(page, user_id) -> tuple[int, int]:
+    member = next(m for m in page["members"] if m["user_id"] == user_id)
+    return member["delivered_up_to"], member["read_up_to"]
+
+
+def test_during_an_outage_ben_reads_only_and_anas_recheck_shows_it(client, sign_up, stop_redis):
+    ana, ben = sign_up("Ana"), sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+    _send(client, ana, chat_id)  # #1
+    stop_redis()
+
+    # Ben reads #1 through the HTTP door, and doesn't reply.
+    assert client.post(f"/api/chats/{chat_id}/read", json={"seq": 1}, headers=ben).status_code == 200
+
+    # Ana's re-check: nothing new, but Ben's bookmarks say read, so her tick turns teal.
+    page = _anas_recheck(client, ana, chat_id, after=1)
+    assert page["messages"] == []
+    assert _bookmarks_of(page, _my_id(client, ben)) == (1, 1)
+
+
+def test_during_an_outage_ben_replies_and_anas_recheck_brings_it_with_his_ticks(client, sign_up, stop_redis):
+    ana, ben = sign_up("Ana"), sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+    _send(client, ana, chat_id)  # #1
+    stop_redis()
+
+    _send(client, ben, chat_id)  # Ben's reply, #2: sending counts as reading (D20)
+
+    # Ana's re-check brings Ben's reply and his bookmarks, both at #2.
+    page = _anas_recheck(client, ana, chat_id, after=1)
+    assert [message["seq"] for message in page["messages"]] == [2]
+    assert _bookmarks_of(page, _my_id(client, ben)) == (2, 2)
+
+
 def test_a_ticket_gets_503(client, sign_up, stop_redis):
     ana = sign_up("Ana")
     stop_redis()

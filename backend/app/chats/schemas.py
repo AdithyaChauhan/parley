@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth.schemas import Email
 
@@ -14,7 +14,22 @@ class StartDirectChatRequest(BaseModel):
     email: Email
 
 
+class BookmarkIn(BaseModel):
+    """"delivered": the app has every message in this chat up to seq.
+    "read": it has shown them on screen, in an open chat, in front (D20).
+    The body of the HTTP door; the live line adds the chat id to it."""
+
+    seq: int = Field(ge=1)
+
+
 # --- What goes out ---
+
+
+class BookmarksOut(BaseModel):
+    """My two bookmarks in a chat, after a "delivered" or "read" (D9)."""
+
+    delivered_up_to: int
+    read_up_to: int
 
 
 class LastMessageOut(BaseModel):

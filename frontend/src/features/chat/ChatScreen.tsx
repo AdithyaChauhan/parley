@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useState } from "react"
 import { useAuth, type User } from "@/features/auth/useAuth"
 import { api } from "@/lib/api"
-import { reportDelivered, useLiveConnection, useLiveEvents } from "@/lib/live"
+import { reportDelivered, shownUpTo, useLiveConnection, useLiveEvents } from "@/lib/live"
 import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
@@ -20,6 +20,17 @@ function reportListDelivered(list: ChatSummary[]) {
   }
 }
 
+// The server's unread counts, but never more than this tab knows is unread:
+// newest − the higher of (the server's read bookmark, what this tab has shown).
+// So a badge never comes back while my "read" is still on its way (D20).
+function withMyReads(list: ChatSummary[]) {
+  return list.map((chat) => {
+    const newest = chat.last_message?.seq ?? 0
+    const unread = Math.max(0, Math.min(chat.unread, newest - shownUpTo(chat.id)))
+    return unread === chat.unread ? chat : { ...chat, unread }
+  })
+}
+
 // The whole main screen. It holds the chat list and which chat is open;
 // the open chat's messages live in Conversation (useMessages).
 export function ChatScreen({ user }: { user: User }) {
@@ -30,6 +41,8 @@ export function ChatScreen({ user }: { user: User }) {
   // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1280)
   const [phoneView, setPhoneView] = useState<PhoneView>("list")
+  // Goes up by one each time the chat list is re-checked, so the open chat can re-check with it (D21, D24)
+  const [listChecks, setListChecks] = useState(0)
   // My unsaved messages per chat, sent one at a time, in order (D21)
   const outbox = useOutbox(user.id)
   // This screen only shows while logged in, so the line opens on log-in and closes on log-out.
@@ -43,7 +56,7 @@ export function ChatScreen({ user }: { user: User }) {
     api<ChatSummary[]>("/chats")
       .then((list) => {
         if (ignore) return
-        setChats(list)
+        setChats(withMyReads(list))
         setOpenId((current) => current ?? list[0]?.id ?? null)
         reportListDelivered(list)
       })
@@ -59,10 +72,11 @@ export function ChatScreen({ user }: { user: User }) {
   function reloadChats() {
     api<ChatSummary[]>("/chats")
       .then((list) => {
-        setChats(list)
+        setChats(withMyReads(list))
         setLoadFailed(false)
         setOpenId((current) => current ?? list[0]?.id ?? null)
         reportListDelivered(list)
+        setListChecks((n) => n + 1)
       })
       .catch(() => {})
   }
@@ -206,6 +220,8 @@ export function ChatScreen({ user }: { user: User }) {
             onBack={() => setPhoneView("list")}
             onOpenPanel={() => setPhoneView("panel")}
             phoneVisible={phoneView === "chat"}
+            listChecks={listChecks}
+            lineDown={live === "reconnecting"}
           />
           <SidePanel
             chat={openChat}

@@ -7,12 +7,13 @@ from datetime import datetime
 import anyio.to_thread
 import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user
 from app.auth.models import User
-from app.chats.service import Bookmarks, mark_delivered, mark_read, member_ids, partner_ids
+from app.chats.schemas import BookmarkIn
+from app.chats.service import member_ids, partner_ids, save_bookmark
 from app.db import SessionLocal
 from app.limits import service as limits
 from app.live import bus, manager, tickets
@@ -46,12 +47,11 @@ class EventIn(BaseModel):
     data: dict = {}
 
 
-class BookmarkIn(BaseModel):
-    """"delivered": the app has every message in this chat up to seq.
-    "read": it has shown them on screen, in an open chat, in front (D20)."""
+class LiveBookmarkIn(BookmarkIn):
+    """"delivered" or "read" on the live line: the HTTP door's body (seq),
+    plus which chat, since a line isn't tied to one chat."""
 
     chat_id: uuid.UUID
-    seq: int = Field(ge=1)
 
 
 class TypingIn(BaseModel):
@@ -102,17 +102,11 @@ def _others(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> list[uuid.UU
 # a line can stay open for hours, and mustn't hold a connection all that time.
 
 
-def _save_bookmark(user_id: uuid.UUID, kind: str, bookmark: BookmarkIn) -> tuple[Bookmarks | None, list[uuid.UUID]]:
-    """Moves the "delivered" or "read" bookmark and returns (both bookmarks,
-    everyone in the chat). (None, []) if it didn't move."""
-    mark = mark_read if kind == "read" else mark_delivered
+def _save_bookmark(user_id: uuid.UUID, kind: str, bookmark: LiveBookmarkIn) -> None:
+    """The same save_bookmark the HTTP door uses (D20): it moves the bookmark
+    and, if it moved, pushes the receipt."""
     with SessionLocal() as db:
-        moved = mark(db, bookmark.chat_id, user_id, bookmark.seq)
-        if moved is None:
-            return None, []
-        # Everyone, me too: my other tabs need my new read_up_to for their unread count (D20).
-        # It moved, so I'm a member: no stranger gets the receipt.
-        return moved, member_ids(db, bookmark.chat_id)
+        save_bookmark(db, bookmark.chat_id, user_id, kind, bookmark.seq)
 
 
 def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> list[uuid.UUID]:
@@ -150,25 +144,14 @@ async def _on_bookmark(line: _Line, event: EventIn) -> None:
     """"delivered" or "read": move the bookmark and, if it moved, send a
     receipt to everyone in the chat, my own tabs too."""
     try:
-        bookmark = BookmarkIn.model_validate(event.data)
+        bookmark = LiveBookmarkIn.model_validate(event.data)
     except ValidationError:
         return
 
     # The database code is normal (sync) code (D15), so it runs in a worker
-    # thread; the rest of the server keeps going while it waits.
-    moved, everyone = await anyio.to_thread.run_sync(_save_bookmark, line.user_id, event.type, bookmark)
-    if moved is not None:
-        # Both bookmarks, so the app can pick grey or teal ticks (D20).
-        receipt = {
-            "type": "receipt",
-            "data": {
-                "chat_id": str(bookmark.chat_id),
-                "user_id": str(line.user_id),
-                "delivered_up_to": moved.delivered_up_to,
-                "read_up_to": moved.read_up_to,
-            },
-        }
-        await bus.publish_async(everyone, receipt)
+    # thread; the rest of the server keeps going while it waits. The receipt
+    # is pushed from there too, with the normal Redis client.
+    await anyio.to_thread.run_sync(_save_bookmark, line.user_id, event.type, bookmark)
 
 
 async def _on_typing(line: _Line, event: EventIn) -> None:

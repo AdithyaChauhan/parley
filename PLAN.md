@@ -19,71 +19,121 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 22: Spam limits, and "Parley keeps working when Redis is down" (teaching mode, friend style)
-- **Branch:** `feature/limits`
-- **Goal:**
-  1. Stop abuse: too many messages, password guessing, and fishing for emails. A server answers "slow down" (429) instead of doing the work.
-  2. Decide and build what happens when Redis is down. Chatting must keep working: only the live extras pause.
+### Task 22b: Fix: reads and ticks reach the server without the live line (teaching mode for the backend, fast mode for the app)
+- **Branch:** `fix/receipts-over-http`
+- **The bug (found by Adithya in T22's Redis-down check):**
+  - Redis stops, so the live line is down.
+  - Ben opens Ana's chat. The app wants to send "read #42", but the live line is its only way to send that, so it never reaches the server.
+  - The server still says Ben read up to #41, so unread = 42 − 41 = 1.
+  - Ben goes back to the chat list, and the badge "1" comes back.
+  - It also breaks T23: the worker checks `read_up_to` and would notify Ben about a message he already read.
+- **Why:** `read_up_to` lives in PostgreSQL (the truth), but the only way to move it goes through Redis (ticket and live line). Redis is only a helper (D24), so the bookmark must not depend on it.
+
+**Example first (Claude Code shows this before any code):**
+```
+ live line open?  yes → send {"type":"read","data":{"chat_id":..,"seq":42}} on the line (as today)
+                  no  → POST /api/chats/<chat_id>/read {"seq": 42} → saved in PostgreSQL → 200
+                        both doors call the same function: forward only, never past last_seq
+ badge = newest − max(server's read_up_to, highest number this app has already shown)
+       → never jumps back while a read is on its way
+```
+
+**Steps:**
+1. **Backend:**
+   - Add `POST /api/chats/{chat_id}/read` and `POST /api/chats/{chat_id}/delivered`, each taking `{"seq": N}` (the same name the live line already uses).
+   - Both call the same function the live line uses today, with the same rules: only members (404 otherwise), forward only, never past `last_seq`, `read` also lifts `delivered`, and the receipt is pushed via the bus (never raises). Each returns both bookmarks.
+   - If the bookmark didn't move, push no receipt (check whether that's already true on the live line, and make both doors match).
+   - No new rate limit: it's one small update that only moves forward.
+2. **App (fast mode):**
+   - `read` and `delivered` go over the live line when it's open, and over HTTP once the line is known to be down (it dropped, or a connect failed). They don't use HTTP while the line is first connecting.
+   - If HTTP fails too (offline), the app keeps the highest number per chat and sends it once it's back online or reconnected.
+   - The unread badge uses the higher of the server's `read_up_to` and what this app has already shown.
+   - Messages that arrive through the chat-list catch-up (T22) also send `delivered`.
+3. **Tests:**
+   - HTTP read and delivered: they move forward only, are capped at `last_seq`, and a non-member gets 404. Read lifts delivered.
+   - With Redis down, they still give 200 and the bookmark is saved.
+   - After an HTTP read, the chat list shows unread 0.
+   - A read that doesn't move the bookmark pushes nothing.
+- **Added during the task (approved):** while the line is down, the open chat re-checks `messages?after=<gap-free seq>` every 60 s (in `useMessages.ts`), so Ana's ticks update within about a minute during an outage (D24).
+- **Done when:**
+  - `docker compose stop redis`: Ana sends, and Ben sees it within about a minute. Ben opens the chat and goes back, and there's no badge. Reload, and still no badge.
+  - Still during the outage: once Ben reads it, Ana's tick turns teal within about a minute.
+  - `docker compose start redis`: once both reconnect, Ana's message shows read (teal) without Ben doing anything.
+  - With Redis up, ticks and typing work as before.
+  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
+
+"In my words" prompt: why the read bookmark gets an HTTP door but typing doesn't.
+
+---
+
+## Next up (don't start until Task 22b is merged)
+
+### Task 23: Notification worker with retries and a failed-jobs queue (RabbitMQ) (teaching mode, friend style)
+- **Branch:** `feature/notify-worker`
+- **Goal:** when Ana messages Ben and Ben doesn't read it within a few seconds, a separate worker program "notifies" Ben. If the notifier fails, the job is retried later. If it keeps failing, it's parked in a failed-jobs queue instead of being lost or retried forever. In this task the notifier only writes a log line. T24 swaps in real browser push.
 - **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the checks itself and shows the results.
 
 **Example first (Claude Code shows this before any code):**
 ```
- Redis key  limit:send:<Ana>   (a sorted set of send times, like presence in D22)
-   10:00:00.1, 10:00:00.4, ... 20 sends in the last 10 s
- 21st send at 10:00:06 → server: 429 "Too many messages", Retry-After: 4
-                         (the oldest of the 20 leaves the 10 s window at 10:00:10)
- Each send: drop times older than 10 s → count → if under 20, add this one. All in one Redis transaction.
+ 10:00:00  Ana sends #42 to Ben → saved in PostgreSQL (201)
+           backend drops a job in RabbitMQ: {message_id, chat_id, seq: 42, recipient: Ben}   (no text, D12)
+           → the job waits in notify.wait (5 s)
+ 10:00:05  worker picks it up:
+             Ben's read_up_to is 42 already? → skip ("he saw it live")
+             already notified for this message? → skip (no doubles)
+             otherwise → notifier: "New message from Ana"
+ notifier fails?   try 1 → wait 10 s → try 2 → wait 1 min → try 3 → wait 5 min → try 4 → notify.failed
+ worker crashes mid-job? the job was never acked (ticked off), so RabbitMQ hands it out again
 
- Redis down:
-   Ana sends        → saved in PostgreSQL as usual (201). The live push is lost, and catch-up fixes it later (D21).
-   Chat list        → works, online shows "last seen recently" (unknown)
-   Live line ticket → 503 "Live updates unavailable", and the app keeps retrying with its backoff (D21)
-   Limits           → let requests through, and log it (better a little spam than no chat at all)
+ Queues:
+   notify         ← the worker reads only this one
+   notify.wait    (5 s timer)   ─┐
+   notify.retry.10s / .1m / .5m ─┴─ when the timer ends, the job falls back into notify
+   notify.failed  ← parked jobs, visible in RabbitMQ's web page (localhost:15672)
 ```
 
-**The limits (D24):**
-
-| What | Limit | Counted per |
-|---|---|---|
-| Send a message | 20 per 10 seconds | user |
-| Log in (wrong password) | 5 failures per 15 minutes | email |
-| Log in (any attempt) | 30 per 15 minutes | IP address |
-| Sign up | 5 per hour | IP address |
-| Start a chat by email | 20 per minute | user |
-| Get a live ticket | 10 per minute | user |
-
 **Steps:**
-1. **`app/limits/service.py`:** `hit(key, limit, window_seconds)` returns allowed, or "wait N seconds". It uses a sliding window in one Redis transaction, with a timer on the key so idle keys vanish. If Redis is down, it allows the request and logs a warning.
-2. **Apply the limits** from the table above.
-   - A 429 reply carries a `Retry-After` header.
-   - A successful log-in clears that email's failure count.
-   - Once an email is locked, even the right password gets 429 until the time passes.
-   - The IP comes from `request.client.host`. Behind Nginx (T26) that becomes the proxy's IP, so the T26 brief must set uvicorn's `--proxy-headers` and trust only Nginx.
-3. **Redis down, done properly:**
-   - Chat list presence: `online: false`, `last_seen: null`.
-   - Ticket: 503.
-   - Publish: already never raises (D20).
-   - The live listener keeps retrying (T21).
-4. **App (fast mode):**
-   - A send that gets 429 stays "waiting", is sent again after `Retry-After`, and keeps its order (outbox).
-   - Log-in and sign-up 429 shows "Too many tries. Try again in N minutes."
-   - The "+" box 429 shows "Slow down a moment."
-   - Ticket 503 counts as "line down", so it just keeps backing off.
-5. **Tests:**
-   - The 21st send in 10 s gives 429 with `Retry-After`, and it works again after the window (expire the key for real, as T21 did).
-   - The 6th wrong password locks that email, even with the right password, but not other emails.
-   - A good log-in clears the count.
-   - Sign-up's per-IP limit works.
-   - **Redis down** (point the client at a dead port or make it raise): a send still gives 201 and the row is saved, the chat list gives 200 with `online: false`, a ticket gives 503, and limits let requests through.
-- **Not in this task:** CAPTCHA, email verification, banning accounts.
+1. **RabbitMQ in Docker Compose:** the official `rabbitmq` image with the management web page, pinned to the latest stable version (check Docker Hub, don't guess). Add a health check. Python uses `pika` (pinned, latest stable from PyPI). `.env` gets `RABBITMQ_URL`, and `.env.example` gets a placeholder.
+2. **`app/notify/queues.py`:** declares all queues, durable, in one place. The wait and retry queues each have their own timer (`x-message-ttl` on the queue) and a dead-letter route back to `notify`. A timer per queue, not per job, so a 5-minute job never blocks a 10-second one behind it. Both the backend and the worker call this at startup, and declaring twice is harmless.
+3. **`app/notify/publisher.py`:** after a message is saved (after commit), one job per other member of the chat goes to `notify.wait`.
+   - Jobs are persistent, and RabbitMQ confirms it got them (publisher confirms).
+   - Never raises and gives up fast (about a 1 s timeout, the T22 lesson). If RabbitMQ is down, the send still gives 201 and a warning is logged. That notification is lost, which is accepted (see D25).
+   - pika isn't thread-safe, and sync routes run on several threads, so use one connection with a lock (or one per thread). Claude Code picks and explains in 3 lines.
+4. **`app/notify/worker.py`, run as `python -m app.notify.worker`** (its own terminal now, its own container in T25):
+   - Reads `notify` with prefetch 10, and acks only after the job is finished.
+   - **Skip if already read:** the recipient's `read_up_to >= seq` in PostgreSQL.
+   - **Skip if already sent:** Redis `notified:<message_id>:<user_id>`, checked before sending and set after a successful send, with a 24 h timer.
+   - Otherwise it calls the notifier.
+   - **On failure:** it re-publishes to the next retry queue with `attempt + 1` in the job's headers, then acks the original. After try 4 the job goes to `notify.failed` with the last error.
+   - A broken job (bad JSON, missing fields) goes straight to `notify.failed`. There's no point retrying it.
+   - Redis or PostgreSQL down counts as a failure, so it gets retried later.
+   - If RabbitMQ drops, it reconnects with backoff (1, 2, 4 ... 30 s).
+   - Stops cleanly on Ctrl+C: it finishes or returns the current job.
+5. **`app/notify/notifier.py`:** `LogNotifier.send(user_id, title)` logs "notify <user>: New message from <name>". There's never any message text (D12).
+   - For demos and tests, `NOTIFY_FAKE_FAIL_TIMES=N` makes every job fail its first N tries. Set it to 2 to watch retries work, or 10 to watch a job land in `notify.failed`.
+6. **`python -m app.notify.replay`:** moves every job from `notify.failed` back to `notify` with attempt reset to 1, and prints how many it moved. That's for "the push service was down for an hour, it's fixed now, send them all".
+7. **Timers come from settings,** so tests can use a few hundred milliseconds instead of minutes.
+8. **Tests:**
+   - Tests use `TEST_RABBITMQ_URL` on a `parley_test` vhost, and refuse any other vhost (like the `_test` and db 15 guards). Queues are purged between tests.
+   - Sending a message puts one job per other member in `notify.wait`, with no message text in it.
+   - With RabbitMQ down, a send still gives 201 and the row is saved.
+   - Worker logic: it skips when the message is already read, skips when already notified, and sends otherwise.
+   - With fake fails at 2, the job is sent on try 3. With fake fails at 10, it lands in `notify.failed` after try 4.
+   - A broken job goes straight to `notify.failed`.
+   - Replay moves failed jobs back and they get sent.
+   - A job that isn't acked (worker stopped mid-job) is handed out again.
+   - CI gets a RabbitMQ service and the `parley_test` vhost.
+- **Not in this task:** real browser push (T24), merging many messages into one notification (T24 uses one tag per chat so they replace each other), mute settings.
 - **Done when:**
-  - Pasting and sending 25 quick messages: about 20 go at once, and the rest wait and then go, in order, with no doubles.
-  - 6 wrong passwords show "Too many tries".
-  - **Redis stopped** (`docker compose stop redis`): Ana can still send, and Ben sees it after a reload. The dots go grey with "Reconnecting...".
-  - **Redis started again:** live updates come back by themselves, and catch-up fills the gap.
+  - With three terminals (backend, worker, app): Ana sends to Ben while Ben's tab is closed. About 5 s later the worker logs "notify Ben: New message from Ana".
+  - Ben has the chat open and reads it at once: the worker logs "skip: already read".
+  - With `NOTIFY_FAKE_FAIL_TIMES=2`: the log shows try 1 failed, try 2 failed, try 3 sent, about 10 s and 1 min apart.
+  - With `NOTIFY_FAKE_FAIL_TIMES=10`: the job shows in `notify.failed` on localhost:15672. Set it back to 0 and run replay, and it's sent.
+  - Stop the worker, send 3 messages, start the worker: all 3 are handled, none lost.
+  - Stop RabbitMQ: chatting still works.
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how the sliding window counts the last 10 seconds; why limits let requests through when Redis is down but PostgreSQL doesn't get the same treatment; why a wrong-password limit is per email and also per IP.
+"In my words" prompts: how a job waits 10 s, 1 min or 5 min with no sleeping code (timers on queues, then falling back into `notify`); why the worker acks only at the end, and why that means a job can run twice and how "already notified" stops a double; what `notify.failed` and replay are for, and why a broken job skips the retries.
 
 ---
 
@@ -121,14 +171,15 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 5: Redis
 - [x] T20. Online and last seen, with automatic expiry
 - [x] T21. Two backend copies; live messages cross between them (pub/sub)
-- [ ] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
+- [x] T22. Spam limits (also decide what happens when Redis is down: today the live line and chat list fail, like when PostgreSQL is down)
+- [ ] T22b. Fix: reads and ticks reach the server without the live line (HTTP door for `read` and `delivered`)
 
 ### Phase 6: RabbitMQ
 - [ ] T23. Notification worker with retries and a failed-jobs queue
 - [ ] T24. Browser push notifications (Web Push). Push text must not contain message text (see D12). Web Push needs HTTPS (localhost counts); check again at T26
 
 ### Phase 7: Run it like production
-- [ ] T25. Dockerfiles and Docker Compose for every part
+- [ ] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down)
 - [ ] T26. Nginx in front of several backend copies (run uvicorn with --proxy-headers trusting only Nginx, so rate limits see the real IP) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it

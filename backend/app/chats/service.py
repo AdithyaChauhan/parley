@@ -1,5 +1,5 @@
 import uuid
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, aliased
 from app.auth.models import User
 from app.chats.models import Chat, ChatMember
 from app.chats.schemas import ChatOut, LastMessageOut
+from app.live import bus
 from app.messages.models import Message
 from app.presence import service as presence
 
@@ -142,6 +143,37 @@ def mark_read(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> 
     ).one_or_none()
     db.commit()
     return None if row is None else Bookmarks(row.delivered_up_to, row.read_up_to)
+
+
+def save_bookmark(
+    db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, kind: Literal["delivered", "read"], seq: int
+) -> Bookmarks | None:
+    """Move this person's "delivered" or "read" bookmark to seq and, if it
+    moved, push a receipt to everyone in the chat, their own tabs too (D20).
+    The one function behind both doors: the live line and the HTTP routes.
+    Returns both bookmarks, or None if nothing moved (not a member, no such
+    chat, or not a step forward). Then nothing is pushed."""
+    mark = mark_read if kind == "read" else mark_delivered
+    # Saved first (mark_* commits), pushed after: a receipt never announces a
+    # bookmark that isn't in PostgreSQL yet.
+    moved = mark(db, chat_id, user_id, seq)
+    if moved is None:
+        return None
+
+    # Both bookmarks, so the app can pick grey or teal ticks (D20).
+    receipt = {
+        "type": "receipt",
+        "data": {
+            "chat_id": str(chat_id),
+            "user_id": str(user_id),
+            "delivered_up_to": moved.delivered_up_to,
+            "read_up_to": moved.read_up_to,
+        },
+    }
+    # It moved, so they're a member: no stranger gets the receipt. Never raises:
+    # with Redis down the bookmark is still saved, and the ticks catch up later (D24).
+    bus.publish(member_ids(db, chat_id), receipt)
+    return moved
 
 
 def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> list[ChatOut]:
