@@ -1,7 +1,19 @@
-import { useState } from "react"
-import { ChevronDown, ChevronLeft, EllipsisVertical, LogOut, Plus, Search, Settings } from "lucide-react"
+import { useEffect, useState } from "react"
+import {
+  Bell,
+  BellOff,
+  BellRing,
+  ChevronDown,
+  ChevronLeft,
+  EllipsisVertical,
+  LogOut,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import type { LiveStatus } from "@/lib/live"
+import { pushState, turnOnPush, type PushState } from "@/lib/push"
 import { cn } from "@/lib/utils"
 import { ChatRow } from "./ChatRow"
 import { NewChatBox } from "./NewChatBox"
@@ -18,6 +30,56 @@ type ChatColumnProps = {
   myName: string
   live: LiveStatus // my live line: green dot when online, else grey
   onLogout: () => void
+}
+
+// "Turn on notifications" in the gear menu (D26). The browser only asks on
+// this click, never on page load. Hidden where pushes can't work (Incognito).
+function NotificationsItem() {
+  const [state, setState] = useState<PushState | null>(null) // null = still checking
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null) // why the last try failed
+
+  useEffect(() => {
+    pushState().then(setState)
+  }, [])
+
+  async function turnOn() {
+    setBusy(true)
+    setProblem(null)
+    try {
+      setState(await turnOnPush())
+    } catch (error) {
+      // For example the server has no keys (503), or the browser's push service refused.
+      setProblem(error instanceof Error ? error.message : "Couldn't turn them on")
+      setState(await pushState())
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (state === null || state === "unsupported") return null
+  const Icon = state === "on" ? BellRing : state === "blocked" ? BellOff : Bell
+  return (
+    <>
+      <button
+        type="button"
+        onClick={turnOn}
+        disabled={state !== "off" || busy}
+        title={state === "blocked" ? "Allow notifications in the browser's site settings" : undefined}
+        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-row-selected disabled:hover:bg-transparent"
+      >
+        <Icon className="size-4 text-muted-foreground" />
+        {busy
+          ? "Waiting for the browser..."
+          : state === "on"
+            ? "Notifications on"
+            : state === "blocked"
+              ? "Notifications blocked"
+              : "Turn on notifications"}
+      </button>
+      {problem && <p className="px-3 pb-2 text-xs text-destructive">{problem}</p>}
+    </>
+  )
 }
 
 // The left column: title, my profile, search box and the list of chats
@@ -70,7 +132,8 @@ export function ChatColumn({
             <Settings className="size-5" />
           </button>
           {menuOpen && (
-            <div className="absolute top-full right-0 z-20 mt-1 w-36 rounded-lg bg-card p-1 shadow-lg ring-1 shadow-foreground/10 ring-border">
+            <div className="absolute top-full right-0 z-20 mt-1 w-56 rounded-lg bg-card p-1 shadow-lg ring-1 shadow-foreground/10 ring-border">
+              <NotificationsItem />
               <button
                 type="button"
                 onClick={onLogout}

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,6 +33,17 @@ class Settings(BaseSettings):
     # For demos and tests: every job fails its first N tries on purpose.
     # 2 shows retries working; 10 sends a job all the way to notify.failed.
     notify_fake_fail_times: int = 0
+
+    # Which notifier the worker uses (D26): "log" writes one log line (tests,
+    # CI), "webpush" sends real browser notifications.
+    notifier: Literal["log", "webpush"] = "log"
+    # The VAPID key pair that proves a push came from Parley (D26). Empty until
+    # you make them: then /api/push/key answers 503, and the worker refuses to
+    # start with notifier "webpush".
+    vapid_private_key: str = ""
+    vapid_public_key: str = ""
+    # Who the push services can contact about our pushes: a mailto: address.
+    vapid_subject: str = ""
 
 
 settings = Settings()

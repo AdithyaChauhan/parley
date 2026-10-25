@@ -1,3 +1,6 @@
+import uuid
+from dataclasses import dataclass
+
 import pika
 from pika.adapters.blocking_connection import BlockingChannel
 
@@ -17,6 +20,17 @@ ALL = [NOTIFY, WAIT, *RETRIES, FAILED]
 # Give up fast when RabbitMQ is down: at most 1 s to reach it, 2 s to log in.
 CONNECT_SECONDS = 1
 SETUP_SECONDS = 2
+
+
+@dataclass
+class Job:
+    """What one job in these boxes carries: ids and numbers only, never the
+    message text (D12). The worker reads it, the notifier uses it."""
+
+    message_id: uuid.UUID
+    chat_id: uuid.UUID
+    seq: int
+    recipient_id: uuid.UUID
 
 
 def connect(url: str | None = None) -> pika.BlockingConnection:

@@ -51,3 +51,6 @@ That's fine. Read it, explain anything wrong in plain words, and carry on. Do no
 - Before each step, say in one line what Adithya would see change in the app.
 - Simple, easy words. Short sentences. Explain any technical word the first time it appears.
 - Adithya uses Windows, VS Code and Git Bash. Give commands that work there.
+- Every few steps, without being asked, give a 3-line recap: done / next / what I need from you.
+- Checks with long waits (minutes of timers or retries): run them yourself and show the results. Adithya does the browser checks. Ask before stopping anything he has running.
+- If Adithya says "move fast" on backend work: group files like fast mode, but still show the example first for big ideas and keep the "In my words" questions at the end.

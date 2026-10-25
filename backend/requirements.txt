@@ -12,3 +12,4 @@ email-validator==2.3.0
 websockets==17.3
 redis==8.1.0
 pika==1.4.4
+pywebpush==2.5.0

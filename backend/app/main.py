@@ -15,6 +15,7 @@ from app.live import bus
 from app.live.routes import router as live_router
 from app.messages.routes import router as messages_router
 from app.presence import service as presence
+from app.push.routes import router as push_router
 
 
 @asynccontextmanager
@@ -61,5 +62,6 @@ api.include_router(auth_router)
 api.include_router(chats_router)
 api.include_router(messages_router)
 api.include_router(live_router)
+api.include_router(push_router)
 # Last, after every route above is added to the /api router.
 app.include_router(api)

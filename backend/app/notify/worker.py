@@ -8,11 +8,9 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 
 import pika
 import pika.exceptions
-import redis
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.spec import Basic, BasicProperties
 from sqlalchemy import select
@@ -23,7 +21,8 @@ from app.config import settings
 from app.db import SessionLocal
 from app.messages.models import Message
 from app.notify import queues
-from app.notify.notifier import LogNotifier, fake_fail
+from app.notify.notifier import fake_fail, make_notifier
+from app.notify.queues import Job
 from app.presence import service as presence
 
 log = logging.getLogger(__name__)
@@ -32,27 +31,19 @@ log = logging.getLogger(__name__)
 PREFETCH = 10
 # Try 1, then one more try per retry box: 4 in all (D25).
 MAX_TRIES = 1 + len(queues.RETRIES)
-# "Already notified" notes last a day: long past any retry.
-NOTIFIED_SECONDS = 24 * 60 * 60
 # Reconnect waits 1, 2, 4 ... up to 30 s.
 BACKOFF_MAX_SECONDS = 30
 # How often the loop wakes up with no jobs, to check whether to stop.
 IDLE_SECONDS = 1
 
 redis_client = presence.new_client(settings.redis_url)
-notifier = LogNotifier()
+# Log line or real browser push, picked by the setting NOTIFIER (D26).
+# With "webpush" and no VAPID keys, this refuses to start.
+notifier = make_notifier(redis_client)
 
 
 class BrokenJob(Exception):
     """Bad JSON or missing fields: no retry can fix it."""
-
-
-@dataclass
-class Job:
-    message_id: uuid.UUID
-    chat_id: uuid.UUID
-    seq: int
-    recipient_id: uuid.UUID
 
 
 def parse(body: bytes) -> Job:
@@ -68,13 +59,10 @@ def parse(body: bytes) -> Job:
         raise BrokenJob(f"{type(error).__name__}: {error}") from error
 
 
-def _notified_key(job: Job) -> str:
-    return f"notified:{job.message_id}:{job.recipient_id}"
-
-
 def handle(job: Job, attempt: int) -> str:
     """Do one job. Returns what happened: "sent", or why it was skipped.
-    Raises if anything fails (the notifier, PostgreSQL, Redis): try again later."""
+    Raises if anything fails (the notifier, PostgreSQL, Redis): try again later.
+    The "already notified" notes belong to the notifier now (D25)."""
     with SessionLocal() as db:
         # The recipient's read bookmark and name. Every door moves read_up_to
         # in PostgreSQL (live line, HTTP door, or their own reply), so this is the truth.
@@ -91,17 +79,10 @@ def handle(job: Job, attempt: int) -> str:
         return "skip: message or member gone"  # no retry can bring them back (D25)
     if member.read_up_to >= job.seq:
         return "skip: already read"  # they saw it live
-    if redis_client.exists(_notified_key(job)):
-        return "skip: already notified"  # this job ran before, then came back
 
     fake_fail(attempt)
-    notifier.send(job.recipient_id, member.name, f"New message from {sender_name}")
-    try:
-        redis_client.set(_notified_key(job), 1, ex=NOTIFIED_SECONDS)
-    except redis.RedisError:
-        # Already notified, so don't retry: that would notify them again.
-        log.warning("Sent, but couldn't note it in Redis")
-    return "sent"
+    # "sent", "skip: no devices" or "skip: already notified" (D25).
+    return notifier.send(job, member.name, f"New message from {sender_name}")
 
 
 def _attempt(properties: BasicProperties) -> int:
@@ -181,7 +162,7 @@ def serve() -> None:
         wait = 1
         try:
             channel = open_channel(connection)
-            log.info("Worker ready: waiting for jobs in %s", queues.NOTIFY)
+            log.info("Worker ready (%s): waiting for jobs in %s", settings.notifier, queues.NOTIFY)
             consume(channel, should_stop=lambda: False)
         except pika.exceptions.AMQPConnectionError:
             log.warning("Lost RabbitMQ, reconnecting")

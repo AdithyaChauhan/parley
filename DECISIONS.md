@@ -163,9 +163,27 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - RabbitMQ carries notification jobs to a separate worker. Python uses `pika`. Jobs carry ids and numbers only, never message text (D12).
 - Each job waits 5 s first (`notify.wait`), then is skipped if the recipient has already read it.
 - Retries wait 10 s, 1 min, then 5 min, using queues with their own timers that fall back into `notify`. After try 4 the job goes to `notify.failed`. A broken job goes straight there. `replay` sends failed jobs back.
-- Delivery is "at least once": the worker acks only after finishing, so a job can run twice. Redis `notified:<message>:<user>` (24 h) stops a double notification.
+- Delivery is "at least once": the worker acks only after finishing, so a job can run twice. Redis `notified:<message>:<user>` (24 h) stops a double notification. From T24, whoever sends writes the note: `LogNotifier` keeps this per-person note, and `WebPushNotifier` writes one per device (D26).
 - Setup: `rabbitmq:4.3.7-management` (4.4.0 was only 3 days old), `pika==1.4.4`. The RabbitMQ user and password come from `.env` (the built-in guest user only works inside the container). It has a named volume and a fixed hostname, so parked jobs survive `docker compose down`. Tests use the `parley_test` vhost only.
 - The publisher declares the queues each time it connects (the first send, and after every reconnect), so the backend starts and chats fine with RabbitMQ down. One shared connection behind a lock (wait at most 1 s). After a failed connect, it skips publishing for 10 s and logs it once, so an outage doesn't add 1 s to every send.
 - Timers live on the queues: changing one means deleting that queue first (RabbitMQ refuses a different timer, error 406).
-- The notifier gets the recipient's id and name (`send(user_id, user_name, title)`). A job whose message or member is gone is skipped, not retried.
+- From T24 the notifier's shape is `send(job, user_name, title)`. It returns what happened: "sent", "skip: no devices" or "skip: already notified". The worker no longer touches the notes. A job whose message or member is gone is skipped, not retried.
+- Health check: `rabbitmq-diagnostics -q check_port_connectivity` (not `ping`, which passes while RabbitMQ is still booting). Wait for "healthy" before using `rabbitmqctl` (about 11 s after "Up").
+- One `queues.send_job()` (persistent, confirmed) is used by the publisher, the worker and replay. Only a connection error starts the 10 s skip. Other errors (like a 406) are logged with the real reason, and the send still gives 201.
+- If the "notified" note can't be written after a successful send, the worker logs a warning and doesn't retry (a retry would notify twice). Replay moves only the jobs parked when it starts, so a broken job can't loop.
 - The send never waits on RabbitMQ: if publishing fails, the message is still saved and returned, and that notification is lost. Accepted for now. The full fix (an outbox table written in the same transaction as the message) is a known next step.
+
+**D26. Browser notifications (Web Push)**
+- Web Push with VAPID keys (`pywebpush`). The private key lives only in `.env`. The app gets the public key from `GET /api/push/key`.
+- `push_subscriptions`: one row per browser per user, `endpoint` unique. Subscribing again from the same browser moves the row to the current user. Logging out unsubscribes and deletes the row first.
+- The payload is the title ("New message from <name>") and `chat_id` only, never message text (D12), with a TTL of 1 hour. The service worker uses `tag = chat_id`, so one chat shows one notification.
+- The "already sent" note is per device (`notified:<message>:<subscription>`), so a retry only tries the devices that failed.
+- 404/410 from the push service means the device is gone: delete the row, no retry. 429, 5xx or a timeout: retry (D25).
+- The app asks for permission only when the user clicks "Turn on notifications", never on page load.
+- `pywebpush==2.5.0`. The helpers it installs (requests, aiohttp, py-vapid, http-ece) count as part of it. Each push has a 10 s time limit.
+- Setting `NOTIFIER` picks the notifier: `log` by default (tests, CI) and `webpush` in `.env`. VAPID settings start empty: `GET /api/push/key` answers 503 without a key, and the worker refuses to start with `webpush` and no keys. Tests make throwaway keys.
+- Push service answers: only 404/410 is final (delete the device). Everything else retries and is parked after try 4: connection errors, timeouts, 429, 5xx and other 4xx like a wrong VAPID key (403). So after fixing `.env`, replay sends the parked ones.
+- The app re-sends a subscription the browser already has after log-in, but never creates one without the click.
+- Known gaps, accepted:
+  - If a session just runs out (no log-out click), that browser's row stays until the next log-in there moves it.
+  - If Redis fails right after one device got the push and another device failed, the retry can notify the first device twice. Logged as a warning.

@@ -19,72 +19,73 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 23: Notification worker with retries and a failed-jobs queue (RabbitMQ) (teaching mode, friend style)
-- **Branch:** `feature/notify-worker`
-- **Goal:** when Ana messages Ben and Ben doesn't read it within a few seconds, a separate worker program "notifies" Ben. If the notifier fails, the job is retried later. If it keeps failing, it's parked in a failed-jobs queue instead of being lost or retried forever. In this task the notifier only writes a log line. T24 swaps in real browser push.
-- **Mode:** teaching mode, friend style, questions at the end as "In my words" prompts. Claude Code runs the checks itself and shows the results.
+### Task 24: Real browser notifications (Web Push) (teaching mode for the backend, fast mode for the app)
+- **Branch:** `feature/web-push`
+- **Goal:** T23's worker stops writing a log line and sends a real notification to Ben's browser: "New message from Ana", with no message text (D12). It works even when Ben's Parley tab is closed, as long as his browser is running.
+- **Mode:** backend in teaching mode (example first, short, "In my words" questions at the end). The app part (permission button, service worker) is fast mode. Every few steps, give a short "done / next / what I need from you" recap.
 
 **Example first (Claude Code shows this before any code):**
 ```
- 10:00:00  Ana sends #42 to Ben → saved in PostgreSQL (201)
-           backend drops a job in RabbitMQ: {message_id, chat_id, seq: 42, recipient: Ben}   (no text, D12)
-           → the job waits in notify.wait (5 s)
- 10:00:05  worker picks it up:
-             Ben's read_up_to is 42 already? → skip ("he saw it live")
-             already notified for this message? → skip (no doubles)
-             otherwise → notifier: "New message from Ana"
- notifier fails?   try 1 → wait 10 s → try 2 → wait 1 min → try 3 → wait 5 min → try 4 → notify.failed
- worker crashes mid-job? the job was never acked (ticked off), so RabbitMQ hands it out again
+ Once, on Ben's browser:
+   Ben clicks "Turn on notifications" → browser asks → Allow
+   browser → push service (Google's for Chrome/Edge, Mozilla's for Firefox) → gives an address + 2 keys
+   app → POST /api/push/subscribe {endpoint, keys} → saved in push_subscriptions (Ben, device 1)
 
- Queues:
-   notify         ← the worker reads only this one
-   notify.wait    (5 s timer)   ─┐
-   notify.retry.10s / .1m / .5m ─┴─ when the timer ends, the job falls back into notify
-   notify.failed  ← parked jobs, visible in RabbitMQ's web page (localhost:15672)
+ Every missed message:
+   worker (T23) → "Ben, #42 unread after 5 s" → for each of Ben's devices:
+     encrypt {"title":"New message from Ana","chat_id":..} with that device's keys, sign with our VAPID key
+     POST to the device's push address
+       201 → sent, note it for that device
+       404/410 → this device unsubscribed → delete the row, don't retry
+       429/5xx/timeout → retry later (T23 retries)
+   push service → Ben's browser wakes the service worker (sw.js) → shows the notification
 ```
+- **VAPID** is a key pair that proves the push came from Parley. The public key goes to the browser, and the private key stays in `.env`.
+- The **service worker** is a small script the browser keeps alive even when the tab is closed.
+- The **push service** only passes the box along. It can't read it, because it's encrypted for Ben's browser.
 
 **Steps:**
-1. **RabbitMQ in Docker Compose:** the official `rabbitmq` image with the management web page, pinned to the latest stable version (check Docker Hub, don't guess). Add a health check. Python uses `pika` (pinned, latest stable from PyPI). `.env` gets `RABBITMQ_URL`, and `.env.example` gets a placeholder.
-2. **`app/notify/queues.py`:** declares all queues, durable, in one place. The wait and retry queues each have their own timer (`x-message-ttl` on the queue) and a dead-letter route back to `notify`. A timer per queue, not per job, so a 5-minute job never blocks a 10-second one behind it. Both the backend and the worker call this at startup, and declaring twice is harmless.
-3. **`app/notify/publisher.py`:** after a message is saved (after commit), one job per other member of the chat goes to `notify.wait`.
-   - Jobs are persistent, and RabbitMQ confirms it got them (publisher confirms).
-   - Never raises and gives up fast (about a 1 s timeout, the T22 lesson). If RabbitMQ is down, the send still gives 201 and a warning is logged. That notification is lost, which is accepted (see D25).
-   - pika isn't thread-safe, and sync routes run on several threads, so use one connection with a lock (or one per thread). Claude Code picks and explains in 3 lines.
-4. **`app/notify/worker.py`, run as `python -m app.notify.worker`** (its own terminal now, its own container in T25):
-   - Reads `notify` with prefetch 10, and acks only after the job is finished.
-   - **Skip if already read:** the recipient's `read_up_to >= seq` in PostgreSQL.
-   - **Skip if already sent:** Redis `notified:<message_id>:<user_id>`, checked before sending and set after a successful send, with a 24 h timer.
-   - Otherwise it calls the notifier.
-   - **On failure:** it re-publishes to the next retry queue with `attempt + 1` in the job's headers, then acks the original. After try 4 the job goes to `notify.failed` with the last error.
-   - A broken job (bad JSON, missing fields) goes straight to `notify.failed`. There's no point retrying it.
-   - Redis or PostgreSQL down counts as a failure, so it gets retried later.
-   - If RabbitMQ drops, it reconnects with backoff (1, 2, 4 ... 30 s).
-   - Stops cleanly on Ctrl+C: it finishes or returns the current job.
-5. **`app/notify/notifier.py`:** `LogNotifier.send(user_id, title)` logs "notify <user>: New message from <name>". There's never any message text (D12).
-   - For demos and tests, `NOTIFY_FAKE_FAIL_TIMES=N` makes every job fail its first N tries. Set it to 2 to watch retries work, or 10 to watch a job land in `notify.failed`.
-6. **`python -m app.notify.replay`:** moves every job from `notify.failed` back to `notify` with attempt reset to 1, and prints how many it moved. That's for "the push service was down for an hour, it's fixed now, send them all".
-7. **Timers come from settings,** so tests can use a few hundred milliseconds instead of minutes.
-8. **Tests:**
-   - Tests use `TEST_RABBITMQ_URL` on a `parley_test` vhost, and refuse any other vhost (like the `_test` and db 15 guards). Queues are purged between tests.
-   - Sending a message puts one job per other member in `notify.wait`, with no message text in it.
-   - With RabbitMQ down, a send still gives 201 and the row is saved.
-   - Worker logic: it skips when the message is already read, skips when already notified, and sends otherwise.
-   - With fake fails at 2, the job is sent on try 3. With fake fails at 10, it lands in `notify.failed` after try 4.
-   - A broken job goes straight to `notify.failed`.
-   - Replay moves failed jobs back and they get sent.
-   - A job that isn't acked (worker stopped mid-job) is handed out again.
-   - CI gets a RabbitMQ service and the `parley_test` vhost.
-- **Not in this task:** real browser push (T24), merging many messages into one notification (T24 uses one tag per chat so they replace each other), mute settings.
+1. **Setup:**
+   - Add `pywebpush`, pinned to the latest stable on PyPI (check, don't guess).
+   - Make the VAPID keys once with a one-line command Claude Code gives. Adithya puts `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY` and `VAPID_SUBJECT` (a `mailto:` address) in `.env`, never in a chat or a commit. `.env.example` gets placeholders.
+   - Also fix `.env.example`'s `REDIS_URL` and `TEST_REDIS_URL` to use `127.0.0.1` (D22).
+2. **Table `push_subscriptions`** (Alembic migration, and add it to the conftest TRUNCATE):
+   - Columns: `id` (UUID), `user_id`, `endpoint` (unique), `p256dh`, `auth`, `created_at`.
+   - One row per browser per user.
+3. **Routes:**
+   - `GET /api/push/key` returns the public key.
+   - `POST /api/push/subscribe` saves the device. If that endpoint already exists, it moves to the current user, since another person may have logged in on the same browser.
+   - `DELETE /api/push/subscribe` with `{endpoint}` deletes only the current user's own row.
+   - Limit: 10 subscribes per minute per user (D24 style).
+4. **`WebPushNotifier`**, with the new shape `send(job, user_name, title)` returning the outcome (D25, D26):
+   - It sends to each of the user's devices that isn't noted yet.
+   - The Redis note becomes per device: `notified:<message>:<subscription>` (24 h). A retry only tries the devices that failed, so a phone that already got it isn't notified twice.
+   - 404/410 deletes that row and doesn't retry. 429, 5xx or a timeout raise `NotifyFailed`, so T23 retries.
+   - A user with no devices is skipped with "no devices".
+   - The payload is the title and `chat_id` only, with a TTL of 1 hour (an old notification is useless).
+   - `LogNotifier` stays for tests and for `NOTIFY_FAKE_FAIL_TIMES`. A setting picks which notifier the worker uses.
+5. **App (fast mode):**
+   - `public/sw.js`: on push, show the notification with `tag = chat_id`, so many messages from one chat replace each other instead of piling up. On click, focus an open Parley tab, or open one.
+   - A small "Turn on notifications" button in the profile area. Never ask on page load, because browsers punish that.
+   - If permission is already given, re-send the subscription after log-in, since it may belong to someone else now.
+   - **Log out:** unsubscribe in the browser and `DELETE` the row first, so a shared computer stops getting Ben's notifications.
+6. **Tests** (fake the push service, so no real network):
+   - 201 marks that device as sent. 410 deletes the row and doesn't retry. 500 retries. Two devices where one is OK and one gives 500: the retry only tries the failed one.
+   - Subscribe moves an existing endpoint to the new user. Unsubscribe can't delete someone else's row.
+   - The payload has no message text.
+   - A user with no devices is skipped.
+- **Claude-run checks:** anything with multi-minute waits (retry timings) is run by Claude Code itself, with results shown. Adithya does only the browser checks.
+- **Not in this task:** notification settings or mute, showing message text (only with E2EE later), and phones with the browser closed.
 - **Done when:**
-  - With three terminals (backend, worker, app): Ana sends to Ben while Ben's tab is closed. About 5 s later the worker logs "notify Ben: New message from Ana".
-  - Ben has the chat open and reads it at once: the worker logs "skip: already read".
-  - With `NOTIFY_FAKE_FAIL_TIMES=2`: the log shows try 1 failed, try 2 failed, try 3 sent, about 10 s and 1 min apart.
-  - With `NOTIFY_FAKE_FAIL_TIMES=10`: the job shows in `notify.failed` on localhost:15672. Set it back to 0 and run replay, and it's sent.
-  - Stop the worker, send 3 messages, start the worker: all 3 are handled, none lost.
-  - Stop RabbitMQ: chatting still works.
+  - Ben uses a **second browser** (Edge or Firefox; Incognito windows usually can't get push) and clicks "Turn on notifications" → Allow.
+  - Ben closes his Parley tab, but keeps the browser open. Ana sends, and about 5 s later Windows shows "New message from Ana", with no text. Clicking it opens Parley.
+  - Ana sends 3 quickly, and Ben ends up with one notification for that chat, not three.
+  - Ben has the chat open and reads at once: no notification.
+  - Ben logs out, Ana sends, and no notification arrives.
+  - If nothing shows: check Windows notification settings and Focus Assist / Do Not Disturb first.
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how a job waits 10 s, 1 min or 5 min with no sleeping code (timers on queues, then falling back into `notify`); why the worker acks only at the end, and why that means a job can run twice and how "already notified" stops a double; what `notify.failed` and replay are for, and why a broken job skips the retries.
+"In my words" prompts: how Parley reaches Ben's browser when his tab is closed (push service plus service worker); why a 410 deletes the device but a 500 retries; why the "already sent" note is per device, not per person.
 
 ---
 
@@ -126,11 +127,11 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T22b. Fix: reads and ticks reach the server without the live line (HTTP door for `read` and `delivered`)
 
 ### Phase 6: RabbitMQ
-- [ ] T23. Notification worker with retries and a failed-jobs queue
+- [x] T23. Notification worker with retries and a failed-jobs queue
 - [ ] T24. Browser push notifications (Web Push). Push text must not contain message text (see D12). Web Push needs HTTPS (localhost counts); check again at T26
 
 ### Phase 7: Run it like production
-- [ ] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down)
+- [ ] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down) (the worker needs a SIGTERM handler, since `docker stop` sends SIGTERM, not Ctrl+C)
 - [ ] T26. Nginx in front of several backend copies (run uvicorn with --proxy-headers trusting only Nginx, so rate limits see the real IP) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it

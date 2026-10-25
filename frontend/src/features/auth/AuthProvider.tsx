@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Logo } from "@/components/Logo"
 import { api, refresh, setAccessToken, setOnLoggedOut } from "@/lib/api"
+import { resendPush, turnOffPush } from "@/lib/push"
 import { AuthContext, type Auth, type User } from "./useAuth"
 
 // Knows who is logged in. The user and the access token live in memory only,
@@ -16,7 +17,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function restore() {
       try {
-        if (await refresh()) setUser(await api<User>("/auth/me"))
+        if (await refresh()) {
+          setUser(await api<User>("/auth/me"))
+          resendPush().catch(() => {}) // never holds up the app
+        }
       } catch {
         // Backend unreachable: show log-in. Its form says "Can't reach Parley" on submit.
       } finally {
@@ -31,6 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { access_token } = await api<{ access_token: string }>(path, { method: "POST", body })
     setAccessToken(access_token)
     setUser(await api<User>("/auth/me"))
+    // This browser may still be subscribed for whoever was here before (D26).
+    resendPush().catch(() => {})
   }
 
   const auth: Auth = {
@@ -38,6 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login: (email, password) => startSession("/auth/login", { email, password }),
     signup: (name, email, password) => startSession("/auth/signup", { name, email, password }),
     async logout() {
+      // First, while we still have the access token: stop this browser
+      // getting this user's notifications (a shared computer, D26).
+      await turnOffPush().catch(() => {})
       try {
         await api("/auth/logout", { method: "POST" })
       } catch {
