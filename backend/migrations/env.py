@@ -6,6 +6,7 @@ from alembic import context
 import app.auth.models  # noqa: F401
 import app.chats.models  # noqa: F401
 import app.messages.models  # noqa: F401
+import app.push.models  # noqa: F401
 from app.config import settings
 from app.db import Base, engine
 

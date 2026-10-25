@@ -968,3 +968,60 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why the worker acks only at the end, why that means a job can run twice, and how "already notified" stops a double: If the worker told RabbitMQ it was "done" before sending the notification, a crash would mean the notification is lost forever. By acking only after the notification is sent, RabbitMQ ensures the job is never lost—if the worker crashes, RabbitMQ just gives the job to someone else. But this means if it crashes right after sending but before acking, the job runs twice. To stop a double notification, the worker saves a "notified" note in Redis. If it runs again, it sees the note and skips the send.
 
 - What `notify.failed` and replay are for, and why a broken job skips the retries: `notify.failed` is a parking lot for jobs that failed all their retries. Instead of losing them or retrying forever, we save them there with their final error. Replay is a command we can run later to take all those parked jobs and put them back in the queue once we fix the bug. However, if a job has bad data (like a missing field or invalid JSON), it is physically impossible to ever succeed. So we skip the wait and send it straight to the parking lot to save time.
+
+### Task 24: Real browser notifications (Web Push)
+**What was built**
+- `backend/requirements.txt`: `pywebpush==2.5.0` (latest stable on PyPI). The helpers it installs (requests, aiohttp, py-vapid, http-ece) count as part of it (D26).
+- `.env.example`: `NOTIFIER=webpush`, placeholders for `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY` and `VAPID_SUBJECT` (a `mailto:`), and the one-line command that makes the key pair. `REDIS_URL` and `TEST_REDIS_URL` now use `127.0.0.1` (D22).
+- `backend/app/config.py`: `notifier` (`log` or `webpush`, `log` by default) and the three VAPID settings, empty by default, so CI needs no keys.
+- `backend/app/push/models.py` (new) and a migration: `push_subscriptions` with `id`, `user_id` (indexed, deleted with the user), `endpoint` (unique), `p256dh`, `auth`, `created_at`. One row per browser, owned by whoever subscribed on it last. Written by hand (Docker was off) and confirmed with `alembic check`.
+- `backend/app/push/schemas.py` (new): `SubscribeIn` is exactly what the browser's `subscription.toJSON()` gives. The endpoint must start with `https://` (max 2048), so the worker never POSTs to something like `http://127.0.0.1` on our own machine.
+- `backend/app/push/routes.py` (new):
+  - `GET /api/push/key`: the public key, or 503 if `.env` has none.
+  - `POST /api/push/subscribe`: one upsert (`INSERT ... ON CONFLICT (endpoint) DO UPDATE`): a new browser is added; a known one moves to the current user with its current keys. Two tabs at once still make one row. 10 per minute per user (`limits.PUSH_SUBSCRIBE`).
+  - `DELETE /api/push/subscribe` with `{endpoint}`: deletes only my own row. Someone else's gets the same 204, so the reply doesn't say whose browser it is.
+- `backend/app/notify/queues.py`: `Job` moved here from the worker, because the notifier now needs it and the worker imports the notifier (two files importing each other is a circle).
+- `backend/app/notify/notifier.py`, the new shape `send(job, user_name, title)` returning what happened (D25):
+  - `LogNotifier`: one log line and one note per person (`notified:<message>:<user>`), as in T23.
+  - `WebPushNotifier`: loads the user's devices; none → "skip: no devices". For each device without a note `notified:<message>:<device>`: lock the payload `{"title", "chat_id"}` with that browser's keys, sign it with our VAPID key, POST it (TTL 1 hour, 10 s time limit). 201 → write that device's note. 404/410 → delete the row, no retry. Anything else (429, 5xx, other 4xx like a wrong key, a timeout, can't connect) → keep going with the other devices, then raise `NotifyFailed` so T23 retries, and the noted devices are skipped next time.
+  - A fresh VAPID claims dict for every push: pywebpush writes the push service's address into it, and a reused one would be wrong for a device on another push service.
+  - `make_notifier()`: the `NOTIFIER` setting picks one. `webpush` without keys refuses to start.
+- `backend/app/notify/worker.py`: hands the job to the notifier and logs its answer. It no longer touches the notes. The start line says which notifier it uses.
+- `frontend/public/sw.js` (new), the service worker: on a push, closes the chat's old notification and shows a new one with `tag = chat_id`, so there's one per chat and every new message still pops up. A click focuses an open Parley tab, or opens one. `skipWaiting()` lets a new version of the file take over at once.
+- `frontend/src/lib/push.ts` (new): `pushState()`, `turnOnPush()` (only on the click: permission, public key, register `sw.js`, subscribe, POST), `resendPush()` (after log-in, only a subscription the browser already has), `turnOffPush()` (DELETE first while the access token still works, then unsubscribe in the browser).
+- `frontend/src/features/auth/AuthProvider.tsx`: re-sends after log-in and after a page load; log-out turns push off first. Push problems never hold up logging in or out.
+- `frontend/src/features/chat/ChatColumn.tsx`: the gear menu has "Turn on notifications" / "Notifications on" / "Notifications blocked", hidden where pushes can't work. If turning on fails, the reason shows in red under it.
+- Tests (126 in all):
+  - `tests/conftest.py`: `push_subscriptions` in the TRUNCATE; `NOTIFIER=log` forced, so no test ever pushes for real.
+  - `test_push_routes.py` (new): the key (and 503 without one); subscribe saves; twice from one browser = one row; subscribe moves a browser to the new user; unsubscribe deletes my own row but not someone else's; http addresses refused; log-in needed; the 11th subscribe in a minute gets 429.
+  - `test_notify_webpush.py` (new), with a fake push service and pretend browsers that have real keys: 201 sends and notes that device; the same job again is not pushed twice; the push, opened with the browser's own key, is exactly the title and chat id, with a TTL of 3600 and a VAPID signature; 404/410 delete the device with no retry; 500, 503, 429, 403, 400, a timeout and can't-connect all raise `NotifyFailed` and keep the device; no devices is skipped; two devices with one 500: the retry only tries the failed one; one device gone, the other still gets it; the setting picks the notifier; webpush without keys refuses to start; and the whole way through the worker: Ana sends "meet me at 6", Edge gets it once, Firefox fails twice and gets it on try 3, and no push contains the text.
+  - `test_notify_worker.py`: updated for the new `send()` shape.
+- Checked by hand (Ben on Edge, Microsoft's push service):
+  - The first click gave "Registration failed - push service error": the browser couldn't get an address from its push service. The second try worked.
+  - Ben's tab closed: about 5 s after Ana's send, Windows showed "New message from Ana Lima" with no text, and clicking it opened Parley.
+  - 3 quick messages: 3 pushes sent, one notification on screen (same tag).
+  - Ben's chat open in front: "skip: already read", no notification.
+  - Ben logged out: his row was deleted, and the next message gave "skip: no devices".
+  - A notification that didn't pop up (#238): the worker said "sent", but Windows' list (Win + N) still held an older one with the same tag, and a replacement is silent by default. `renotify: true` alone didn't fix it in Edge (#240, #241: one pop-up). Closing the old notification first and showing a new one did: #242 and #243, 10 s apart, gave two pop-ups and one entry in the list. Edge's DevTools (Application → Service workers) showed which `sw.js` was running.
+  - A worker signed with a wrong VAPID key: Microsoft answered 401 (not 403) on every try. Tries at 02:39:55, 02:40:05, 02:41:06 and 02:46:07, then parked in `notify.failed`. With the real key back, replay printed "Moved 1 jobs" and the worker gave "skip: already read", because Ben had opened the chat in the meantime: the replayed job checks again before pushing.
+
+**New ideas**
+- Web Push: a server can't reach a closed tab, but the browser keeps one line open to its own push service (Google's for Chrome, Microsoft's for Edge, Mozilla's for Firefox). We hand the push service a box addressed to Ben's browser, and the browser wakes up a small script to open it.
+- Service worker: a small script the browser keeps registered for a site, even when no tab of that site is open. It can wake up for a push and show a notification.
+- Push subscription: what the browser gets from its push service when it says yes. An endpoint (the browser's own address there) and two keys (`p256dh`, `auth`).
+- End-to-end locked payload: the push is encrypted with the browser's keys, so the push service passes it along but can't read it. Only that browser can open it.
+- VAPID: our own key pair. The browser subscribes with our public key, and we sign each push with the private one, so the push service only accepts pushes for Ben's browser from us.
+- Upsert: one statement that says "insert this row, or if the unique value is already there, update that row instead". No race between "is it there?" and "add it".
+- Notification tag: notifications with the same tag replace each other, so one chat shows one notification however many messages arrive. But a replacement is silent, so the service worker closes the old one and shows a fresh one, which pops up.
+- Service worker updates: a changed `sw.js` normally waits until every tab using the old one has closed. `skipWaiting()` makes it take over at once.
+- Final vs temporary errors: 404/410 means the browser is gone for good, so retrying is pointless and the row is deleted. 5xx, 429 or a timeout may work later, so they retry.
+- Per-device "already sent" notes: when one device works and another fails, the retry only tries the failed one, so nobody gets the same notification twice.
+- TTL on a push: how long the push service keeps trying to deliver it. A notification an hour late is useless, so it's dropped after one hour.
+- Asking for permission only on a click: browsers punish sites that ask on page load (quiet prompts, or auto-blocking).
+
+**In my words** (Adithya writes this)
+- How Parley reaches Ben's browser when his tab is closed (push service plus service worker): A website can't talk directly to a closed browser. Instead, the browser connects to a third-party push service (like Microsoft for Edge or Google for Chrome) and gets a unique web address. Parley sends an encrypted message to that address. The push service wakes up the closed browser in the background, and a tiny background script (the Service Worker) wakes up to display the notification.
+
+- Why a 410 deletes the device but a 500 retries: A 410 Gone means the browser is permanently gone (uninstalled, or browser data cleared). It is dead, so retrying is a waste of time and we delete the device from our database. A 500 (or a 429 or a timeout) means the push service is temporarily broken or overwhelmed. If we wait and retry, it will likely succeed later.
+
+- Why the "already sent" note is per device, not per person: Because Ben might have a phone, a tablet, and a laptop. If his phone receives the push but his tablet fails, we only want to retry the tablet. If the note was per person, a retry would either skip the tablet entirely or double-notify the phone. Tracking it per device ensures every browser gets exactly one notification.

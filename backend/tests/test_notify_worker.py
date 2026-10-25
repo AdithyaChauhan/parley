@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from app.config import settings
-from app.notify import queues, replay, worker
+from app.notify import notifier, queues, replay, worker
 from app.notify.notifier import LogNotifier
 from app.presence import service as presence
 
@@ -65,7 +65,7 @@ def test_sends_when_unread_and_notes_it_in_redis(client, sign_up, rabbit, caplog
     assert "notify Ben: New message from Ana" in caplog.text
     [key] = presence.client.keys("notified:*")
     # The "already notified" note lasts about a day (D25).
-    assert 0 < presence.client.ttl(key) <= worker.NOTIFIED_SECONDS
+    assert 0 < presence.client.ttl(key) <= notifier.NOTIFIED_SECONDS
 
 
 def test_skips_when_already_read(client, sign_up, rabbit, caplog):
@@ -161,7 +161,7 @@ def test_a_job_not_acked_is_handed_out_again(client, sign_up, caplog, monkeypatc
     assert "sent" not in caplog.text
 
     # A new worker gets the same job again, and this time sends it.
-    monkeypatch.setattr(worker, "notifier", LogNotifier())
+    monkeypatch.setattr(worker, "notifier", LogNotifier(worker.redis_client))
     second = queues.connect()
     try:
         _run_worker(worker.open_channel(second), _logged(caplog, "try 1: sent"))

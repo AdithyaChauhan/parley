@@ -28,6 +28,7 @@ LOGIN_IP = Rule("login_ip", 30, 15 * 60)  # any log-in, per IP
 SIGNUP_IP = Rule("signup_ip", 5, 60 * 60)  # per IP
 START_CHAT = Rule("start_chat", 20, 60)  # per user
 TICKET = Rule("ticket", 10, 60)  # per user
+PUSH_SUBSCRIBE = Rule("push_subscribe", 10, 60)  # per user (D26)
 
 
 def key(rule: Rule, who: object) -> str:
