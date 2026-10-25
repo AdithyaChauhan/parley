@@ -1074,6 +1074,8 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Docker's name service (`127.0.0.11`): a new container can get a new address. Nginx must look the name up again, not keep the one it found at start.
 
 **In my words** (Adithya writes this)
-- What the difference is between an image and a container:
-- Why migrations run in their own one-shot container instead of inside each backend copy:
-- How Nginx lets the backend see the real IP, and why a client can't fake it:
+- What the difference is between an image and a container: An image is a frozen, read-only blueprint of the application (containing the OS, the code, and the packages). A container is the actual running, live instance of that blueprint. You can spin up many containers from a single image.
+
+- Why migrations run in their own one-shot container instead of inside each backend copy: If multiple backend copies start at the same time and each tries to alter the database tables, they will collide and crash. By using a dedicated one-shot container, Compose ensures the migrations run exactly once. The backend copies are told to wait until the migration container finishes successfully before they start up.
+
+- How Nginx lets the backend see the real IP, and why a client can't fake it: A client can easily send a fake "X-Forwarded-For" header pretending to be a different IP. Nginx sits in front and sees the actual connection IP, then completely overwrites that header with the truth before passing it to the backend. The client cannot fake it because the backend has no public port open to the internet; the only way to reach the backend is through Nginx.
