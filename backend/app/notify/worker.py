@@ -4,6 +4,7 @@ It reads jobs from notify and notifies people who haven't read their message."""
 
 import json
 import logging
+import signal
 import time
 import uuid
 from collections.abc import Callable
@@ -178,6 +179,10 @@ def main() -> None:
     # pika prints a page of tracebacks for every failed connect. Our own
     # one-line warnings already say what happened.
     logging.getLogger("pika").setLevel(logging.CRITICAL)
+    # `docker stop` sends SIGTERM, not Ctrl+C. In a container the worker is
+    # PID 1, which ignores SIGTERM unless it asks for it. Turn it into Ctrl+C,
+    # so it takes the same clean path below (D27).
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         serve()
     except KeyboardInterrupt:

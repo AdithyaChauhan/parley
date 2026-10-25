@@ -1,0 +1,6 @@
+# Files Docker never copies into the image.
+# Secrets never go in an image: Compose passes them in at run time (D27).
+.env
+.venv/
+__pycache__/
+.pytest_cache/

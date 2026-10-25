@@ -187,3 +187,18 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Known gaps, accepted:
   - If a session just runs out (no log-out click), that browser's row stays until the next log-in there moves it.
   - If Redis fails right after one device got the push and another device failed, the retry can notify the first device twice. Logged as a warning.
+- Added in T24 (approved):
+  - `sw.js` closes the chat's old notification before showing the new one (same tag). On Windows, a silent replace hid new messages. It's still one notification per chat, but each new message pops up.
+  - `sw.js` calls `skipWaiting()`, so a new version takes over at once.
+  - Endpoints must start with `https://` (max 2048), because the worker POSTs to an address a user gave us. Allowing only known push-service hosts is a later hardening step.
+  - Microsoft's push service answers 401 for a wrong VAPID key. It's covered by "other 4xx retries, then parks".
+
+**D27. Containers**
+- One backend image runs three ways: `backend` (uvicorn), `worker` and `migrate` (a one-shot `alembic upgrade head` that the others wait for, so two copies never migrate at once).
+- The app is built by Node and served by Nginx (`web`). Nginx passes `/api` and the live line to the backend. From T25, the address is http://localhost:8080.
+- `docker compose up` starts only the helpers (dev). `docker compose --profile app up` starts all of Parley.
+- `.env` never goes into an image. Images run as non-root, and base images are pinned to exact tags. That includes `postgres` (an exact 17.x patch, since patches keep the same data format).
+- Version rule: a brand-new minor or major version (like RabbitMQ 4.4.0) waits a few weeks. A patch release (like 3.13.17) is taken at once, since patches are bug and security fixes. T25 uses `python:3.13.17-slim-trixie`, `node:24.22.1-alpine` and `nginx:1.30.6-alpine`.
+- Inside the network, services are reached by their Compose names: `db`, `redis`, `rabbitmq`, `backend`. Compose builds the addresses from the `POSTGRES_*` and `RABBITMQ_*` values in `.env`, so those passwords use only letters and numbers (`@`, `:` or `/` would break the address).
+- In a container the worker is PID 1, so it sets its own SIGTERM handler, which takes the same path as Ctrl+C.
+- Real IP: Nginx overwrites `X-Forwarded-For` with `$remote_addr`, and uvicorn trusts forwarded headers because the backend port is only reachable inside Parley's network.

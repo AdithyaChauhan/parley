@@ -1025,3 +1025,57 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why a 410 deletes the device but a 500 retries: A 410 Gone means the browser is permanently gone (uninstalled, or browser data cleared). It is dead, so retrying is a waste of time and we delete the device from our database. A 500 (or a 429 or a timeout) means the push service is temporarily broken or overwhelmed. If we wait and retry, it will likely succeed later.
 
 - Why the "already sent" note is per device, not per person: Because Ben might have a phone, a tablet, and a laptop. If his phone receives the push but his tablet fails, we only want to retry the tablet. If the note was per person, a retry would either skip the tablet entirely or double-notify the phone. Tracking it per device ensures every browser gets exactly one notification.
+
+### Task 25: Every part in a container (Dockerfiles + Docker Compose)
+**What was built**
+- Base images, each an exact tag checked on Docker Hub (D27's version rule: patches are taken at once): `python:3.13.17-slim-trixie`, `node:24.22.1-alpine` (Node 24 is the LTS line CI uses; 24.22.1 is a security patch), `nginx:1.30.6-alpine` (the stable line; 1.30.6 fixes four CVEs), and `postgres:17.11` (the newest 17.x; the local database already ran 17.11, so its data didn't change).
+- `backend/.dockerignore` (new): `.env`, `.venv/` and the caches never go into the image.
+- `backend/Dockerfile` (new): one image for backend, worker and migrate. `requirements.txt` is copied and installed before the code, so a code change reuses the packages layer (`pip install` showed `CACHED`). Runs as the normal user `parley`. The default command is uvicorn with `--proxy-headers --forwarded-allow-ips "*"`, written as a list so uvicorn itself is PID 1 and gets `docker stop`'s signal. 358 MB.
+- `backend/app/notify/worker.py`: one line in `main()`, `signal.signal(signal.SIGTERM, signal.default_int_handler)`. In a container the worker is PID 1, and Linux ignores SIGTERM for PID 1 unless the program handles it. Now SIGTERM raises `KeyboardInterrupt`, so it takes the same path as Ctrl+C: the job in progress isn't acked, closing the connection hands it back to RabbitMQ, then "Stopped." (that path was already tested in T23).
+- `frontend/.dockerignore` (new): `node_modules/`, `dist/` and `.env` stay out; the image runs its own `npm ci` and build.
+- `frontend/Dockerfile` (new), two stages: Node runs `npm ci` and `npm run build`; then only Nginx and `dist/` are kept. Runs as the `nginx` user (it owns its pid file and cache folder). 93 MB.
+- `frontend/nginx.conf` (new), replaces Nginx's default site, listens on 8080:
+  - `try_files $uri $uri/ /index.html`: an address that isn't a file gets the app, so `/login` works after a reload.
+  - `sw.js` gets `Cache-Control: no-cache`.
+  - `/api/` goes to `backend:8000` with the WebSocket upgrade headers and `proxy_read_timeout 60s` (the app pings every 25 s).
+  - `X-Forwarded-For $remote_addr`: overwritten, never added to.
+  - `resolver 127.0.0.11 valid=10s` and the address in a variable: Nginx looks `backend` up again every 10 s instead of only at start (see the 502 below).
+- `docker-compose.yml`:
+  - `x-parley-backend` holds what backend, worker and migrate share (build, image, `app` profile, `env_file: .env`, and the three addresses built from the `POSTGRES_*` and `RABBITMQ_*` values with the service names `db`, `redis`, `rabbitmq`).
+  - `migrate` (`alembic upgrade head`) waits for db, Redis and RabbitMQ to be healthy. `backend` and `worker` also wait for migrate to finish OK (`service_completed_successfully`). `web` waits for the backend to be healthy.
+  - Backend health check: Python's `urllib` asks `/api/health` (slim has no curl). The backend has no `ports:`, so only Parley's network reaches 8000. `web` is the only new port: 8080.
+  - `stop_grace_period`: 10 s for the backend, 15 s for the worker.
+  - `docker compose up` alone still starts only db, Redis and RabbitMQ.
+- `.github/workflows/ci.yml`: a new `containers` job. It makes a throwaway `.env` from `.env.example` (with `NOTIFIER=log`, since the example's VAPID keys are fake), builds both images, runs `docker compose --profile app up -d --wait`, asks `http://localhost:8080/api/health` through Nginx, shows the logs if anything failed, and always shuts down. The test jobs are unchanged.
+- `.env` (not committed): the RabbitMQ password had an `@`, which would break the `amqp://` address Compose builds. Changed to 32 letters and numbers with `rabbitmqctl change_password` (the user already lived in the volume, so `.env` alone wasn't enough) and written into the three RabbitMQ lines.
+- Checked (the long ones by running them, the screens by hand at http://localhost:8080):
+  - `docker compose --profile app up --build`: migrate `Exited (0)`; db, Redis, RabbitMQ and the backend `healthy`; worker and web `Up` (they have no health check).
+  - `.env` isn't in either image: `find / -name .env` inside both printed nothing.
+  - Ana25 (Chrome) and Ben25 (Edge) signed up, chatted live, got two ticks, then blue ticks, and saw "typing...". Reloading on `/login` showed the app, not a 404.
+  - Ben turned notifications on again (8080 is a different site from 5173), minimized Edge, and got "New message from Ana25". `docker compose logs worker`: `#1 ... skip: no devices`, then `#2 ... sent`.
+  - `docker compose restart backend`: back in 3 s, both apps reconnected by themselves (too fast to see "Reconnecting..."). Then the backend stopped for 30 s: both apps showed "Reconnecting...", Ana's "sent while down" waited, then went out (401, refresh, 201) and reached Ben. Nothing lost.
+  - `docker compose stop worker`: 2 s, "Stopped. Unfinished jobs went back to RabbitMQ."
+  - Real IP: the backend logged `172.20.0.1` (Docker's gateway, where the browser's requests come from), never Nginx's `172.20.0.7`. A request with a fake `X-Forwarded-For: 6.6.6.6` still showed `172.20.0.1`.
+  - A 502 found by `up --wait`: it made a new backend container with a new address (`.6` → `.5`), and Nginx still used the old one, since it had looked `backend` up only at start. After the resolver fix, the backend was moved to a new address (`.5` → `.8`) and Nginx found it within about 1 s without a restart.
+  - Laptop uvicorn (8000) and Vite (5173) worked at the same time as the containers (8080). All 126 tests pass.
+
+**New ideas**
+- Image vs container: an image is a frozen box (Linux, Python, the code, the packages). A container is one running copy of it. Parley's one backend image runs as three containers: backend, worker and migrate.
+- Layers and their cache: each line of a Dockerfile saves a layer. Docker reuses a layer until what it depends on changes, so installing packages before copying the code means a code change doesn't reinstall them.
+- `.dockerignore`: what never goes into the image. Secrets come in at run time instead, from Compose's `env_file`.
+- Multi-stage build: a big stage builds (Node and `node_modules`), and a small final stage keeps only the result (Nginx and `dist`).
+- Service names as addresses: inside Compose's network, `db`, `redis`, `rabbitmq` and `backend` work like hostnames. `127.0.0.1` inside a container means that container itself.
+- Health checks and start order: `depends_on` with `service_healthy` waits until a small test passes; `service_completed_successfully` waits for a one-shot container to exit 0.
+- One-shot migrate container: migrations run once, before any backend copy starts, so two copies never change the tables at the same time.
+- Profiles: services marked `app` start only with `--profile app`, so plain `docker compose up` stays the dev helpers.
+- Signals and PID 1: `docker stop` sends SIGTERM, waits the grace period, then kills hard. Linux ignores SIGTERM for PID 1 unless the program handles it, so the worker handles it itself.
+- Reverse proxy: Nginx sits in front, hands out the app's files and passes `/api` and the live line on to the backend. That's the same job Vite's proxy does in dev.
+- `X-Forwarded-For`: the header that tells the backend who really asked. Nginx overwrites it with the address it actually saw, so a client's own fake value is thrown away. Trusting it is safe only because nothing outside Parley's network can reach the backend directly.
+- Docker's name service (`127.0.0.11`): a new container can get a new address. Nginx must look the name up again, not keep the one it found at start.
+
+**In my words** (Adithya writes this)
+- What the difference is between an image and a container: An image is a frozen, read-only blueprint of the application (containing the OS, the code, and the packages). A container is the actual running, live instance of that blueprint. You can spin up many containers from a single image.
+
+- Why migrations run in their own one-shot container instead of inside each backend copy: If multiple backend copies start at the same time and each tries to alter the database tables, they will collide and crash. By using a dedicated one-shot container, Compose ensures the migrations run exactly once. The backend copies are told to wait until the migration container finishes successfully before they start up.
+
+- How Nginx lets the backend see the real IP, and why a client can't fake it: A client can easily send a fake "X-Forwarded-For" header pretending to be a different IP. Nginx sits in front and sees the actual connection IP, then completely overwrites that header with the truth before passing it to the backend. The client cannot fake it because the backend has no public port open to the internet; the only way to reach the backend is through Nginx.
