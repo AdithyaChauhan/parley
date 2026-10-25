@@ -113,3 +113,32 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  # Builds both images and starts all of Parley, like on the laptop (D27).
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Compose reads .env, and the runner has none. The example's dummy values
+      # are fine for a throwaway run. Only the notifier changes: the example's
+      # fake VAPID keys can't send real pushes.
+      - run: sed 's/^NOTIFIER=.*/NOTIFIER=log/' .env.example > .env
+
+      - run: docker compose --profile app build
+
+      # --wait: come back only once every service is healthy (migrate: finished).
+      - run: docker compose --profile app up -d --wait
+
+      # Through Nginx, the same way a browser would ask.
+      - run: curl --fail --silent --show-error http://localhost:8080/api/health
+
+      - name: Show the logs if something failed
+        if: failure()
+        run: docker compose --profile app logs
+
+      - name: Shut it all down
+        if: always()
+        run: docker compose --profile app down --volumes

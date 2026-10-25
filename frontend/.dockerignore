@@ -1,0 +1,6 @@
+# Files Docker never copies into the image. The image runs its own
+# `npm ci` and `npm run build`, so the laptop's copies stay out.
+node_modules/
+dist/
+.env
+.env.*

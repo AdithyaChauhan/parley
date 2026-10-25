@@ -19,73 +19,74 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 24: Real browser notifications (Web Push) (teaching mode for the backend, fast mode for the app)
-- **Branch:** `feature/web-push`
-- **Goal:** T23's worker stops writing a log line and sends a real notification to Ben's browser: "New message from Ana", with no message text (D12). It works even when Ben's Parley tab is closed, as long as his browser is running.
-- **Mode:** backend in teaching mode (example first, short, "In my words" questions at the end). The app part (permission button, service worker) is fast mode. Every few steps, give a short "done / next / what I need from you" recap.
+### Task 25: Every part in a container (Dockerfiles + Docker Compose) (teaching mode, friend style)
+- **Branch:** `feature/containers`
+- **Goal:** one command starts all of Parley: database, Redis, RabbitMQ, migrations, backend, worker, and the app served by Nginx. You open one address, http://localhost:8080. Your normal dev setup (uvicorn + Vite on your laptop) keeps working too.
+- **Mode:** teaching mode, friend style, with a recap every few steps. Long or repeated checks are run by Claude Code itself (CLAUDE.md).
 
 **Example first (Claude Code shows this before any code):**
 ```
- Once, on Ben's browser:
-   Ben clicks "Turn on notifications" → browser asks → Allow
-   browser → push service (Google's for Chrome/Edge, Mozilla's for Firefox) → gives an address + 2 keys
-   app → POST /api/push/subscribe {endpoint, keys} → saved in push_subscriptions (Ben, device 1)
+ docker compose --profile app up --build
+   db       ─┐
+   redis    ─┼─ healthy? ──→ migrate (alembic upgrade head, runs once, then exits)
+   rabbitmq ─┘                    │ finished OK
+                                  ├──→ backend  (uvicorn, port 8000 inside the network only)
+                                  └──→ worker   (python -m app.notify.worker)
+   web (Nginx) ──→ serves the built app, and passes /api (and the live line) to backend
+   browser ──→ http://localhost:8080   ← the only port open to your laptop (plus the DB/Redis/RabbitMQ ones for dev)
 
- Every missed message:
-   worker (T23) → "Ben, #42 unread after 5 s" → for each of Ben's devices:
-     encrypt {"title":"New message from Ana","chat_id":..} with that device's keys, sign with our VAPID key
-     POST to the device's push address
-       201 → sent, note it for that device
-       404/410 → this device unsubscribed → delete the row, don't retry
-       429/5xx/timeout → retry later (T23 retries)
-   push service → Ben's browser wakes the service worker (sw.js) → shows the notification
+ Inside the network, names replace 127.0.0.1:   DATABASE_URL → db:5432, REDIS_URL → redis:6379, ...
 ```
-- **VAPID** is a key pair that proves the push came from Parley. The public key goes to the browser, and the private key stays in `.env`.
-- The **service worker** is a small script the browser keeps alive even when the tab is closed.
-- The **push service** only passes the box along. It can't read it, because it's encrypted for Ben's browser.
+- An **image** is a frozen box with Python, the code and its packages.
+- A **container** is a running copy of an image.
+- A **profile** means `docker compose up` alone still starts only the helpers, like today. `--profile app` adds Parley itself.
 
 **Steps:**
-1. **Setup:**
-   - Add `pywebpush`, pinned to the latest stable on PyPI (check, don't guess).
-   - Make the VAPID keys once with a one-line command Claude Code gives. Adithya puts `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY` and `VAPID_SUBJECT` (a `mailto:` address) in `.env`, never in a chat or a commit. `.env.example` gets placeholders.
-   - Also fix `.env.example`'s `REDIS_URL` and `TEST_REDIS_URL` to use `127.0.0.1` (D22).
-2. **Table `push_subscriptions`** (Alembic migration, and add it to the conftest TRUNCATE):
-   - Columns: `id` (UUID), `user_id`, `endpoint` (unique), `p256dh`, `auth`, `created_at`.
-   - One row per browser per user.
-3. **Routes:**
-   - `GET /api/push/key` returns the public key.
-   - `POST /api/push/subscribe` saves the device. If that endpoint already exists, it moves to the current user, since another person may have logged in on the same browser.
-   - `DELETE /api/push/subscribe` with `{endpoint}` deletes only the current user's own row.
-   - Limit: 10 subscribes per minute per user (D24 style).
-4. **`WebPushNotifier`**, with the new shape `send(job, user_name, title)` returning the outcome (D25, D26):
-   - It sends to each of the user's devices that isn't noted yet.
-   - The Redis note becomes per device: `notified:<message>:<subscription>` (24 h). A retry only tries the devices that failed, so a phone that already got it isn't notified twice.
-   - 404/410 deletes that row and doesn't retry. 429, 5xx or a timeout raise `NotifyFailed`, so T23 retries.
-   - A user with no devices is skipped with "no devices".
-   - The payload is the title and `chat_id` only, with a TTL of 1 hour (an old notification is useless).
-   - `LogNotifier` stays for tests and for `NOTIFY_FAKE_FAIL_TIMES`. A setting picks which notifier the worker uses.
-5. **App (fast mode):**
-   - `public/sw.js`: on push, show the notification with `tag = chat_id`, so many messages from one chat replace each other instead of piling up. On click, focus an open Parley tab, or open one.
-   - A small "Turn on notifications" button in the profile area. Never ask on page load, because browsers punish that.
-   - If permission is already given, re-send the subscription after log-in, since it may belong to someone else now.
-   - **Log out:** unsubscribe in the browser and `DELETE` the row first, so a shared computer stops getting Ben's notifications.
-6. **Tests** (fake the push service, so no real network):
-   - 201 marks that device as sent. 410 deletes the row and doesn't retry. 500 retries. Two devices where one is OK and one gives 500: the retry only tries the failed one.
-   - Subscribe moves an existing endpoint to the new user. Unsubscribe can't delete someone else's row.
-   - The payload has no message text.
-   - A user with no devices is skipped.
-- **Claude-run checks:** anything with multi-minute waits (retry timings) is run by Claude Code itself, with results shown. Adithya does only the browser checks.
-- **Not in this task:** notification settings or mute, showing message text (only with E2EE later), and phones with the browser closed.
+1. **`backend/Dockerfile`:**
+   - Built on `python:3.13-slim`, pinned to an exact tag (check, don't guess).
+   - Install `requirements.txt` first, then copy the code, so a code change doesn't reinstall every package.
+   - Run as a non-root user.
+   - The default command is uvicorn with `--proxy-headers --forwarded-allow-ips="*"` (see step 4).
+   - One image, used for backend, worker and migrate, with a different command for each.
+2. **`.dockerignore`** for backend and frontend: skip `.env`, `.venv`, `node_modules`, `dist` and caches. **`.env` must never be inside an image.** Secrets come in at run time from Compose.
+3. **`frontend/Dockerfile`:** two stages.
+   - Node (an exact LTS tag) runs `npm ci` and `npm run build`.
+   - `nginx` (an exact stable tag) serves `dist`.
+4. **`frontend/nginx.conf`:**
+   - Any unknown path falls back to `index.html`, so `/login` works after a reload.
+   - `/api` is passed to `backend:8000`, with the WebSocket upgrade headers for `/api/live` and a read timeout well above the 25 s ping (D21).
+   - `sw.js` is sent with `Cache-Control: no-cache`, so a new service worker is picked up.
+   - `X-Forwarded-For` is set to `$remote_addr` (overwritten, not appended), so a client can't fake its IP.
+   - The backend's port isn't open to the laptop, so only containers on Parley's network can reach it. That's why trusting forwarded headers from any address there is OK, and the rate limits (D24) see the real browser IP.
+5. **`docker-compose.yml`:**
+   - Add `migrate`, `backend`, `worker` and `web` under the `app` profile.
+   - Health checks:
+     - PostgreSQL: `pg_isready`
+     - Redis: `redis-cli ping`
+     - RabbitMQ: T23's check
+     - Backend: `/api/health` (checked with Python, since slim has no curl)
+   - Start order uses `depends_on` with `service_healthy`, and `service_completed_successfully` for migrate.
+   - Values come from `.env`, but hostnames are the service names.
+   - `stop_grace_period`: 15 s for the worker and 10 s for the backend.
+6. **Worker:** add a SIGTERM handler (`docker stop` sends SIGTERM) that takes the same clean "finish or return the job, then Stopped" path as Ctrl+C.
+7. **CI:**
+   - A new job builds both images.
+   - It starts the whole stack with `docker compose --profile app up -d --wait`, using a throwaway `.env` made from `.env.example` with dummy values.
+   - It checks `http://localhost:8080/api/health` through Nginx, then shuts it all down.
+   - The existing test job stays as it is.
+- **Not in this task:** a second backend copy and failover (T26), HTTPS (T26 and T26b), pushing images to a registry.
 - **Done when:**
-  - Ben uses a **second browser** (Edge or Firefox; Incognito windows usually can't get push) and clicks "Turn on notifications" → Allow.
-  - Ben closes his Parley tab, but keeps the browser open. Ana sends, and about 5 s later Windows shows "New message from Ana", with no text. Clicking it opens Parley.
-  - Ana sends 3 quickly, and Ben ends up with one notification for that chat, not three.
-  - Ben has the chat open and reads at once: no notification.
-  - Ben logs out, Ana sends, and no notification arrives.
-  - If nothing shows: check Windows notification settings and Focus Assist / Do Not Disturb first.
+  - `docker compose --profile app up --build` starts everything. `migrate` runs once and exits 0, and the rest show "healthy".
+  - At http://localhost:8080, Ana (normal window) and Ben (Edge) can sign up, chat live, see ticks and typing, and the browser notification still arrives. The worker's log is in `docker compose logs worker`.
+  - Reloading on `/login` still works (SPA fallback).
+  - `docker compose restart backend`: both apps show "Reconnecting...", then come back, and nothing is lost.
+  - `docker compose stop worker` prints the clean "Stopped" line (SIGTERM).
+  - The backend log shows the browser's IP, not Nginx's.
+  - `.env` isn't inside either image (Claude Code shows the check).
+  - `docker compose up` (no profile), plus uvicorn and Vite on the laptop, still works as before.
   - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how Parley reaches Ben's browser when his tab is closed (push service plus service worker); why a 410 deletes the device but a 500 retries; why the "already sent" note is per device, not per person.
+"In my words" prompts: what the difference is between an image and a container; why migrations run in their own one-shot container instead of inside each backend copy; how Nginx lets the backend see the real IP, and why a client can't fake it.
 
 ---
 
@@ -128,11 +129,11 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 6: RabbitMQ
 - [x] T23. Notification worker with retries and a failed-jobs queue
-- [ ] T24. Browser push notifications (Web Push). Push text must not contain message text (see D12). Web Push needs HTTPS (localhost counts); check again at T26
+- [x] T24. Browser push notifications (Web Push). Push text must not contain message text (see D12). Web Push needs HTTPS (localhost counts); check again at T26
 
 ### Phase 7: Run it like production
 - [ ] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down) (the worker needs a SIGTERM handler, since `docker stop` sends SIGTERM, not Ctrl+C)
-- [ ] T26. Nginx in front of several backend copies (run uvicorn with --proxy-headers trusting only Nginx, so rate limits see the real IP) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
+- [ ] T26. Nginx in front of several backend copies (T25 already puts one Nginx in front of one copy, with real-IP headers) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
 
 ### Phase 8: Measure it
 - [ ] T26b. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.

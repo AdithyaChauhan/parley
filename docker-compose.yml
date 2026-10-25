@@ -1,6 +1,26 @@
+# `docker compose up` starts only the helpers (db, redis, rabbitmq), for dev
+# with uvicorn and Vite on the laptop. `docker compose --profile app up --build`
+# also starts Parley itself, at http://localhost:8080 (D27).
+
+# Shared by backend, worker and migrate: one image, three commands (D27).
+# `<<: *parley-backend` below pastes this block into each of them.
+x-parley-backend: &parley-backend
+  build: ./backend
+  image: parley-backend
+  profiles: [app]
+  # Secrets come in at run time, never inside the image (D27).
+  env_file: .env
+  # Inside Parley's network the helpers are reached by their service names,
+  # not 127.0.0.1. These replace the laptop addresses from .env.
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379/0
+    RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+
 services:
   db:
-    image: postgres:17
+    # An exact patch: patches keep the same data format (D27).
+    image: postgres:17.11
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -51,6 +71,67 @@ services:
       interval: 5s
       timeout: 10s
       retries: 10
+
+  # Brings the database tables up to date once, then exits. The others wait
+  # for it, so two copies never migrate at the same time (D27).
+  migrate:
+    <<: *parley-backend
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  backend:
+    <<: *parley-backend
+    # The image's own command: uvicorn on port 8000. No `ports:` on purpose,
+    # so only containers on Parley's network can reach it (D27).
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      # Slim has no curl, so ask with Python. A non-2xx answer or no answer fails.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # `docker stop` waits this long for a clean shutdown before forcing it.
+    stop_grace_period: 10s
+
+  worker:
+    <<: *parley-backend
+    command: ["python", "-m", "app.notify.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # Room to hand the job in progress back to RabbitMQ (D25, D27).
+    stop_grace_period: 15s
+
+  # Nginx: the built app, plus /api and the live line passed on to backend.
+  web:
+    build: ./frontend
+    image: parley-web
+    profiles: [app]
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
   db_data:
