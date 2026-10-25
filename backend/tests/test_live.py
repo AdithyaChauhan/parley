@@ -4,6 +4,7 @@ import uuid
 import pytest
 from fastapi import WebSocketDisconnect
 
+from app.config import settings
 from app.live import manager
 from app.presence import service as presence
 
@@ -71,12 +72,13 @@ def test_a_ticket_lives_in_redis_for_30_seconds_and_is_gone_once_used(client, si
     assert presence.client.exists(key) == 0
 
 
-def test_a_good_ticket_gets_hello_with_my_id(client, sign_up):
+def test_a_good_ticket_gets_hello_with_my_id_and_the_copy(client, sign_up):
     ana = sign_up("Ana")
     ana_id = _my_id(client, ana)
 
     with client.websocket_connect(f"/api/live?ticket={_ticket(client, ana)}") as line:
-        assert line.receive_json() == {"type": "hello", "data": {"user_id": ana_id}}
+        hello = line.receive_json()
+        assert hello == {"type": "hello", "data": {"user_id": ana_id, "copy": settings.copy_name}}
 
 
 def test_ping_gets_pong(client, sign_up):

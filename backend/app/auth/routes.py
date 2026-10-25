@@ -16,6 +16,7 @@ from app.auth.security import (
     new_refresh_token,
     verify_password,
 )
+from app.config import settings
 from app.db import get_db
 from app.limits import service as limits
 
@@ -47,7 +48,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         httponly=True,  # the page's JavaScript can't read it
         samesite="lax",  # not sent when another site posts to us
         path=REFRESH_COOKIE_PATH,
-        secure=False,  # local http for now; turned on in production
+        secure=settings.cookie_secure,  # HTTPS only, once COOKIE_SECURE is on (D28)
     )
 
 
@@ -155,8 +156,11 @@ def logout(
         session.revoked_at = datetime.now(timezone.utc)
         db.commit()
 
-    # Must use the same path as when it was set, or the browser keeps it.
-    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, httponly=True, samesite="lax")
+    # Must use the same settings as when it was set (path, Secure), or the
+    # browser keeps it (D28).
+    response.delete_cookie(
+        REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, httponly=True, samesite="lax", secure=settings.cookie_secure
+    )
 
 
 @router.get("/me", response_model=UserOut)

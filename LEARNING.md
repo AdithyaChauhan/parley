@@ -1079,3 +1079,44 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why migrations run in their own one-shot container instead of inside each backend copy: If multiple backend copies start at the same time and each tries to alter the database tables, they will collide and crash. By using a dedicated one-shot container, Compose ensures the migrations run exactly once. The backend copies are told to wait until the migration container finishes successfully before they start up.
 
 - How Nginx lets the backend see the real IP, and why a client can't fake it: A client can easily send a fake "X-Forwarded-For" header pretending to be a different IP. Nginx sits in front and sees the actual connection IP, then completely overwrites that header with the truth before passing it to the backend. The client cannot fake it because the backend has no public port open to the internet; the only way to reach the backend is through Nginx.
+
+### Task 26: Two backend copies behind Nginx, and a failover demo
+**What was built**
+- `docker-compose.yml`: `backend` became `backend_a` and `backend_b`. A new `x-parley-copy` block holds what they share (the T25 block, the waits, the health check, the 10 s stop grace). They differ only in `COPY_NAME`. The three addresses got their own name (`&parley-env`), because `<<:` only pastes one level deep: a copy that set just `COPY_NAME` would have lost `DATABASE_URL`, `REDIS_URL` and `RABBITMQ_URL`. Checked with `docker compose config`. `migrate` still runs once, first. `web` waits for both copies to be healthy.
+- `frontend/nginx.conf`: an `upstream backends` with both copies, `zone backends 64k`, `least_conn`, and `resolve max_fails=1 fail_timeout=10s` on each server. `resolver 127.0.0.11 valid=10s` moved up to the top of the file. In `/api/`: `proxy_pass http://backends`, `proxy_connect_timeout 2s`, `proxy_next_upstream error timeout` (no `non_idempotent`). This replaces T25's `set $backend` trick.
+- `resolve` checked first in our exact image, `nginx:1.30.6-alpine` (free Nginx has had it since 1.27.3). With names that didn't exist yet, `nginx -t` said "test is successful". The same file without `resolve` failed: `host not found in upstream "backend_a:8000"`.
+- Clean stop: no new code. uvicorn 0.54.0 already does it. On SIGTERM it stops taking new connections and sends close code 1012 ("server restarting") to every open live line (`server.py` and `websockets_sansio_impl.py`). A comment in `live/routes.py` says so.
+- `backend/app/live/routes.py`: `hello` carries `"copy": settings.copy_name`. `frontend/src/lib/live.ts` logs `live line on copy B` in the console. `types.ts` knows the new field. Nothing new on screen.
+- `backend/app/config.py`: `cookie_secure: bool = False`. `auth/routes.py` uses it both when setting the refresh cookie and when deleting it at log-out, because a delete must match how the cookie was made.
+- Tests: `test_live.py`'s hello test expects `copy`. New `test_cookie_secure_adds_the_secure_flag_when_set_and_deleted`: no `Secure` by default; with the setting on, log-in and log-out both carry it. All 127 tests pass.
+- `.github/workflows/ci.yml`: the test job's Postgres is pinned to `postgres:17.11`. The containers job asks `/api/health` through Nginx 10 times and fails unless both A and B answer (tried here first with `bash -e`).
+- Checked (by script through :8080, with throwaway accounts `t26-ana` and `t26-ben`):
+  - 10 × health: `A, B, A, B, A, B, A, B, A, B`.
+  - 25 quick sends: 20 × 201 then 5 × 429. A served 13 (10 ok, 3 limited), B served 12 (10 ok, 2 limited). One count, shared in Redis.
+  - Ana's line on A, Ben's on B, stop A: Ana's line closed 0.65 s later with code 1012 and was back on B 1.68 s after the stop. A send during it, sent twice with the same `client_msg_id`, reached Ben once (#21). Ben's line never dropped. 33 health checks during it: 0 errors, all B from 1 s after the stop.
+  - uvicorn itself took 0.12 s from "Shutting down" to "Finished". `docker compose stop` took 4.75 s, which is Docker Desktop's own overhead.
+  - Start A again: A answered again 8.3 s after `docker compose start` (5.2 s of that was Docker), 0 errors.
+- Checked by hand (Ana in Chrome, Ben in Edge, at :8080): Ana on B, Ben on A, chatting with ticks. `docker compose stop backend_b` mid-chat: the "available" pill turned into "Reconnecting..." with a grey dot for about 2 s, the console added `live line on copy A`, the message sent during it arrived once, and Ben noticed nothing. `docker compose start backend_b`: a new line landed on B again.
+- Found along the way:
+  - `least_conn` sends every short request to the copy with fewer open live lines. With 2 lines on A and 1 on B, 10 health checks all went to B. CI has no open lines, so there it takes turns.
+  - When a container stops, Docker's name service answers "Server failure", not "no such name", so Nginx keeps the old address to be safe. While a copy stays down, about one request every 10 s waits the 2 s connect timeout, then goes to the other copy. No errors. Seen in the second demo run: Ana's ticket POST went to B's old address, timed out after 2 s, then went to A. That's a POST that never reached a copy, so it's safe to send on.
+  - Renaming `backend` left the old `parley-backend-1` container running, because `down` only removes services still in the file. Removed by hand (`up --remove-orphans` also does it).
+
+**New ideas**
+- Load balancer: one front door (Nginx) spreading requests over several copies of the same app. The `upstream` is its list of copies.
+- `least_conn`: the next request goes to the copy with the fewest open connections. It fits live lines that stay open for hours better than taking turns does.
+- Passive health checks: Nginx doesn't ping the copies. It notices a failure on a real request (`max_fails=1`), skips that copy for `fail_timeout=10s`, then tries it again.
+- Retrying on the next copy (`proxy_next_upstream`): a GET can always be repeated. A POST is only sent on if it never reached the first copy.
+- Stateless copies, no sticky sessions: a copy keeps nothing about a user that the other copy needs. Tickets, pushes, presence and limits are in Redis, data in PostgreSQL. So any request or live line can go to either copy, and losing a copy loses no data.
+- Graceful shutdown: on SIGTERM a server stops taking new work and closes what's open with a clear reason (1012), so clients move on at once instead of waiting for a timeout.
+- `resolve` in an upstream: Nginx keeps looking names up while it runs, and starts even if a copy is missing.
+- The `Secure` cookie flag: the browser sends the cookie over HTTPS only. A cookie must be deleted with the same settings it was set with.
+
+**In my words** (Adithya writes this)
+- Why Parley doesn't need sticky sessions: "Sticky sessions" means locking a user to one specific server forever. Parley doesn't need this because the servers don't hoard any secrets in their own memory. Tickets, online status, and spam limits are stored in Redis. Messages are in PostgreSQL. Because both servers share the exact same brain, any request can go to any server, and you can lose a server without losing any data.
+
+- What Nginx does when a copy dies: Nginx acts as the load balancer. If it tries to send a request to Copy A and Copy A doesn't answer, Nginx immediately stops sending traffic to A for 10 seconds and sends everything to Copy B instead. It routes around the dead server automatically.
+
+- Why Nginx doesn't retry a POST, and why our sends are safe anyway: Nginx won't automatically retry a POST because if the first server actually saved it before crashing, retrying would save it twice. However, Parley is safe anyway because we use a client_msg_id. If Nginx retries it and the second server tries to save it, the database sees the duplicate ID, refuses to save it again, and just hands back the first copy.
+
+- Why the rate limit still works across two copies: Because the counter lives in Redis, not in the server's memory. If you send 10 messages to Copy A, Copy A adds 10 to the Redis counter. If you send 10 more to Copy B, Copy B adds 10 to that same Redis counter. The total is 20, and the limit triggers, no matter which server you talk to.

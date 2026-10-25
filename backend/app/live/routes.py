@@ -14,6 +14,7 @@ from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.schemas import BookmarkIn
 from app.chats.service import member_ids, partner_ids, save_bookmark
+from app.config import settings
 from app.db import SessionLocal
 from app.limits import service as limits
 from app.live import bus, manager, tickets
@@ -214,13 +215,17 @@ async def live_line(websocket: WebSocket, ticket: str = ""):
         # Online next, then hello: by the time the app hears hello, everyone
         # who needed the "came online" news already has it.
         await _tab_alive(line)
-        await websocket.send_json({"type": "hello", "data": {"user_id": str(user_id)}})
+        # Which copy picked up: the app logs it, for demos and debugging (D28).
+        await websocket.send_json({"type": "hello", "data": {"user_id": str(user_id), "copy": settings.copy_name}})
         # Keep the line open and handle what the app sends, one event at a
         # time. When the tab closes, this raises WebSocketDisconnect.
         while True:
             await _handle(line, await websocket.receive_text())
     except WebSocketDisconnect:
-        pass  # the tab closed: a normal ending
+        # The tab closed: a normal ending. Also how a copy stopping ends:
+        # on SIGTERM, uvicorn itself closes every open line with 1012 ("server
+        # restarting"), so the app moves to the other copy at once (D28).
+        pass
     except redis.RedisError:
         # Redis went down (a ping couldn't mark the tab alive). Without it this
         # line can't hear pushes, so end it on purpose; the app reconnects once

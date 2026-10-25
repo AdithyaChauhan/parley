@@ -46,7 +46,7 @@ export type MessagePage = {
 
 // What the server pushes down the live line (D19, D20)
 export type LiveEvent =
-  | { type: "hello"; data: { user_id: string } }
+  | { type: "hello"; data: { user_id: string; copy: string } } // copy: which backend copy picked up (D28)
   | { type: "message.new"; data: ServerMessage }
   | { type: "receipt"; data: { chat_id: string; user_id: string; delivered_up_to: number; read_up_to: number } }
   | { type: "typing"; data: { chat_id: string; user_id: string } }

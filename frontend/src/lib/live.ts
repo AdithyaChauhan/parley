@@ -170,6 +170,8 @@ export function useLiveConnection() {
           return
         }
         if (event.type === "hello") {
+          // Which backend copy we landed on, for demos and debugging only (D28)
+          console.info(`live line on copy ${event.data.copy}`)
           // The server took our ticket: a good connection, so the next drop waits 1 s again
           clearTimeout(pongTimer)
           failures = 0
