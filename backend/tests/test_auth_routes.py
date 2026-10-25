@@ -4,6 +4,7 @@ import time
 from fastapi.testclient import TestClient
 
 from app.auth import routes
+from app.config import settings
 from app.main import app
 
 ANA = {"name": "Ana Silva", "email": "ana@example.com", "password": "secret123"}
@@ -84,6 +85,22 @@ def test_refresh_after_logout_gives_401(client):
     # hand, so the 401 proves the session was closed, not just that the cookie is gone.
     client.cookies.set("refresh_token", cookie)
     assert client.post("/api/auth/refresh").status_code == 401
+
+
+def _cookie_flags(response) -> list[str]:
+    """The parts of the Set-Cookie header after the value, like ["httponly", "secure"]."""
+    return [part.strip().lower() for part in response.headers["set-cookie"].split(";")[1:]]
+
+
+def test_cookie_secure_adds_the_secure_flag_when_set_and_deleted(client, monkeypatch):
+    # Off by default: on plain http://localhost the browser would drop a Secure cookie.
+    assert "secure" not in _cookie_flags(client.post("/api/auth/signup", json=ANA))
+
+    # On (HTTPS, T26b): the log-out's delete must match, or the browser keeps the cookie (D28).
+    monkeypatch.setattr(settings, "cookie_secure", True)
+    login = client.post("/api/auth/login", json={"email": ANA["email"], "password": ANA["password"]})
+    assert "secure" in _cookie_flags(login)
+    assert "secure" in _cookie_flags(client.post("/api/auth/logout"))
 
 
 def test_two_refreshes_with_the_same_cookie_only_one_wins(client, monkeypatch):

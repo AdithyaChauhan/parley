@@ -2,7 +2,7 @@
 # with uvicorn and Vite on the laptop. `docker compose --profile app up --build`
 # also starts Parley itself, at http://localhost:8080 (D27).
 
-# Shared by backend, worker and migrate: one image, three commands (D27).
+# Shared by the backend copies, worker and migrate: one image, three commands (D27).
 # `<<: *parley-backend` below pastes this block into each of them.
 x-parley-backend: &parley-backend
   build: ./backend
@@ -12,10 +12,37 @@ x-parley-backend: &parley-backend
   env_file: .env
   # Inside Parley's network the helpers are reached by their service names,
   # not 127.0.0.1. These replace the laptop addresses from .env.
-  environment:
+  # Named on its own (&parley-env): `<<:` only pastes one level deep, so a copy
+  # that adds COPY_NAME must paste these back in, or it would lose them.
+  environment: &parley-env
     DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     REDIS_URL: redis://redis:6379/0
     RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+
+# Shared by the two backend copies (D28): the same image, waits and health
+# check. They differ only in COPY_NAME.
+x-parley-copy: &parley-copy
+  <<: *parley-backend
+  # The image's own command: uvicorn on port 8000. No `ports:` on purpose,
+  # so only containers on Parley's network can reach it (D27).
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+  healthcheck:
+    # Slim has no curl, so ask with Python. A non-2xx answer or no answer fails.
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+  # `docker stop` waits this long for a clean shutdown before forcing it.
+  # uvicorn closes the live lines at once (1012), so it rarely needs it (D28).
+  stop_grace_period: 10s
 
 services:
   db:
@@ -73,7 +100,7 @@ services:
       retries: 10
 
   # Brings the database tables up to date once, then exits. The others wait
-  # for it, so two copies never migrate at the same time (D27).
+  # for it, so the two copies never migrate at the same time (D27).
   migrate:
     <<: *parley-backend
     command: ["alembic", "upgrade", "head"]
@@ -85,27 +112,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  backend:
-    <<: *parley-backend
-    # The image's own command: uvicorn on port 8000. No `ports:` on purpose,
-    # so only containers on Parley's network can reach it (D27).
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    healthcheck:
-      # Slim has no curl, so ask with Python. A non-2xx answer or no answer fails.
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    # `docker stop` waits this long for a clean shutdown before forcing it.
-    stop_grace_period: 10s
+  # Two copies of the backend behind Nginx (D28). Any request or live line can
+  # go to either: what they share lives in PostgreSQL and Redis, not in a copy.
+  backend_a:
+    <<: *parley-copy
+    environment:
+      <<: *parley-env
+      COPY_NAME: A
+
+  backend_b:
+    <<: *parley-copy
+    environment:
+      <<: *parley-env
+      COPY_NAME: B
 
   worker:
     <<: *parley-backend
@@ -122,7 +141,7 @@ services:
     # Room to hand the job in progress back to RabbitMQ (D25, D27).
     stop_grace_period: 15s
 
-  # Nginx: the built app, plus /api and the live line passed on to backend.
+  # Nginx: the built app, plus /api and the live line spread across both copies.
   web:
     build: ./frontend
     image: parley-web
@@ -130,7 +149,9 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      backend:
+      backend_a:
+        condition: service_healthy
+      backend_b:
         condition: service_healthy
 
 volumes:

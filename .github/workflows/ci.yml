@@ -22,7 +22,8 @@ jobs:
     # A throwaway Postgres and Redis just for this run, deleted when the job ends.
     services:
       db:
-        image: postgres:17
+        # The same exact patch as docker-compose.yml (D27).
+        image: postgres:17.11
         env:
           POSTGRES_DB: parley_test
           POSTGRES_USER: parley
@@ -132,8 +133,17 @@ jobs:
       # --wait: come back only once every service is healthy (migrate: finished).
       - run: docker compose --profile app up -d --wait
 
-      # Through Nginx, the same way a browser would ask.
-      - run: curl --fail --silent --show-error http://localhost:8080/api/health
+      # Through Nginx, the same way a browser would ask. Nginx spreads the asks,
+      # so 10 of them must be answered by both copies, A and B (D28).
+      - name: Health through Nginx answers from both copies
+        run: |
+          for i in $(seq 1 10); do
+            curl --fail --silent --show-error http://localhost:8080/api/health
+            echo
+          done > answers.txt
+          cat answers.txt
+          grep -q '"copy":"A"' answers.txt
+          grep -q '"copy":"B"' answers.txt
 
       - name: Show the logs if something failed
         if: failure()

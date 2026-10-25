@@ -202,3 +202,15 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Inside the network, services are reached by their Compose names: `db`, `redis`, `rabbitmq`, `backend`. Compose builds the addresses from the `POSTGRES_*` and `RABBITMQ_*` values in `.env`, so those passwords use only letters and numbers (`@`, `:` or `/` would break the address).
 - In a container the worker is PID 1, so it sets its own SIGTERM handler, which takes the same path as Ctrl+C.
 - Real IP: Nginx overwrites `X-Forwarded-For` with `$remote_addr`, and uvicorn trusts forwarded headers because the backend port is only reachable inside Parley's network.
+- Nginx looks up container names again every 10 s (`resolver 127.0.0.11 valid=10s`), so a new backend container with a new address is found without restarting Nginx.
+- Worker and web have no health check, since nothing waits on them. The CI containers job builds, starts and checks the whole stack.
+
+**D28. Several copies behind Nginx**
+- Two backend copies (`backend_a`, `backend_b`) run the same image, and differ only in `COPY_NAME`. `migrate` still runs once, first.
+- Nginx: `upstream` with `least_conn`, and a dead copy is skipped for 10 s (`max_fails=1 fail_timeout=10s`). Upstream servers use `resolve` with a shared `zone` (free Nginx since 1.27.3), so names are re-checked and Nginx starts even if a copy is missing. This replaces T25's `set $backend` trick. A short connect timeout is used. A POST that never reached a copy (connect failed) is tried on the other one.
+- The refresh cookie is set and deleted with the same settings, including `Secure`.
+- No sticky sessions: nothing about a user lives in one copy's memory (tickets, pushes, presence and limits are in Redis, data in PostgreSQL), so any request or live line can go to any copy.
+- Nginx retries only requests that are safe to repeat. A POST is never retried once sent (token rotation could clash). Message sends are safe anyway through the app's re-send with the same `client_msg_id`.
+- A stopping copy closes its live lines at once with code 1012 ("server restarting", which uvicorn already sends on SIGTERM), so apps move to the other copy within seconds.
+- `hello` carries the copy name, logged in the browser console for demos.
+- `COOKIE_SECURE` (default `false`) sets the refresh cookie's `Secure` flag. It's turned on with HTTPS in T26b.
