@@ -1120,3 +1120,50 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why Nginx doesn't retry a POST, and why our sends are safe anyway: Nginx won't automatically retry a POST because if the first server actually saved it before crashing, retrying would save it twice. However, Parley is safe anyway because we use a client_msg_id. If Nginx retries it and the second server tries to save it, the database sees the duplicate ID, refuses to save it again, and just hands back the first copy.
 
 - Why the rate limit still works across two copies: Because the counter lives in Redis, not in the server's memory. If you send 10 messages to Copy A, Copy A adds 10 to the Redis counter. If you send 10 more to Copy B, Copy B adds 10 to that same Redis counter. The total is 20, and the limit triggers, no matter which server you talk to.
+
+---
+
+### Task 27: Responsive layout fix
+**What was built**
+- `frontend/src/features/chat/ChatScreen.tsx`: two pieces of state decide what shows.
+  - `panelOpen`: from 1280 px, the side panel is open or folded to a thin strip.
+  - `narrowView`: below 1280 px, which part has the shared spot: `"list"`, `"chat"` or `"panel"`. Phones show only that part. At 768-1279 px the list always shows, and `"panel"` takes the chat's place.
+- `frontend/src/features/chat/types.ts`: the `NarrowView` type, shared by ChatScreen and Conversation.
+- `frontend/src/features/chat/Conversation.tsx`:
+  - Never narrower than 360 px from 768 px up (`md:min-w-90`). It hides only when the side panel takes its place.
+  - Tapping the name opens the side panel below 1280 px (hand cursor there). The "Messages"/"Participants" tabs are gone.
+  - A file dropped on the chat does nothing (`dropEffect = "none"` gives the "not allowed" cursor), instead of opening in the tab and leaving Parley.
+  - When the chat comes back into view, it scrolls to the newest message and checks "read" again.
+- `frontend/src/features/chat/SidePanel.tsx`: one panel, three shapes: a phone screen, the chat's spot at 768-1279 px, or its own column from 1280 px that folds to a strip (open button and avatar only). The back arrow sits in the top-left corner of the profile block. A 1:1 chat shows "online" or "last seen", and every chat shows "No files yet".
+- `frontend/src/features/chat/ChatColumn.tsx`: no phone header. 280 px wide at 768-1023 px, 340 px from 1024 px. No "available" pill: "Reconnecting..." shows under the name only while the live line is down. No "..." menu.
+- `frontend/src/features/chat/IconRail.tsx`: only from 768 px. The logo, a Chats marker (not a button, since there's nothing to click) and my avatar.
+- `frontend/src/features/chat/MessageBox.tsx`: just the text box and the send button. Tighter on phones; a hint that doesn't fit ends in "...".
+- `frontend/src/features/chat/MessageBubble.tsx`: bubbles at most 75% wide.
+- `frontend/src/features/chat/NewChatBox.tsx`: never wider than the screen.
+- Deleted: `frontend/src/data/fake.ts` (the fake file numbers) and `frontend/src/features/chat/UploadView.tsx` (comes back from Git with files in v2).
+- `docs/design/screens.md`: a "Window sizes" section, and every screen note matches D8.
+
+**Why**
+- On laptops, all four columns tried to fit side by side. The chat got crushed to one letter per line, and the header and send button piled on top of other parts.
+- The fake file numbers looked real on real chats.
+- A button that does nothing looks broken to someone trying the app. Each hidden button comes back only in the task that makes it work (D8). Dashboard, Tasks and Stats came from the reference design, not WhatsApp, so they're gone for good.
+- Recruiters will open the live link on their phones (T28).
+
+**How the layout got here**
+- Try 1, the brief's drawer: the panel slid over the chat with a grey overlay. It looked worse.
+- Try 2: opening the panel closed the chat list. But on a big screen, everything should show.
+- Try 3, kept: all four columns from 1280 px. Below that, the panel swaps places with the chat. Seeing it in the browser decided it, not the plan on paper.
+
+**New ideas**
+- Breakpoints, mobile first: plain classes are for phones; `md:` (768 px), `lg:` (1024 px) and `xl:` (1280 px) switch on at that width and override the smaller ones.
+- Change the layout, don't squeeze: the chat has a floor (360 px). When there's no room, a column leaves instead.
+- One state, many sizes: the same `narrowView` drives the phone screens and the 768-1279 px swap. CSS decides what each size shows; React only remembers which part is active.
+- Hidden means no height: a hidden chat has `clientHeight` 0, so it never sends "read" for messages nobody can see (D20).
+- Flex rows that never overlap: the part that may shrink gets `min-w-0` and `truncate` ("..."); parts that must stay whole get `shrink-0`.
+- Word wrapping: `overflow-wrap: break-word` wraps between words, and breaks inside a word only when one word alone is too wide.
+- Check the real build: at localhost:8080, rebuild web and hard-reload (Ctrl+Shift+R), or you're looking at old code.
+
+**In my words** (draft by Claude Code, Adithya keeps or edits)
+- What this task does: Parley now fits every screen, from a 360 px phone to a wide desktop. From 1280 px all four columns show. Below that, the files panel swaps places with the chat when you tap the name, and a phone shows one screen at a time. Buttons that don't work yet are hidden, so nothing on the live app looks broken.
+- What I'd check first if it broke: rebuild web and hard-reload first, since an old build fooled me once. Then open DevTools' device toolbar at the width where it breaks and find the column that's too wide: usually a missing `min-w-0`, `shrink-0` or size prefix.
+- What still confuses me: when two classes clash at the same size, like `hidden` and `flex` in one `cn(...)`, I think tailwind-merge keeps the last one. I'm not sure how it decides that across different sizes.

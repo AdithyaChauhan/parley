@@ -48,7 +48,7 @@ export function NewChatBox({ onStarted, onClose }: NewChatBoxProps) {
       onSubmit={handleSubmit}
       onKeyDown={(e) => e.key === "Escape" && onClose()}
       noValidate
-      className="absolute top-full right-0 z-20 mt-1 w-72 rounded-lg bg-card p-3 shadow-lg ring-1 shadow-foreground/10 ring-border"
+      className="absolute top-full right-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-lg bg-card p-3 shadow-lg ring-1 shadow-foreground/10 ring-border"
     >
       <label htmlFor="new-chat-email" className="text-label">
         Start a chat by email

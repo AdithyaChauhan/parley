@@ -40,6 +40,20 @@ Parley matches the reference screenshots closely: layout, colors, spacing, shape
 The blue-grey frame around the app in the screenshots is only a showcase background. The real app fills the whole browser window, with no outer frame, and resizes with it. Profile areas are kept compact so lists get the most space.
 Not copied: the logo, names and photos. Parley has its own logo, made-up names and its own avatars. The README credits the reference design.
 Group chats, the side panel and uploads are built as screens first. They work for real in v2.
+Window sizes (T27):
+- From 1280 px, all four columns show: rail, list, chat and side panel. The panel can fold to a thin strip that shows only the open button and the avatar.
+- At 768-1279 px, the side panel has no column. Tapping the name at the top of the chat shows the panel in the chat's place, with a back arrow, and the chat list stays.
+- Under 768 px, it's one screen at a time (list, chat, files), with a back arrow only and no "Chat" or "Shared files" titles. There's no bottom bar: with only Chats left, it would be one button that does nothing.
+- The rail (from 768 px) holds the logo, the Chats icon right under it, and the user's avatar at the bottom.
+- "Reconnecting..." shows under the user's name only while the live line is down. The list moving down a little during a reconnect is accepted.
+No dead buttons on the live app. Anything that doesn't work yet is hidden, not shown as "coming soon". That covers:
+- the rail icons other than Chats
+- the "available" pill
+- the "..." menu
+- emoji and attach, and file drop
+- the "Messages" and "Participants" tabs (in v2, a group's members show in the side panel, reached by tapping the name, like WhatsApp's group info)
+A hidden button comes back only in the task that makes it work: attach and drop with files, emoji with reactions, the "..." menu with groups (all v2). The eye icon comes back with Status and the calls icon with calls (maybe later). Dashboard, Tasks and Stats came from the reference design, not WhatsApp, so they stay gone.
+The fake file numbers are removed (T27). Every chat's side panel shows "No files yet" until v2. In a 1:1 chat, the side panel shows "online" or "last seen", not "2 members".
 
 **D9. Message rules**
 - Save to the database before sending anywhere.
@@ -66,7 +80,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
 - Adithya makes every commit and writes the message in his own words. Commits never have a "Co-Authored-By: Claude" line.
-- PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T31).
+- PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T33).
 - Private repo; goes public once live chat works.
 
 **D14. Who does what**
@@ -76,7 +90,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
 
 **D15. Database access style**
-- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T28) show a need.
+- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T30) show a need.
 - Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
 - Config comes from `.env` through pydantic-settings. No secrets in committed files.
 
@@ -148,7 +162,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Tickets live in Redis (`ticket:<t>`, 30 s timer) and are redeemed with `GETDEL`, so any copy can redeem a ticket any copy made, exactly once.
 - Each copy has a `COPY_NAME`, shown in `/api/health`.
 - Pub/sub ignores Redis database numbers, so dev (db 0) and tests (db 15) share channel names. That's harmless because user ids are random UUIDs.
-- Subscribe and unsubscribe on a copy go through one lock. Check it under load in T28.
+- Subscribe and unsubscribe on a copy go through one lock. Check it under load in T30.
 
 **D24. Limits, and when Redis is down**
 - Limits use a sliding window in Redis (a sorted set of times, one transaction per check). Too many gives 429 with `Retry-After`.
@@ -213,4 +227,13 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Nginx retries only requests that are safe to repeat. A POST is never retried once sent (token rotation could clash). Message sends are safe anyway through the app's re-send with the same `client_msg_id`.
 - A stopping copy closes its live lines at once with code 1012 ("server restarting", which uvicorn already sends on SIGTERM), so apps move to the other copy within seconds.
 - `hello` carries the copy name, logged in the browser console for demos.
-- `COOKIE_SECURE` (default `false`) sets the refresh cookie's `Secure` flag. It's turned on with HTTPS in T26b.
+- `COOKIE_SECURE` (default `false`) sets the refresh cookie's `Secure` flag. It's turned on with HTTPS in T28.
+- Known behaviour: for a stopped container, Docker's name service answers "server failure", not "no such name", so Nginx keeps the old address. While a copy stays down, about one request in 10 s waits the 2 s connect timeout, then goes to the other copy, with no errors. Active health checks come with a cloud load balancer or Kubernetes (T31/T32).
+- After renaming a Compose service, use `up --remove-orphans` to remove the old container.
+
+**D29. AWS is optional, never required**
+- Parley must always run with no AWS at all: `docker compose --profile app up` on any machine (a laptop or any Linux server) is the main way to run it, and it keeps working after the AWS free plan ends.
+- The app code has no AWS SDK and no AWS-only features. It reads plain settings (database, Redis and RabbitMQ addresses, secrets) from the environment, the same on a laptop and on AWS.
+- Everything AWS-specific lives in `deploy/aws/` (Terraform, deploy workflow, notes). Deleting that folder, or running `terraform destroy`, never breaks the project.
+- File storage (v2) uses the S3 protocol: MinIO in Docker Compose by default, and AWS S3 only when configured. It's the same code either way.
+- When the free plan ends: `terraform destroy` the same day, keep the README's demo video and screenshots as proof, and the project still runs locally with one command.

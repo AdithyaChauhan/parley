@@ -3,9 +3,6 @@ import {
   Bell,
   BellOff,
   BellRing,
-  ChevronDown,
-  ChevronLeft,
-  EllipsisVertical,
   LogOut,
   Plus,
   Search,
@@ -102,26 +99,16 @@ export function ChatColumn({
 
   return (
     <section
+      // 768-1023px: a narrower list, so the conversation keeps its room
       className={cn(
-        "min-h-0 flex-1 flex-col px-4 md:w-85 md:flex-none",
+        "min-h-0 flex-1 flex-col px-4 md:w-70 md:flex-none lg:w-85",
         phoneVisible ? "flex" : "hidden md:flex",
       )}
     >
-      {/* Phone only. On desktop the profile is the top of the column. */}
-      <header className="flex h-20 shrink-0 items-center gap-4 border-b pt-4 md:hidden">
-        <button
-          type="button"
-          aria-label="Back"
-          className="flex size-10 items-center justify-center rounded-lg bg-row-selected text-muted-foreground"
-        >
-          <ChevronLeft className="size-4" />
-        </button>
-        <h1 className="text-header">Chat</h1>
-      </header>
-
-      <div className="relative flex shrink-0 flex-col items-center pt-4 pb-4 md:pt-6">
+      {/* No header, even on a phone: the profile is the top of the column (D8) */}
+      <div className="relative flex shrink-0 flex-col items-center pt-6 pb-4">
         {/* The gear opens a small menu with "Log out" */}
-        <div className="absolute top-3 right-0 md:top-5">
+        <div className="absolute top-5 right-0">
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
@@ -147,18 +134,8 @@ export function ChatColumn({
         </div>
         <Avatar name={myName} tint="teal" size="lg" status={live === "online" ? "online" : "offline"} />
         <p className="mt-2 text-name">{myName}</p>
-        {/* While the line is down, the note takes the pill's place at the same height, so nothing jumps */}
-        {live === "reconnecting" ? (
-          <p className="mt-2 py-0.5 text-sm text-muted-foreground">Reconnecting...</p>
-        ) : (
-          <button
-            type="button"
-            className="mt-2 flex items-center gap-1.5 rounded-md bg-status-pill px-3 py-0.5 text-sm text-primary"
-          >
-            available
-            <ChevronDown className="size-3.5" />
-          </button>
-        )}
+        {/* Only while the live line is down: the list moves down a little then (D8) */}
+        {live === "reconnecting" && <p className="mt-1 text-sm text-muted-foreground">Reconnecting...</p>}
       </div>
 
       <label className="flex h-12 shrink-0 items-center gap-2 rounded-lg bg-search px-5">
@@ -182,9 +159,6 @@ export function ChatColumn({
             className="flex size-8 items-center justify-center rounded-lg bg-accent text-primary"
           >
             <Plus className="size-4" />
-          </button>
-          <button type="button" aria-label="More" className="text-muted-foreground">
-            <EllipsisVertical className="size-4" />
           </button>
           {newChatOpen && (
             <NewChatBox

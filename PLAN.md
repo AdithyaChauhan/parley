@@ -19,57 +19,35 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 26: Two backend copies behind Nginx, and a failover demo (teaching mode, friend style)
-- **Branch:** `feature/two-copies-nginx`
-- **Goal:** Nginx spreads users across two backend copies, A and B. If one copy dies mid-chat, the people on it reconnect to the other within seconds, and nothing is lost. This is the demo for the README video.
-- **Mode:** teaching mode, friend style, with recaps. Claude Code runs the repeated and timed checks. Adithya does the browser demo.
+### Task 27: Responsive layout fix (fast mode)
+- **Branch:** `fix/responsive-layout`
+- **Goal:** Parley looks right at every window size, from a 360 px phone to a wide desktop, before the live link goes out (T28). Recruiters will open it on their phones.
+- **Mode:** frontend fast mode (CLAUDE.md). There are no backend changes.
 
-**Example first (Claude Code shows this before any code):**
+**What's broken today (Adithya's screenshots):**
+- At about 1100-1250 px, three columns don't fit. The chat column gets crushed, so text wraps one letter per line, the avatar overlaps the "Messages" tab, and the send button sits on top of the files panel.
+- At phone size, the "Chat" and "Shared files" titles are back, even though D8 removed them.
+- Real chats show fake file counts ("23 files, 9 links").
+
+**Target layout (final, after trying it in the browser):**
 ```
- browser → Nginx :8080 ─┬─→ backend_a (COPY_NAME=A)
-                        └─→ backend_b (COPY_NAME=B)      both share db, redis, rabbitmq
- GET /api/health ×6 → A, B, A, B, A, B                    (spread out)
- Ana's live line → A,  Ben's live line → B               (any copy works: tickets and pushes are in Redis, T21)
-
- docker compose stop backend_a   (mid-chat)
-   Ana's line closes → "Reconnecting..." → new ticket → Nginx skips A → line on B (a few seconds)
-   Ana's waiting message goes out once (client_msg_id), and catch-up fills any gap
-   Ben notices nothing
- docker compose start backend_a  → new lines can land on A again
+ 1280 px and up   icon rail | list | chat | side panel      (the panel folds to a thin strip: open button + avatar only)
+ 768-1279 px      icon rail | list | chat                   (tap the name → the side panel takes the chat's place, back arrow returns)
+ under 768 px     one screen at a time: list → chat → files, no bottom bar, a back arrow only
 ```
-- **No "sticky sessions":** with sticky sessions, Ana would be tied to one copy. We don't need them, because nothing about Ana lives inside a copy's memory. It's all in PostgreSQL and Redis.
+**Added during the task:** hide every button that does nothing yet. That's the rail icons other than Chats, the "available" pill, the "..." menu, emoji and attach, file drop, and the "Messages" and "Participants" tabs. A 1:1 side panel shows "online" or "last seen" instead of "2 members" (D8). Choices made: no bottom bar on phones, the Chats icon right under the logo in the rail, the folded strip shows only the open button and avatar, "Reconnecting..." appears under the name only while the line is down, and `UploadView.tsx` is deleted (it comes back from Git in v2).
 
-**Steps:**
-1. **Compose:**
-   - Replace `backend` with `backend_a` and `backend_b`. They share the T25 block, differ only in `COPY_NAME`, and have the same health check.
-   - `web` waits for both to be healthy.
-   - `migrate` still runs once, before both (D27).
-2. **`nginx.conf`:**
-   - An `upstream` with both copies, `least_conn` (the next line goes to the copy with fewer open connections, which suits long-lived live lines), and `max_fails=1 fail_timeout=10s`, so a dead copy is skipped for 10 s.
-   - Keep T25's "find new container addresses" behaviour for upstream servers. Use the `resolve` option on the upstream servers with a shared `zone`, and check our Nginx version supports it.
-   - Short `proxy_connect_timeout` (about 2 s).
-   - `proxy_next_upstream` retries on connection errors and timeouts, but only for requests that are safe to repeat. Nginx's default is to never retry a POST once it's been sent, and we keep that: a repeated log-in or refresh could clash with token rotation. Sends are safe anyway, because the app re-sends with the same `client_msg_id`.
-3. **Clean stop:** when a copy gets SIGTERM, its live lines close quickly with a "going away" code, so apps reconnect at once rather than after the 10 s grace period. Check what uvicorn does today and show it.
-4. **App (fast mode):** the `hello` event carries the copy name, and the app logs "live line on copy B" in the browser console. That's for the demo and debugging only, with nothing new on screen.
-5. **Refresh cookie:** a `COOKIE_SECURE` setting (default `false`). T26b turns it on with HTTPS.
-6. **Chore:** pin CI's test-job Postgres to `postgres:17.11` (D27).
-7. **CI containers job:** starts both copies and checks that `/api/health` through Nginx answers from both A and B.
-8. **Tests:** backend tests don't change much: the copies are the same code. Add a test that `COOKIE_SECURE` sets the cookie's `Secure` flag. Claude Code proves the rest with commands (below).
-- **Claude-run checks:**
-  - 10 × `/api/health` shows both A and B.
-  - Stop A, and every request goes to B with no errors after the first few seconds.
-  - Start A again, and it gets traffic again.
-  - 25 quick sends spread across both copies still hit the 20-per-10-s limit (the limits live in Redis).
-  - A copy stopping closes its lines in about a second, not 10.
-- **Not in this task:** HTTPS (T26b), more than two copies, Nginx itself failing (there's one Nginx; in the cloud a load balancer does this job).
-- **Done when:**
-  - `docker compose --profile app up --build`: backend_a and backend_b are both healthy.
-  - Ana (Chrome) and Ben (Edge) chat at :8080, and the browser consoles show which copy each is on.
-  - **Failover demo:** stop the copy Ana is on in the middle of a chat. Ana shows "Reconnecting..." and is back within a few seconds on the other copy. A message she sends during it arrives once. Ben keeps chatting with no problem. Start the copy again, and all is fine.
-  - The Claude-run checks above pass, with output shown.
-  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
+**Rules:**
+- The chat column has a minimum width and never gets squeezed below it. When there's no room, the layout moves down one size row instead.
+- Bubbles are at most about 75% of the chat width and wrap between words. Only very long words, like links, may break mid-word.
+- Header parts (avatar, name, last seen) never overlap. A long name shortens with "...".
+- Under 768 px, the phone back arrow goes chat → list and files → chat. The list screen has no back arrow.
+- Every chat shows a "No files yet" empty state in the side panel. The fake file numbers and `fake.ts` are removed (D8).
+- Keep the look from D8: same colors, spacing and font. This task only changes how things fit.
 
-"In my words" prompts: why Parley doesn't need sticky sessions; what Nginx does when a copy dies (skip it, try the other); why Nginx doesn't retry a POST, and why our sends are safe anyway; why the rate limit still works across two copies.
+**Checks (Adithya, Chrome DevTools device toolbar):** 360, 390, 768, 1024, 1280 and 1440 px, plus slowly dragging the window from wide to narrow. At each size: no overlaps, no crushed chat, and sending and reading still work.
+- **Not in this task:** dark mode, a real files feature (v2), and new screens.
+- **Done when:** every check size looks right, lint and build are clean, CI is green, and Claude Code drafts the LEARNING.md section including "In my words" (fast mode).
 
 ---
 
@@ -116,21 +94,26 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 7: Run it like production
 - [x] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down) (the worker needs a SIGTERM handler, since `docker stop` sends SIGTERM, not Ctrl+C)
-- [ ] T26. Nginx in front of several backend copies (T25 already puts one Nginx in front of one copy, with real-IP headers) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
+- [x] T26. Nginx in front of several backend copies (T25 already puts one Nginx in front of one copy, with real-IP headers) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
+- [ ] T27. Responsive layout fix, and hide buttons that do nothing yet (fast mode), before going live: four columns from 1280 px, the side panel in the chat's place at 768-1279 px, one screen at a time under 768 px (D8)
 
-### Phase 8: Measure it
-- [ ] T26b. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.
-- [ ] T27. Prometheus metrics and a Grafana dashboard
-- [ ] T28. Load test with 1,000 fake users; write up the results with the laptop's specs (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
+### Phase 8: Go live
+- [ ] T28. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. AWS extras (D29), all in `deploy/aws/`: Terraform for the server, ECR for images, GitHub Actions deploy through OIDC (no stored AWS keys), secrets in SSM Parameter Store, and a CloudWatch alarm. The app itself never needs AWS. Notes for the brief: the browsers subscribe to push again on the new site, so re-check the VAPID subject; real IP (D27) holds only while Nginx is the only thing in front, since a cloud load balancer in front would change X-Forwarded-For handling. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.
 
-### Phase 9: Kubernetes
-- [ ] T29. Run Parley on local Kubernetes
-- [ ] T30. Optional, only if ready before the AWS free plan ends (around mid-December 2026): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
+### Phase 9: Measure it
+- [ ] T29. Prometheus metrics and a Grafana dashboard
+- [ ] T30. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
 
-### Phase 10: Show it
-- [ ] T31. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
+### Phase 10: Kubernetes
+- [ ] T31. Run Parley on local Kubernetes
+- [ ] T32. Optional, only if ready before the AWS free plan ends (around mid-December 2026): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
+
+### Phase 11: Show it
+- [ ] T33. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
-- v2: groups, images and voice notes, reactions, edit and delete, search
+- v2, in this order: groups (one message fans out to many people), images and documents (S3-style storage: MinIO in Docker Compose by default, AWS S3 when configured, D29), voice notes, reactions (these bring back the emoji button), edit and delete, search (only for your own messages on your device, D12). Groups bring back the "..." menu ("New group") and the group members view.
+- Maybe later: Status (24-hour stories, which bring back the eye icon: a good topic for expiry and fan-out), voice and video calls (WebRTC, a big topic on its own, which bring back the calls icon).
+- Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service

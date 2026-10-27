@@ -19,6 +19,8 @@ Adithya isn't learning frontend in depth. For frontend work:
 - Group steps freely. After each group, give a 2-3 line summary and one check (usually "open the page and compare it with the screenshot").
 - Stop only for: a command Adithya must run, a choice that needs his OK, a clash with DECISIONS.md, or an error.
 - At the end, write the whole LEARNING.md section yourself, including a 3-line "In my words" draft Adithya can keep or edit.
+- Layout changes: show a quick ASCII sketch of each window size and get Adithya's OK before coding.
+- Checking at localhost:8080: rebuild first (`docker compose --profile app up -d --build web`), then hard-reload (Ctrl+Shift+R). Otherwise you're looking at an old build.
 The full teaching rules below apply to backend and system work (T8 onward, except the frontend tasks above).
 
 ## While building

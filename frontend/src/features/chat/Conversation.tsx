@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
+import { useEffect, useEffectEvent, useLayoutEffect, useRef } from "react"
 import { ArrowLeft } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
@@ -6,8 +6,7 @@ import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
 import { MessageBubble } from "./MessageBubble"
 import { lastSeenText } from "./time"
-import { tintFor, type ChatSummary, type Message } from "./types"
-import { UploadView } from "./UploadView"
+import { tintFor, type ChatSummary, type Message, type NarrowView } from "./types"
 import { useMessages } from "./useMessages"
 
 // Scrolled up less than this counts as "at the bottom": the newest message is on screen
@@ -27,13 +26,13 @@ type ConversationProps = {
   typing: boolean // the other person is typing here
   onRead: () => void // I've seen everything here: the chat list sets unread to 0
   onBack: () => void
-  onOpenPanel: () => void
-  phoneVisible: boolean
+  onOpenPanel: () => void // below 1280px: the side panel takes this conversation's place
+  view: NarrowView // below 1280px: what has the shared spot
   listChecks: number // goes up each time the chat list re-checks the server
   lineDown: boolean // the live line dropped or failed: nothing is pushed now
 }
 
-// The middle panel: title and tabs, the messages, and the message box
+// The middle panel: who you're talking to, the messages, and the message box
 export function Conversation({
   chat,
   myId,
@@ -44,7 +43,7 @@ export function Conversation({
   onRead,
   onBack,
   onOpenPanel,
-  phoneVisible,
+  view,
   listChecks,
   lineDown,
 }: ConversationProps) {
@@ -54,7 +53,6 @@ export function Conversation({
     unsent,
     { seq: chat.last_message?.seq ?? 0, checks: listChecks, lineDown },
   )
-  const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
   const fromBottom = useRef<number | null>(null)
@@ -79,12 +77,13 @@ export function Conversation({
     if (list) list.scrollTop = list.scrollHeight
   }, [lastKey])
 
-  // On a phone the chat loads while hidden behind the chat list, and a hidden
-  // list can't scroll. So when it comes into view, show the newest.
+  // Below 1280px the chat can load while hidden (behind the chat list on a
+  // phone, or the side panel), and a hidden list can't scroll. So when it
+  // comes into view (it has a height again), show the newest.
   useLayoutEffect(() => {
     const list = listRef.current
-    if (list && phoneVisible) list.scrollTop = list.scrollHeight
-  }, [phoneVisible])
+    if (list && list.clientHeight > 0) list.scrollTop = list.scrollHeight
+  }, [view])
 
   // "is typing..." came or went, so the list got shorter or taller: if you were at the bottom, stay there
   useLayoutEffect(() => {
@@ -97,7 +96,7 @@ export function Conversation({
   // below it (D21), and clear the unread count.
   function reportIfRead() {
     const list = listRef.current
-    // No height: on a phone the chat can be open but hidden behind the chat list
+    // No height: the chat can be open but hidden (behind the chat list on a phone, or the side panel)
     if (!list || list.clientHeight === 0 || gapFreeSeq === 0 || !windowInFront()) return
     if (hiddenBelow(list) > NEAR_BOTTOM_PX) return
     reportRead(chat.id, gapFreeSeq)
@@ -105,11 +104,11 @@ export function Conversation({
   }
   const checkRead = useEffectEvent(reportIfRead)
 
-  // The messages load, new ones arrive (live or by catch-up) while you watch, or the chat comes into view on a phone.
+  // The messages load, new ones arrive (live or by catch-up) while you watch, or the chat comes back into view.
   // A layout effect, so the unread count clears before the screen is drawn: no flash of a "1".
   useLayoutEffect(() => {
     checkRead()
-  }, [gapFreeSeq, phoneVisible])
+  }, [gapFreeSeq, view])
 
   // You come back to the window or tab: what's on screen now counts as read
   useEffect(() => {
@@ -141,29 +140,20 @@ export function Conversation({
     return null
   }
 
-  function handleDragEnter(e: DragEvent) {
-    if (e.dataTransfer.types.includes("Files")) setDragging(true)
-  }
-
-  // Only hide the upload view when the file leaves the whole panel, not when it moves over a child
-  function handleDragLeave(e: DragEvent) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
-  }
-
-  function handleDrop(e: DragEvent) {
-    e.preventDefault() // stop the browser opening the file
-    setDragging(false)
-  }
-
   return (
     <section
-      onDragEnter={handleDragEnter}
-      onDragOver={(e) => e.preventDefault()} // needed so the browser allows a drop here
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      // No file drops until v2 (D8). Without this, a file dropped here would open in the tab and leave Parley.
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = "none" // the "not allowed" cursor
+      }}
+      onDrop={(e) => e.preventDefault()}
       className={cn(
-        "relative min-h-0 min-w-0 flex-1 flex-col bg-conversation md:my-4 md:rounded-panel",
-        phoneVisible ? "flex" : "hidden md:flex",
+        // Never squeezed below 360px from 768px up. From 1280px the gap on its right comes from the side panel.
+        "min-h-0 min-w-0 flex-1 flex-col bg-conversation md:my-4 md:mr-4 md:min-w-90 md:rounded-panel xl:mr-0",
+        // Phone: only when it's the chat's turn. 768-1279px: unless the side panel took its place.
+        view === "chat" ? "flex" : "hidden",
+        view === "panel" ? "md:hidden xl:flex" : "md:flex",
       )}
     >
       <header className="flex h-16 shrink-0 items-center gap-3 border-b px-4 md:px-6">
@@ -175,10 +165,11 @@ export function Conversation({
         >
           <ArrowLeft className="size-4" />
         </button>
+        {/* Below 1280px, tapping the name shows the side panel in the chat's place (D8) */}
         <button
           type="button"
           onClick={onOpenPanel}
-          className="flex min-w-0 items-center gap-3 text-left md:cursor-default"
+          className="flex min-w-0 cursor-pointer items-center gap-3 text-left xl:cursor-default"
         >
           <Avatar name={chat.name} tint={tintFor(chat.id)} status={chat.online ? "online" : undefined} />
           <span className="min-w-0">
@@ -191,14 +182,6 @@ export function Conversation({
             )}
           </span>
         </button>
-        <div className="ml-auto hidden gap-1 md:flex">
-          <button type="button" className="h-10 rounded-lg bg-tab-active px-6 text-primary">
-            Messages
-          </button>
-          <button type="button" className="h-10 rounded-lg px-6 text-muted-foreground">
-            Participants
-          </button>
-        </div>
       </header>
 
       {/* overflow-anchor none: the browser mustn't move the scroll on its own; handleScroll and the effects do it */}
@@ -240,8 +223,6 @@ export function Conversation({
       <div className="shrink-0 px-4 pb-4">
         <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
       </div>
-
-      {dragging && <UploadView chatName={chat.name} isGroup={chat.kind !== "direct"} />}
     </section>
   )
 }
