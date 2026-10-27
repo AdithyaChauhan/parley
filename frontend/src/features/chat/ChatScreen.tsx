@@ -6,12 +6,9 @@ import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
-import type { ChatSummary, ServerMessage } from "./types"
+import type { ChatSummary, NarrowView, ServerMessage } from "./types"
 import { useOutbox } from "./useOutbox"
 import { useTyping } from "./useTyping"
-
-// On a phone only one column shows at a time
-type PhoneView = "list" | "chat" | "panel"
 
 // The chat list shows each chat's newest message, so it's on this device now (D20)
 function reportListDelivered(list: ChatSummary[]) {
@@ -38,9 +35,10 @@ export function ChatScreen({ user }: { user: User }) {
   const [chats, setChats] = useState<ChatSummary[] | null>(null) // null = still loading
   const [loadFailed, setLoadFailed] = useState(false)
   const [openId, setOpenId] = useState<string | null>(null)
-  // Open on wide screens (1280px and up). Folded on smaller laptops so the conversation keeps its room
-  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 1280)
-  const [phoneView, setPhoneView] = useState<PhoneView>("list")
+  // 1280px and up: the side panel's column is open, or folded to a strip
+  const [panelOpen, setPanelOpen] = useState(true)
+  // Below 1280px: which part takes the shared spot (see NarrowView)
+  const [narrowView, setNarrowView] = useState<NarrowView>("list")
   // Goes up by one each time the chat list is re-checked, so the open chat can re-check with it (D21, D24)
   const [listChecks, setListChecks] = useState(0)
   // My unsaved messages per chat, sent one at a time, in order (D21)
@@ -87,7 +85,7 @@ export function ChatScreen({ user }: { user: User }) {
   // does that (markRead) once the messages are really on screen (D20).
   function selectChat(id: string) {
     setOpenId(id)
-    setPhoneView("chat")
+    setNarrowView("chat")
   }
 
   // The open chat sent "read": nothing in it is unread any more
@@ -200,7 +198,7 @@ export function ChatScreen({ user }: { user: User }) {
         onSelect={selectChat}
         onChatStarted={chatStarted}
         typing={typing}
-        phoneVisible={phoneView === "list"}
+        phoneVisible={narrowView === "list"}
         myName={user.name}
         live={live}
         onLogout={logout}
@@ -217,9 +215,9 @@ export function ChatScreen({ user }: { user: User }) {
             onRetry={(message) => outbox.retry(openChat.id, message)}
             typing={openChat.id in typing}
             onRead={() => markRead(openChat.id)}
-            onBack={() => setPhoneView("list")}
-            onOpenPanel={() => setPhoneView("panel")}
-            phoneVisible={phoneView === "chat"}
+            onBack={() => setNarrowView("list")}
+            onOpenPanel={() => setNarrowView("panel")}
+            view={narrowView}
             listChecks={listChecks}
             lineDown={live === "reconnecting"}
           />
@@ -227,12 +225,12 @@ export function ChatScreen({ user }: { user: User }) {
             chat={openChat}
             open={panelOpen}
             onToggle={() => setPanelOpen((open) => !open)}
-            onBack={() => setPhoneView("chat")}
-            phoneVisible={phoneView === "panel"}
+            onBack={() => setNarrowView("chat")}
+            narrowVisible={narrowView === "panel"}
           />
         </>
       ) : (
-        <section className="hidden min-w-0 flex-1 items-center justify-center bg-conversation text-muted-foreground md:my-4 md:mr-4 md:flex md:rounded-panel">
+        <section className="hidden min-w-0 flex-1 items-center justify-center bg-conversation text-muted-foreground md:my-4 md:mr-4 md:flex md:min-w-90 md:rounded-panel">
           {chats ? "Pick a chat, or start one with +" : ""}
         </section>
       )}

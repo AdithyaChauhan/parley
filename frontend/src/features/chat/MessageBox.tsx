@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { Paperclip, SendHorizontal, Smile } from "lucide-react"
+import { SendHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 type MessageBoxProps = {
@@ -22,7 +22,8 @@ export function MessageBox({ onSend, onTyping }: MessageBoxProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex h-16 items-center gap-3 rounded-panel bg-card pr-2 pl-6 shadow-sm shadow-foreground/5"
+      // Tighter on a phone, so the typing space keeps its room
+      className="flex h-16 items-center gap-2 rounded-panel bg-card pr-2 pl-4 shadow-sm shadow-foreground/5 md:gap-3 md:pl-6"
     >
       <input
         value={text}
@@ -32,15 +33,9 @@ export function MessageBox({ onSend, onTyping }: MessageBoxProps) {
         }}
         placeholder="Write your message..."
         aria-label="Message"
-        className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+        className="min-w-0 flex-1 bg-transparent text-ellipsis outline-none placeholder:text-muted-foreground"
       />
-      <button type="button" aria-label="Emoji" className="text-rail-icon hover:text-muted-foreground">
-        <Smile className="size-5" />
-      </button>
-      <button type="button" aria-label="Attach a file" className="text-rail-icon hover:text-muted-foreground">
-        <Paperclip className="size-5" />
-      </button>
-      <Button type="submit" aria-label="Send" className="ml-2 size-12 rounded-lg">
+      <Button type="submit" aria-label="Send" className="ml-1 size-12 shrink-0 rounded-lg md:ml-2">
         <SendHorizontal className="size-5" />
       </Button>
     </form>

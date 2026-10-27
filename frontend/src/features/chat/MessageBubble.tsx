@@ -43,7 +43,7 @@ export function MessageBubble({ message, senderName, senderTint, mine, receipt, 
         </p>
         <div
           className={cn(
-            "max-w-[80%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word",
+            "max-w-[75%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word",
             unsaved && "opacity-60",
           )}
         >
@@ -63,7 +63,7 @@ export function MessageBubble({ message, senderName, senderTint, mine, receipt, 
   return (
     <div className="flex items-end gap-3">
       <Avatar name={senderName} tint={senderTint} size="sm" />
-      <div className="flex max-w-[80%] min-w-0 flex-col items-start gap-2">
+      <div className="flex max-w-[75%] min-w-0 flex-col items-start gap-2">
         <p className="text-label">
           {senderName}, {time}
         </p>

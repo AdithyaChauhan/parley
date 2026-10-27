@@ -7,6 +7,11 @@ export type Tint = "teal" | "purple" | "yellow" | "red"
 // sending = small clock, sent = one grey tick, delivered = two grey, read = two teal
 export type Tick = "sending" | "sent" | "delivered" | "read"
 
+// Which part takes the shared spot on a smaller screen (D8). On a phone: only
+// that one shows. 768-1279px: the list always shows, and "panel" takes the
+// conversation's place. From 1280px everything shows and this is ignored.
+export type NarrowView = "list" | "chat" | "panel"
+
 // One row of the chat list (GET /api/chats, and the reply to POST /api/chats/direct)
 export type ChatSummary = {
   id: string
