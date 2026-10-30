@@ -70,7 +70,7 @@ The fake file numbers are removed (T27). Every chat's side panel shows "No files
 Kafka is not used: RabbitMQ fits our jobs and is lighter.
 
 **D11. AWS later**
-Kubernetes runs on the laptop. A short EKS run happens only if ready before the AWS free plan ends (around mid-December 2026).
+Kubernetes runs on the laptop. A short EKS run happens only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out).
 
 **D12. Encryption is a later phase**
 - 1:1 text only, one device per user, Web Crypto (ECDH + AES-GCM), safety-number check.
@@ -80,7 +80,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
 - Adithya makes every commit and writes the message in his own words. Commits never have a "Co-Authored-By: Claude" line.
-- PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T33).
+- PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T34).
 - Private repo; goes public once live chat works.
 
 **D14. Who does what**
@@ -90,7 +90,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
 
 **D15. Database access style**
-- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T30) show a need.
+- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T31) show a need.
 - Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
 - Config comes from `.env` through pydantic-settings. No secrets in committed files.
 
@@ -162,7 +162,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Tickets live in Redis (`ticket:<t>`, 30 s timer) and are redeemed with `GETDEL`, so any copy can redeem a ticket any copy made, exactly once.
 - Each copy has a `COPY_NAME`, shown in `/api/health`.
 - Pub/sub ignores Redis database numbers, so dev (db 0) and tests (db 15) share channel names. That's harmless because user ids are random UUIDs.
-- Subscribe and unsubscribe on a copy go through one lock. Check it under load in T30.
+- Subscribe and unsubscribe on a copy go through one lock. Check it under load in T31.
 
 **D24. Limits, and when Redis is down**
 - Limits use a sliding window in Redis (a sorted set of times, one transaction per check). Too many gives 429 with `Retry-After`.
@@ -228,8 +228,9 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - A stopping copy closes its live lines at once with code 1012 ("server restarting", which uvicorn already sends on SIGTERM), so apps move to the other copy within seconds.
 - `hello` carries the copy name, logged in the browser console for demos.
 - `COOKIE_SECURE` (default `false`) sets the refresh cookie's `Secure` flag. It's turned on with HTTPS in T28.
-- Known behaviour: for a stopped container, Docker's name service answers "server failure", not "no such name", so Nginx keeps the old address. While a copy stays down, about one request in 10 s waits the 2 s connect timeout, then goes to the other copy, with no errors. Active health checks come with a cloud load balancer or Kubernetes (T31/T32).
+- Known behaviour: for a stopped container, Docker's name service answers "server failure", not "no such name", so Nginx keeps the old address. While a copy stays down, about one request in 10 s waits the 2 s connect timeout, then goes to the other copy, with no errors. Active health checks come with a cloud load balancer or Kubernetes (T32/T33).
 - After renaming a Compose service, use `up --remove-orphans` to remove the old container.
+- `up -d --build web` also recreates the backend copies (they're its dependencies). For a frontend-only change, use `up -d --no-deps --build web`, so live lines don't drop.
 
 **D29. AWS is optional, never required**
 - Parley must always run with no AWS at all: `docker compose --profile app up` on any machine (a laptop or any Linux server) is the main way to run it, and it keeps working after the AWS free plan ends.
@@ -237,3 +238,24 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Everything AWS-specific lives in `deploy/aws/` (Terraform, deploy workflow, notes). Deleting that folder, or running `terraform destroy`, never breaks the project.
 - File storage (v2) uses the S3 protocol: MinIO in Docker Compose by default, and AWS S3 only when configured. It's the same code either way.
 - When the free plan ends: `terraform destroy` the same day, keep the README's demo video and screenshots as proof, and the project still runs locally with one command.
+
+**D30. Going live (T28, T29)**
+- The account is on AWS's credit-based free plan: credits (about $141 as of Oct 28, 2026) and access until Feb 2, 2027. Running costs come out of those credits, so the brief's cost estimates are in credits used per month.
+- Region `ap-south-1` (Mumbai). One EC2 server (Ubuntu LTS, x86, sized from `docker stats`, plus 2 GB swap) with an Elastic IP, built by Terraform in `deploy/aws/terraform/`. Every resource is tagged `project=parley`.
+- No SSH: the security group opens only 80 and 443. Shell access is through AWS Session Manager (an instance role with `AmazonSSMManagedInstanceCore`).
+- The Terraform state stays local and gitignored for now (one person, one server). Moving it to S3 is a later step if more people join.
+- Claude Code never runs `terraform apply` or `destroy`, or any other AWS change, without Adithya's OK on the plan.
+- The server setup is generic (D29): `docker-compose.prod.yml` and `deploy/server/` run Parley on any Linux server. On a server, db, Redis and RabbitMQ have no published ports, and only Nginx is reachable.
+- HTTPS: a Let's Encrypt certificate through certbot (`v5.8.0`): the first one with `first-cert.sh` (standalone), then renewed automatically through webroot. Port 80 only serves the check and redirects to https. The domain is a free DuckDNS subdomain for now.
+- Production has its own secrets, including its own VAPID keys. They're typed on the server and never pass through a chat. `COOKIE_SECURE=true` on the server.
+- Before the repo goes public, its whole history is scanned for secrets.
+- Agreed at the T28 pre-check:
+  - Server: t3.small (2 GB) plus 2 GB swap, `cpu_credits = "standard"` (it slows down instead of billing extra), and Ubuntu 24.04 LTS, with image updates ignored after the first build. That's about $22/month in credits (server $16.35, Elastic IP $3.65, 20 GB gp3 $1.82), roughly $70 until Feb 2.
+  - Terraform builds its own small network (VPC, public subnet, internet gateway, route table), since Mumbai has no default VPC. `destroy` removes it all.
+  - Nginx stays non-root (D27): it listens on 8080 and 8443 inside the container, and the server maps 80 → 8080 and 443 → 8443. A certbot deploy hook gives Nginx's group read access to the key after every new or renewed certificate.
+  - The first certificate comes from `first-cert.sh` (certbot standalone on port 80 for about 30 s, before Nginx starts). Renewals use webroot through Nginx, with a dry run to prove it works.
+  - `migrate` has no restart rule (it's a one-shot job). Every other service gets `restart: unless-stopped`.
+  - Production `JWT_SECRET` and VAPID keys are generated on the server, so they never leave it. No DuckDNS token is stored: the fixed IP is set once on duckdns.org.
+  - The repo was scanned (gitleaks over all branches and PR refs, plus the real `.env` values) and is clean, so it can go public.
+  - Terraform `1.16.x` (installed: 1.16.6). Per D27's version rule, we stay on 1.16 for now, since 1.17 is a new minor version.
+  - The budget alert is $30/month (80% actual, 100% forecast, 100% actual). It excludes credits, so it counts real usage and fires on Parley's ~$22 only if something extra runs. Credits as of Oct 30: $140.52.
