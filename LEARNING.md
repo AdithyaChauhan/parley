@@ -1327,6 +1327,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
   - Rollback by hand to `95196b3`: green, and `/api/health` showed it. Forward again to `cdd1bb5`: Ana and Ben sent 4 messages during it, all arrived once and in order, and "Reconnecting..." flashed.
   - Parameter Store matched `.env` exactly, and no secret ever showed on screen.
   - CloudWatch has one log stream per Parley container. The test alarm (`set-alarm-state`) sent the ALARM email, and the OK email came 1.5 minutes later by itself.
+  - "Only main can deploy": the Deploy workflow run by hand on `fix/deploy-check` was refused at the AWS login ("Not authorized"), and the server got no command.
 - Found along the way:
   - Redis saves to disk when it stops, so restarting it doesn't empty it. `FLUSHALL` does.
   - Pasting several lines into Session Manager mixes them up. One line at a time works.
@@ -1357,7 +1358,10 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Nginx stops two ways. SIGQUIT is graceful (waits for open connections). SIGTERM is fast (closes them, and the apps reconnect).
 
 **In my words** (Adithya writes this)
-- How GitHub gets into AWS without a stored key (OIDC):
-- Why the copies restart one at a time:
-- Where the secrets live now and who can read them:
-- What happens when the alarm fires:
+- How GitHub gets into AWS without a stored key (OIDC): Instead of saving a permanent AWS password in GitHub (which could be stolen), GitHub and AWS use OIDC. For every deployment, GitHub creates a temporary, cryptographically signed "ID card" and hands it to AWS. AWS checks the card, sees it's from my specific repo on the main branch, and hands back temporary keys that expire in 1 hour. Nothing permanent is ever saved.
+
+- Why the copies restart one at a time: If we restarted both backend servers at the exact same time, the live chat would go down while they rebooted. By doing a rolling restart, Copy A restarts while Copy B handles all the traffic. Once A is healthy again, B restarts. The user never notices a drop in service.
+
+- Where the secrets live now and who can read them: Secrets (like database passwords and JWT keys) no longer live in a plain text file on the server. They live in the AWS Parameter Store as encrypted SecureStrings. Only the server's specific AWS IAM role is allowed to read them. If a hacker breaks in, they need the server's temporary AWS credentials to decrypt the values.
+
+- What happens when the alarm fires: AWS CloudWatch watches the server. If the CPU stays above 80% for 15 minutes, or if the server stops reporting its status, the alarm triggers an SNS topic. That topic immediately sends an email to my inbox telling me the server is struggling. When the server recovers, it sends a second email saying the state is OK again.
