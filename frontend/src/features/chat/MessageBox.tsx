@@ -33,7 +33,8 @@ export function MessageBox({ onSend, onTyping }: MessageBoxProps) {
         }}
         placeholder="Write your message..."
         aria-label="Message"
-        className="min-w-0 flex-1 bg-transparent text-ellipsis outline-none placeholder:text-muted-foreground"
+        // 16px on a phone: an iPhone zooms the whole page when you tap a smaller box
+        className="min-w-0 flex-1 bg-transparent text-base text-ellipsis outline-none placeholder:text-muted-foreground md:text-body"
       />
       <Button type="submit" aria-label="Send" className="ml-1 size-12 shrink-0 rounded-lg md:ml-2">
         <SendHorizontal className="size-5" />

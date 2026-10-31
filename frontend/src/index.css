@@ -145,4 +145,17 @@
   body {
     @apply bg-background text-foreground text-body;
   }
+
+  /* While the chat screen shows (useVisibleArea), the page itself never moves
+     and never bounces: only the lists inside it scroll (D8). body is pinned
+     too, because on an iPhone overflow: hidden alone doesn't stop the bounce. */
+  html.page-locked,
+  html.page-locked body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  html.page-locked body {
+    position: fixed;
+    inset: 0;
+  }
 }

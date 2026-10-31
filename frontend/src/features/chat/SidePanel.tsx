@@ -23,7 +23,7 @@ export function SidePanel({ chat, open, onToggle, onBack, narrowVisible }: SideP
     <>
       <aside
         className={cn(
-          "min-h-0 flex-1 flex-col overflow-y-auto px-4 scrollbar-thin xl:w-85 xl:flex-none",
+          "min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 scrollbar-thin xl:w-85 xl:flex-none",
           narrowVisible ? "flex" : "hidden",
           open ? "xl:flex" : "xl:hidden",
         )}

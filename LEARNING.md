@@ -1236,3 +1236,52 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - How Let's Encrypt proves you own the domain, and why http only redirects: Let's Encrypt gives you a secret code and tells you to put it at a specific URL on your server. It then visits that URL from the outside. Since only the domain owner controls the server, passing the test proves ownership. Port 80 (HTTP) only redirects to Port 443 (HTTPS) because HTTP is unencrypted. If the app were served over HTTP, anyone on the same Wi-Fi could read your messages and passwords.
 
 - Why db, Redis and RabbitMQ must have no open ports on a server: If their ports are open, the entire internet can try to connect to them, guess passwords, or flood them. They are internal helpers that only your backend servers need to talk to. By keeping their ports closed to the outside world, they become completely invisible and safe from the public internet.
+
+---
+
+### Fix: phone keyboard layout (after T28)
+**What was built**
+- `frontend/index.html`: the viewport meta gets `interactive-widget=resizes-content`. On Android Chrome the keyboard then shrinks the page instead of covering it. iPhones ignore it.
+- `frontend/src/features/chat/useVisibleArea.ts` (new): a small hook used by the chat screen.
+  - It listens to `visualViewport` (the part of the page you can actually see) and writes its height and top into two CSS variables, `--visible-height` and `--visible-top`.
+  - It follows Safari's slide (`offsetTop`) only while a text box has the focus, which is when the keyboard is up. Otherwise the top stays at 0, so a bounce can't move the screen.
+  - It ignores changes while you're pinch-zoomed in.
+  - It adds the `page-locked` class to `<html>` while the chat screen shows, and removes it on log-out.
+- `frontend/src/index.css`: `html.page-locked` turns off scrolling and bouncing on html and body (`overflow: hidden`, `overscroll-behavior: none`) and pins body (`position: fixed; inset: 0`). On an iPhone `overflow: hidden` alone didn't stop the bounce.
+- `frontend/src/features/chat/ChatScreen.tsx`: `h-svh` is replaced by `fixed inset-x-0`, with the top and height taken from the two variables (falling back to `0px` and `100dvh`).
+- `frontend/src/features/chat/Conversation.tsx`:
+  - New scroll rules: my own send always jumps to the newest message. Their message only keeps me at the bottom if I was already there. If I've scrolled up, it doesn't pull me down.
+  - A `ResizeObserver` keeps the list at the bottom when it gets shorter or taller (keyboard, "is typing..."), but only if I was at the bottom. It replaces the old `typing` effect.
+  - `overscroll-contain` on the message list. The box's bottom space is `max(1rem, env(safe-area-inset-bottom))`, which is 1rem in a browser tab.
+- `frontend/src/features/chat/MessageBox.tsx` and the Search box in `ChatColumn.tsx`: 16 px on phones (`text-base md:text-body`), so tapping them doesn't zoom. 15 px from 768 px up, as before.
+- `frontend/src/features/chat/ChatColumn.tsx`: the gear menu closes on a tap or click outside it, and on Esc. The chat list gets `overscroll-contain`.
+- `frontend/src/features/chat/SidePanel.tsx`: `overscroll-contain`.
+- `frontend/src/features/auth/AuthCard.tsx`, `AuthProvider.tsx`: `min-h-svh` becomes `min-h-dvh`. These pages aren't locked, so they can still scroll with the keyboard.
+- Checked:
+  - iPhone over Wi-Fi (Vite `--host` at the laptop's IP): with the keyboard open, the header stays at the top, the box sits just above the keyboard, there's no zoom, and only the messages scroll. Closing the keyboard after scrolling up keeps your place.
+  - iPhone: dragging on the header, the message box, an empty chat and a short chat list moves nothing (no grey strip).
+  - Live site, with the branch put up for the test (`deploy.sh web`), in iPhone Chrome and Safari: a send jumps to the newest message, a scrolled-up iPhone doesn't jump when the laptop sends, and closing the keyboard leaves no shift. Edge notifications work after turning them on in the gear menu.
+  - Gear menu: closes on a tap or click outside, and on Esc (laptop and iPhone).
+  - Lint and build clean.
+- Found along the way:
+  - Sending fails on `http://192.168.x.x`: `crypto.randomUUID()` only works on a secure page (https or localhost). So sending was tested on the live site instead.
+  - The "inverted swipe" only happened where nothing could scroll (an empty chat, a short list, the header). The swipe moved the page itself, the page bounced, and the first hook followed iOS's slide the wrong way. A stale mid-bounce value also left the header cut off right after opening a chat.
+  - `env(safe-area-inset-bottom)` is always 0 unless the page uses `viewport-fit=cover`. In a browser tab, Safari and Chrome already keep the page above the home bar, so we didn't add `cover` (it would push the layout under the notch in landscape).
+  - Pull-to-refresh never worked and live chat doesn't need it, so no change.
+
+**Why**
+- Parley's link goes on the resume next, and recruiters will open it on a phone. On an iPhone, the keyboard hid the message box or pushed the header off screen, and the page stayed slid up after the keyboard closed.
+
+**New ideas**
+- Two viewports: the layout viewport is the page's full size. The visual viewport is the part you can see right now. On an iPhone the keyboard only shrinks the visual one and slides it, so `h-svh` (and even `h-dvh`) don't get shorter.
+- `svh` / `dvh`: `svh` is the height with the browser's bars showing. `dvh` follows the bars as they show and hide. Neither knows about the iPhone keyboard.
+- Lock the page, scroll a box: when the page itself can't move, a finger can only scroll a list inside it. `overscroll-behavior` stops a list's bounce from passing on to the page.
+- iOS zooms into any text box under 16 px when you tap it. 16 px on phones fixes it without blocking pinch-zoom.
+- "Stay at the bottom" is a memory, not a position: the list remembers whether I was at the bottom (`atBottom`) and only then follows new messages or a size change.
+- Secure context: some browser features (`crypto.randomUUID`, service workers, push) only work on https or localhost. A phone on the laptop's Wi-Fi IP gets plain http.
+- Clicking outside a menu: listen for `pointerdown` on the whole page while the menu is open, and close it unless the tap landed inside the menu's box (`ref.contains`).
+
+**In my words** (draft by Claude Code, Adithya keeps or edits)
+- What this fix does: It makes the chat work on an iPhone like a native app. When the keyboard opens, the header stays at the top, the message box sits right above the keyboard, and only the messages scroll. The page itself is locked so it doesn't bounce around when you drag your finger. It also stops Safari from zooming in when you tap the text box, and it makes sure new messages don't yank you to the bottom if you're busy reading older ones.
+- What I'd check first if it broke: I would check if the page is locked (look for the `page-locked` class on the HTML element) and check what the `--visible-height` CSS variable is set to. Most importantly, I'd test on a real iPhone, because Chrome DevTools doesn't simulate the iOS keyboard correctly. Also, I'd remember that sending messages only works over HTTPS, so testing on a local Wi-Fi IP address won't work.
+- What still confuses me: Why iOS decides to slide the page up instead of just shrinking it when the keyboard opens, and why `overflow: hidden` wasn't enough to stop the bounce until we forced the body to `position: fixed`.

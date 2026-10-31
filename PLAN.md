@@ -13,82 +13,58 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - npm audit's "braces" warnings: dev-only and no fixed version yet. Don't raise them again until a fix exists.
 - Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
 - Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
+- Test devices: a Windows laptop (Chrome, Edge) and an iPhone (Safari, Chrome). There is no Android, so briefs ask for "a phone".
 - Each task's "Done when" also needs the task's "In my words" in LEARNING.md filled in by Adithya. For frontend tasks (fast mode, see CLAUDE.md), Claude Code drafts it and Adithya just reviews it.
 
 ---
 
 ## You are here
 
-### Task 28: Parley live on AWS (one EC2 server, Terraform, HTTPS) (teaching mode for the infra, friend style)
-- **Branch:** `feature/live-on-aws`
-- **Goal:** a real link, like `https://parley-adithya.duckdns.org`, that anyone can open on a laptop or a phone, with a padlock. It runs on one AWS server that Terraform builds from code. The server setup itself is generic: the same files run Parley on any Linux server, with no AWS needed (D29). T29 then adds auto-deploy and monitoring.
-- **Mode:** teaching mode for the infra (example first, short, "In my words" at the end), with recaps. Claude Code runs the commands, but **anything that creates, changes or deletes AWS resources waits for Adithya's OK**: it shows `terraform plan` in plain words, including what costs money, and waits for "apply". Same for `destroy`.
+### Fix: phone keyboard layout (frontend fast mode)
+- **Branch:** `fix/phone-keyboard`
+- **Why now:** Parley is live (T28), and the link goes on the resume next. On an iPhone, the keyboard broke the chat screen.
+- **Mode:** frontend fast mode (CLAUDE.md). There are no backend changes. Adithya tests on a Windows laptop and an iPhone (no Android).
 
-**Before the task (Adithya, about 15 minutes):**
-1. **AWS console:**
-   - Budget alert (done): $30/month, with alerts at 80% actual, 100% forecast and 100% actual. It excludes credits, so it counts real usage.
-   - Old delivery-delay Fargate service and cluster in ap-southeast-1 (done): deleted. No CortexAI services or load balancers run anywhere.
-2. **AWS CLI on the laptop:**
-   - Install the AWS CLI v2 and the Session Manager plugin.
-   - Run `aws configure` with an IAM user's access key. The keys stay in `~/.aws`, never in the repo or a chat.
-   - Region: `ap-south-1` (Mumbai, closest to you).
-3. **Domain:** make a free DuckDNS subdomain (duckdns.org, log in with GitHub), for example `parley-adithya`. The DuckDNS token is a secret: it goes in `.env` only. (A bought domain can replace it later, with no code change.)
-4. **Repo visibility:** the server needs to get the code. Before the repo goes public, Claude Code scans the whole Git history for secrets (for example with gitleaks in Docker). If it's clean, Adithya makes the repo public (D13: "public once live chat works"). If not, it stops and reports.
+**What's broken (iPhone, T28 screenshots):**
+1. With the keyboard open, the message box is sometimes hidden behind the keyboard, so you type blind.
+2. When the box does show, the whole page has slid up, and the chat header (back arrow, name, online) is off screen.
+3. After the keyboard closes, the page stays slid up: the header is half cut off, and the newest message is hidden behind the message box.
+- **Cause:** `ChatScreen.tsx` uses `h-svh` (a fixed height), so iOS scrolls the whole page instead of shrinking the message list.
 
-**Example first (Claude Code shows this before any code):**
+**Target (WhatsApp behaviour, D8):**
 ```
- laptop: terraform apply (after your OK)
-   → AWS builds: 1 EC2 server (Ubuntu, 2 GB if the free plan allows) + fixed IP (Elastic IP)
-                 + firewall (security group): only 80 and 443 open, no SSH port at all
-                 + a role that lets AWS Session Manager in (shell access without SSH keys)
- DuckDNS: parley-adithya.duckdns.org → the fixed IP
- on the server (through Session Manager):
-   git clone → write .env (chmod 600) → docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
-   certbot gets a free Let's Encrypt certificate → Nginx serves https, and http → https
- browser → https://parley-adithya.duckdns.org 🔒 → Nginx → backend_a / backend_b → db, redis, rabbitmq (no ports open to the internet)
+┌──────────────────────┐
+│ ← Ana  online        │  header: always at the top
+├──────────────────────┤
+│ messages scroll here │  only this part scrolls
+├──────────────────────┤
+│ [Write message…] (>) │  message box: just above the keyboard (or at the bottom)
+├──────────────────────┤
+│      ⌨ keyboard      │
+└──────────────────────┘
 ```
-- **Terraform** describes servers in code: `plan` shows what would change, `apply` does it, and `destroy` removes it all.
-- **Session Manager** gives a shell on the server through AWS, so there's no port 22 to attack and no key file to lose.
 
-**Steps:**
-1. **Measure first:** run `docker stats` on the laptop with the full stack, and report how much memory it uses. That decides the server size. Prefer an x86 server with 2 GB (such as t3.small) if the account's free plan covers it, and say what it costs otherwise. Add a 2 GB swap file either way.
-2. **`deploy/aws/terraform/`** (all AWS-only files live under `deploy/aws/`, D29):
-   - A small network built by Terraform itself (VPC, one public subnet, internet gateway, route table; all free). The account has no default VPC in Mumbai.
-   - A security group with only 80 and 443 in (no 22).
-   - EC2 running Ubuntu LTS, with an instance role that has only `AmazonSSMManagedInstanceCore`, and an encrypted 20 GB disk. `user_data` installs Docker and the Compose plugin.
-   - An Elastic IP.
-   - Outputs: the IP and the instance id.
-   - The state file stays local and gitignored (D30). Pin the provider version, and tag every resource `project=parley`.
-3. **`docker-compose.prod.yml`** (generic, at the repo root, no AWS inside):
-   - Removes the dev ports of db, redis and rabbitmq (`ports: !reset []`, so nothing but Nginx is reachable).
-   - `restart: unless-stopped` on every service except `migrate` (a one-shot job).
-   - `COOKIE_SECURE=true`.
-   - Visitors use ports 80 and 443. The server maps them to 8080 and 8443 inside the container, since Nginx is non-root (D27, D30).
-   - Log size limits (`max-size`) so the disk doesn't fill up.
-4. **HTTPS:**
-   - A production Nginx config (`deploy/server/nginx.prod.conf`, mounted into `web`): port 80 only answers Let's Encrypt's check and redirects everything else to https. Port 443 uses TLS 1.2+ with the certificate, plus the same `/api`, live line and `sw.js` rules as T25/T26.
-   - certbot (official image, `v5.8.0`): the **first** certificate comes from `deploy/server/first-cert.sh` (certbot answers port 80 itself for about 30 s, before Nginx starts). **Renewals** use the webroot method through Nginx, proved with a dry run. A deploy hook gives Nginx's group read access to the key. Nginx reloads on a timer so it picks up renewals.
-   - Add HSTS only after https is proven to work.
-5. **`deploy/server/` scripts (generic, for any Linux server):**
-   - `setup.sh` installs Docker, adds swap, and clones the repo.
-   - `deploy.sh` pulls, rebuilds and restarts. It uses `--no-deps --build web` for frontend-only changes (D27).
-   - `.env.prod.example` lists every value the server needs.
-   - Adithya types the real values on the server, through Session Manager. Secrets never pass through a chat.
-6. **Push on the live site:** new VAPID keys for production (don't reuse dev's), and `VAPID_SUBJECT` set to a real `mailto:`. Browsers subscribe again on the new site (T24 note).
-7. **Real IP:** Nginx is still the only thing in front, so D27's rule holds. Check that the backend logs real visitor IPs, not Docker's gateway.
-8. **Docs:** a short `deploy/README.md` covers how to run Parley on any Linux server, how to run it on AWS with Terraform, and how to turn it all off (`terraform destroy`).
-- **Not in this task:** auto-deploy, ECR, SSM Parameter Store and CloudWatch (T29), backups (noted as a known gap), iPhone push (it needs the app added to the home screen), and a bought domain.
+**Approach (1A, approved):**
+- `h-dvh` instead of `h-svh` for the full-screen layouts.
+- Viewport meta `interactive-widget=resizes-content` (Android Chrome, harmless elsewhere).
+- A small `visualViewport` listener so iOS sizes the screen to the visible area. The page as a whole never scrolls (no body scroll on the chat screen), and only the message list scrolls (`min-h-0` + `overflow-y-auto`).
+- The message box text is at least 16 px, because iOS zooms the page when you tap a smaller input.
+- Respect the iPhone home-bar area at the bottom (`env(safe-area-inset-bottom)`) when the keyboard is closed.
+- **Scrolling:** sending jumps to the newest message. A new incoming message keeps you at the bottom if you were already there. If you've scrolled up to read old messages, it doesn't yank you down.
+- No new library. Desktop and tablet layouts from T27 must not change.
+
+**Testing on the iPhone before merging:** run Vite on the laptop so the phone can reach it on the same Wi-Fi (Claude Code gives the exact steps, including any Windows firewall prompt). If that doesn't work, deploy the branch to the server temporarily with `deploy.sh web`, then switch the server back to `main` after merging.
+
+- **Not in this task:** a "turn on notifications" hint, new features, Android-only tuning.
 - **Done when:**
-  - https://<your-subdomain>.duckdns.org opens Parley with a valid padlock, and http:// redirects to https.
-  - Ana on the laptop (Chrome) and Ben on a **real phone** (Android or iPhone) can sign up, chat live, and see ticks and typing. The phone keyboard problem found here is fixed separately, in the phone keyboard fix right after this task.
-  - A browser notification arrives on the laptop (Edge or Chrome) on the live site.
-  - In DevTools, the refresh cookie shows `Secure` and `HttpOnly`.
-  - Claude Code shows the security group (only 80 and 443), and that ports 5432, 6379, 5672 and 15672 don't answer from the internet.
-  - Failover on the server: stop `backend_a` through Session Manager mid-chat, and the app reconnects to B with nothing lost.
-  - Claude Code shows the `terraform destroy` plan without running it, and explains how to turn it all off.
-  - The CI containers job is still green, so the local run is untouched (D29). The run link is in the report, and "In my words" is filled in by Adithya.
-
-"In my words" prompts: what Terraform plan, apply and destroy do; why there's no SSH port, and how you still get a shell; how Let's Encrypt proves you own the domain, and why http only redirects; why db, Redis and RabbitMQ must have no open ports on a server.
+  - On the iPhone (Safari and Chrome), with the keyboard open: the header is visible, the box sits just above the keyboard, and you see what you type.
+  - Scrolling up through old messages: the header and box stay put, and only the messages move.
+  - Sending jumps to the newest message. Closing the keyboard leaves no shift, and the newest message is visible.
+  - Tapping the box doesn't zoom the page, and nothing scrolls sideways.
+  - Desktop spot check (DevTools 1440, 1024, 390): same as T27.
+  - Lint and build are clean, and CI is green (run link in the report).
+  - After merging, the server runs it: `deploy.sh web` on `main`, checked on the iPhone on the live site.
+  - Claude Code drafts the LEARNING.md section, including "In my words" (fast mode).
 
 ---
 
@@ -139,9 +115,10 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T27. Responsive layout fix, and hide buttons that do nothing yet (fast mode), before going live: four columns from 1280 px, the side panel in the chat's place at 768-1279 px, one screen at a time under 768 px (D8)
 
 ### Phase 8: Go live
-- [ ] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
-- [ ] Fix (right after T28, before sharing the link): phone keyboard layout (fast mode, branch `fix/phone-keyboard`). On iPhone the keyboard hid the message box, pushed the chat header off screen, and the page stayed shifted after the keyboard closed. Wanted (WhatsApp behaviour, D8): header fixed at top, message box fixed just above the keyboard (or at the bottom), only the messages scroll; sending jumps to the newest message. Fix 1A: `h-dvh` instead of `h-svh`, viewport meta `interactive-widget=resizes-content` (Android), and a small `visualViewport` listener so iOS sizes the screen to the visible area and the page never scrolls as a whole. No new library. Check on iPhone (Safari and Chrome) and Android if one can be borrowed.
-- [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs
+- [x] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
+- [ ] Fix (right after T28): phone keyboard layout (brief in "You are here")
+- [ ] Before sharing the link: a fresh, empty database on the server (removes the test accounts), then sign up clean demo accounts
+- [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs. Notes from T28: SSM commands run as root while `/opt/parley` belongs to ssm-user, so git needs `safe.directory` (or run as ssm-user); restart the backend copies one at a time on a deploy (a full `deploy.sh` restarted both together); builds move from the server to CI; backups are still a known gap.
 
 ### Phase 9: Measure it
 - [ ] T30. Prometheus metrics and a Grafana dashboard
@@ -160,3 +137,4 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Maybe later: Status (24-hour stories, which bring back the eye icon: a good topic for expiry and fan-out), voice and video calls (WebRTC, a big topic on its own, which bring back the calls icon).
 - Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service
+- Small: a hint near "Turn on notifications" (it lives only in the gear menu and is easy to confuse with the browser's own site toggle).
