@@ -19,9 +19,9 @@ variable "disk_gb" {
 }
 
 variable "github_repo" {
-  description = "The only GitHub repo allowed to deploy, and only from main (D31)."
+  description = "The only GitHub repo allowed to deploy, and only from main (D31), as GitHub's ID card names it: owner@owner-id/repo@repo-id. The ids never change, so a new repo with the same name can't get in (GitHub's immutable subject format, found in T29)."
   type        = string
-  default     = "AdithyaChauhan/parley"
+  default     = "AdithyaChauhan@91404342/parley@1423740237"
 }
 
 variable "alert_email" {

@@ -50,9 +50,12 @@ resource "aws_iam_role_policy" "github_deploy" {
       {
         # Push to Parley's two stores only, and list their tags (to skip a
         # version that's already there: tags can't be overwritten).
+        # BatchGetImage: at the end of a push, Docker asks whether the image is
+        # already there, and is refused without it (found in T29).
         Sid    = "PushParleyImages"
         Effect = "Allow"
         Action = [
+          "ecr:BatchGetImage",
           "ecr:BatchCheckLayerAvailability",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
