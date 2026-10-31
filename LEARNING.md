@@ -1328,6 +1328,9 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
   - Parameter Store matched `.env` exactly, and no secret ever showed on screen.
   - CloudWatch has one log stream per Parley container. The test alarm (`set-alarm-state`) sent the ALARM email, and the OK email came 1.5 minutes later by itself.
   - "Only main can deploy": the Deploy workflow run by hand on `fix/deploy-check` was refused at the AWS login ("Not authorized"), and the server got no command.
+  - Merging PR #32 deployed `9eec6fd` by itself (green). Web was replaced with the fast stop: the old one was gone 0.23 s after the stop signal (10.3 s before), the new one was up 0.8 s after it, and none of the asks failed (3 failed before). RabbitMQ was recreated once, for its new health check.
+  - Idle CPU, measured the same way over 60 s: 18.9% → 5.7% of the server (RabbitMQ 9% → 1.85%, each backend 3.7% → 0.67%).
+  - ECR scan: the web image went from 8 critical and 17 high to none. The backend's 4 high (glibc and zlib) stay until Debian publishes fixes.
 - Found along the way:
   - Redis saves to disk when it stops, so restarting it doesn't empty it. `FLUSHALL` does.
   - Pasting several lines into Session Manager mixes them up. One line at a time works.
