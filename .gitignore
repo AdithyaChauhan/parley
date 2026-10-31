@@ -7,3 +7,12 @@ __pycache__/
 
 # Real secrets (copy .env.example to .env)
 .env
+
+# Terraform's local files (D30): the downloaded AWS plugin, and the state
+# (Terraform's receipt of what it built, which can hold secrets).
+# .terraform.lock.hcl is NOT ignored: it pins the plugin version, like package-lock.json.
+.terraform/
+*.tfstate
+*.tfstate.*
+# A saved plan, so `apply` does exactly what was reviewed. It can hold secrets too.
+*.tfplan

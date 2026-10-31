@@ -20,7 +20,8 @@ Adithya isn't learning frontend in depth. For frontend work:
 - Stop only for: a command Adithya must run, a choice that needs his OK, a clash with DECISIONS.md, or an error.
 - At the end, write the whole LEARNING.md section yourself, including a 3-line "In my words" draft Adithya can keep or edit.
 - Layout changes: show a quick ASCII sketch of each window size and get Adithya's OK before coding.
-- Checking at localhost:8080: rebuild first (`docker compose --profile app up -d --build web`), then hard-reload (Ctrl+Shift+R). Otherwise you're looking at an old build.
+- Frontend design choices: Adithya doesn't make these himself. Send them as a numbered list with your pick first (1A, 2B ...) for the planning chat to decide.
+- Checking at localhost:8080: rebuild first (`docker compose --profile app up -d --no-deps --build web`), then hard-reload (Ctrl+Shift+R). Otherwise you're looking at an old build.
 The full teaching rules below apply to backend and system work (T8 onward, except the frontend tasks above).
 
 ## While building
@@ -38,6 +39,7 @@ The full teaching rules below apply to backend and system work (T8 onward, excep
 - Edit PLAN.md or DECISIONS.md. Suggest changes instead.
 - Commit, push, merge or create branches. Adithya does all Git steps; you may tell him the commands.
 - Write code for a later task.
+- Create, change or delete anything on AWS (or anything else that costs money) without showing the plan in plain words, including the cost, and getting Adithya's OK.
 
 ## If Adithya writes a file himself
 That's fine. Read it, explain anything wrong in plain words, and carry on. Do not rewrite it.

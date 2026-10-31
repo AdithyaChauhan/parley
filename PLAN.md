@@ -19,35 +19,76 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 27: Responsive layout fix (fast mode)
-- **Branch:** `fix/responsive-layout`
-- **Goal:** Parley looks right at every window size, from a 360 px phone to a wide desktop, before the live link goes out (T28). Recruiters will open it on their phones.
-- **Mode:** frontend fast mode (CLAUDE.md). There are no backend changes.
+### Task 28: Parley live on AWS (one EC2 server, Terraform, HTTPS) (teaching mode for the infra, friend style)
+- **Branch:** `feature/live-on-aws`
+- **Goal:** a real link, like `https://parley-adithya.duckdns.org`, that anyone can open on a laptop or a phone, with a padlock. It runs on one AWS server that Terraform builds from code. The server setup itself is generic: the same files run Parley on any Linux server, with no AWS needed (D29). T29 then adds auto-deploy and monitoring.
+- **Mode:** teaching mode for the infra (example first, short, "In my words" at the end), with recaps. Claude Code runs the commands, but **anything that creates, changes or deletes AWS resources waits for Adithya's OK**: it shows `terraform plan` in plain words, including what costs money, and waits for "apply". Same for `destroy`.
 
-**What's broken today (Adithya's screenshots):**
-- At about 1100-1250 px, three columns don't fit. The chat column gets crushed, so text wraps one letter per line, the avatar overlaps the "Messages" tab, and the send button sits on top of the files panel.
-- At phone size, the "Chat" and "Shared files" titles are back, even though D8 removed them.
-- Real chats show fake file counts ("23 files, 9 links").
+**Before the task (Adithya, about 15 minutes):**
+1. **AWS console:**
+   - Budget alert (done): $30/month, with alerts at 80% actual, 100% forecast and 100% actual. It excludes credits, so it counts real usage.
+   - Old delivery-delay Fargate service and cluster in ap-southeast-1 (done): deleted. No CortexAI services or load balancers run anywhere.
+2. **AWS CLI on the laptop:**
+   - Install the AWS CLI v2 and the Session Manager plugin.
+   - Run `aws configure` with an IAM user's access key. The keys stay in `~/.aws`, never in the repo or a chat.
+   - Region: `ap-south-1` (Mumbai, closest to you).
+3. **Domain:** make a free DuckDNS subdomain (duckdns.org, log in with GitHub), for example `parley-adithya`. The DuckDNS token is a secret: it goes in `.env` only. (A bought domain can replace it later, with no code change.)
+4. **Repo visibility:** the server needs to get the code. Before the repo goes public, Claude Code scans the whole Git history for secrets (for example with gitleaks in Docker). If it's clean, Adithya makes the repo public (D13: "public once live chat works"). If not, it stops and reports.
 
-**Target layout (final, after trying it in the browser):**
+**Example first (Claude Code shows this before any code):**
 ```
- 1280 px and up   icon rail | list | chat | side panel      (the panel folds to a thin strip: open button + avatar only)
- 768-1279 px      icon rail | list | chat                   (tap the name → the side panel takes the chat's place, back arrow returns)
- under 768 px     one screen at a time: list → chat → files, no bottom bar, a back arrow only
+ laptop: terraform apply (after your OK)
+   → AWS builds: 1 EC2 server (Ubuntu, 2 GB if the free plan allows) + fixed IP (Elastic IP)
+                 + firewall (security group): only 80 and 443 open, no SSH port at all
+                 + a role that lets AWS Session Manager in (shell access without SSH keys)
+ DuckDNS: parley-adithya.duckdns.org → the fixed IP
+ on the server (through Session Manager):
+   git clone → write .env (chmod 600) → docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app up -d --build
+   certbot gets a free Let's Encrypt certificate → Nginx serves https, and http → https
+ browser → https://parley-adithya.duckdns.org 🔒 → Nginx → backend_a / backend_b → db, redis, rabbitmq (no ports open to the internet)
 ```
-**Added during the task:** hide every button that does nothing yet. That's the rail icons other than Chats, the "available" pill, the "..." menu, emoji and attach, file drop, and the "Messages" and "Participants" tabs. A 1:1 side panel shows "online" or "last seen" instead of "2 members" (D8). Choices made: no bottom bar on phones, the Chats icon right under the logo in the rail, the folded strip shows only the open button and avatar, "Reconnecting..." appears under the name only while the line is down, and `UploadView.tsx` is deleted (it comes back from Git in v2).
+- **Terraform** describes servers in code: `plan` shows what would change, `apply` does it, and `destroy` removes it all.
+- **Session Manager** gives a shell on the server through AWS, so there's no port 22 to attack and no key file to lose.
 
-**Rules:**
-- The chat column has a minimum width and never gets squeezed below it. When there's no room, the layout moves down one size row instead.
-- Bubbles are at most about 75% of the chat width and wrap between words. Only very long words, like links, may break mid-word.
-- Header parts (avatar, name, last seen) never overlap. A long name shortens with "...".
-- Under 768 px, the phone back arrow goes chat → list and files → chat. The list screen has no back arrow.
-- Every chat shows a "No files yet" empty state in the side panel. The fake file numbers and `fake.ts` are removed (D8).
-- Keep the look from D8: same colors, spacing and font. This task only changes how things fit.
+**Steps:**
+1. **Measure first:** run `docker stats` on the laptop with the full stack, and report how much memory it uses. That decides the server size. Prefer an x86 server with 2 GB (such as t3.small) if the account's free plan covers it, and say what it costs otherwise. Add a 2 GB swap file either way.
+2. **`deploy/aws/terraform/`** (all AWS-only files live under `deploy/aws/`, D29):
+   - A small network built by Terraform itself (VPC, one public subnet, internet gateway, route table; all free). The account has no default VPC in Mumbai.
+   - A security group with only 80 and 443 in (no 22).
+   - EC2 running Ubuntu LTS, with an instance role that has only `AmazonSSMManagedInstanceCore`, and an encrypted 20 GB disk. `user_data` installs Docker and the Compose plugin.
+   - An Elastic IP.
+   - Outputs: the IP and the instance id.
+   - The state file stays local and gitignored (D30). Pin the provider version, and tag every resource `project=parley`.
+3. **`docker-compose.prod.yml`** (generic, at the repo root, no AWS inside):
+   - Removes the dev ports of db, redis and rabbitmq (`ports: !reset []`, so nothing but Nginx is reachable).
+   - `restart: unless-stopped` on every service except `migrate` (a one-shot job).
+   - `COOKIE_SECURE=true`.
+   - Visitors use ports 80 and 443. The server maps them to 8080 and 8443 inside the container, since Nginx is non-root (D27, D30).
+   - Log size limits (`max-size`) so the disk doesn't fill up.
+4. **HTTPS:**
+   - A production Nginx config (`deploy/server/nginx.prod.conf`, mounted into `web`): port 80 only answers Let's Encrypt's check and redirects everything else to https. Port 443 uses TLS 1.2+ with the certificate, plus the same `/api`, live line and `sw.js` rules as T25/T26.
+   - certbot (official image, `v5.8.0`): the **first** certificate comes from `deploy/server/first-cert.sh` (certbot answers port 80 itself for about 30 s, before Nginx starts). **Renewals** use the webroot method through Nginx, proved with a dry run. A deploy hook gives Nginx's group read access to the key. Nginx reloads on a timer so it picks up renewals.
+   - Add HSTS only after https is proven to work.
+5. **`deploy/server/` scripts (generic, for any Linux server):**
+   - `setup.sh` installs Docker, adds swap, and clones the repo.
+   - `deploy.sh` pulls, rebuilds and restarts. It uses `--no-deps --build web` for frontend-only changes (D27).
+   - `.env.prod.example` lists every value the server needs.
+   - Adithya types the real values on the server, through Session Manager. Secrets never pass through a chat.
+6. **Push on the live site:** new VAPID keys for production (don't reuse dev's), and `VAPID_SUBJECT` set to a real `mailto:`. Browsers subscribe again on the new site (T24 note).
+7. **Real IP:** Nginx is still the only thing in front, so D27's rule holds. Check that the backend logs real visitor IPs, not Docker's gateway.
+8. **Docs:** a short `deploy/README.md` covers how to run Parley on any Linux server, how to run it on AWS with Terraform, and how to turn it all off (`terraform destroy`).
+- **Not in this task:** auto-deploy, ECR, SSM Parameter Store and CloudWatch (T29), backups (noted as a known gap), iPhone push (it needs the app added to the home screen), and a bought domain.
+- **Done when:**
+  - https://<your-subdomain>.duckdns.org opens Parley with a valid padlock, and http:// redirects to https.
+  - Ana on the laptop (Chrome) and Ben on a **real phone** (Android or iPhone) can sign up, chat live, and see ticks and typing. The phone keyboard problem found here is fixed separately, in the phone keyboard fix right after this task.
+  - A browser notification arrives on the laptop (Edge or Chrome) on the live site.
+  - In DevTools, the refresh cookie shows `Secure` and `HttpOnly`.
+  - Claude Code shows the security group (only 80 and 443), and that ports 5432, 6379, 5672 and 15672 don't answer from the internet.
+  - Failover on the server: stop `backend_a` through Session Manager mid-chat, and the app reconnects to B with nothing lost.
+  - Claude Code shows the `terraform destroy` plan without running it, and explains how to turn it all off.
+  - The CI containers job is still green, so the local run is untouched (D29). The run link is in the report, and "In my words" is filled in by Adithya.
 
-**Checks (Adithya, Chrome DevTools device toolbar):** 360, 390, 768, 1024, 1280 and 1440 px, plus slowly dragging the window from wide to narrow. At each size: no overlaps, no crushed chat, and sending and reading still work.
-- **Not in this task:** dark mode, a real files feature (v2), and new screens.
-- **Done when:** every check size looks right, lint and build are clean, CI is green, and Claude Code drafts the LEARNING.md section including "In my words" (fast mode).
+"In my words" prompts: what Terraform plan, apply and destroy do; why there's no SSH port, and how you still get a shell; how Let's Encrypt proves you own the domain, and why http only redirects; why db, Redis and RabbitMQ must have no open ports on a server.
 
 ---
 
@@ -95,21 +136,23 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 7: Run it like production
 - [x] T25. Dockerfiles and Docker Compose for every part (the worker gets its own container; the backend and worker start only once PostgreSQL, Redis and RabbitMQ are healthy, since the backend can't start while Redis is down) (the worker needs a SIGTERM handler, since `docker stop` sends SIGTERM, not Ctrl+C)
 - [x] T26. Nginx in front of several backend copies (T25 already puts one Nginx in front of one copy, with real-IP headers) (demo: stop one copy mid-chat and the apps reconnect to the other through Nginx, with nothing lost) (turn on `secure=True` for the refresh cookie once HTTPS is on)
-- [ ] T27. Responsive layout fix, and hide buttons that do nothing yet (fast mode), before going live: four columns from 1280 px, the side panel in the chat's place at 768-1279 px, one screen at a time under 768 px (D8)
+- [x] T27. Responsive layout fix, and hide buttons that do nothing yet (fast mode), before going live: four columns from 1280 px, the side panel in the chat's place at 768-1279 px, one screen at a time under 768 px (D8)
 
 ### Phase 8: Go live
-- [ ] T28. Deploy Parley live on one AWS EC2 server: Docker Compose + Nginx + HTTPS (a cheap domain or a free subdomain), refresh cookie `secure=True`. AWS extras (D29), all in `deploy/aws/`: Terraform for the server, ECR for images, GitHub Actions deploy through OIDC (no stored AWS keys), secrets in SSM Parameter Store, and a CloudWatch alarm. The app itself never needs AWS. Notes for the brief: the browsers subscribe to push again on the new site, so re-check the VAPID subject; real IP (D27) holds only while Nginx is the only thing in front, since a cloud load balancer in front would change X-Forwarded-For handling. First: set an AWS budget alert (about $10), and check the old delivery-delay Fargate service in ap-southeast-1 is stopped.
+- [ ] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
+- [ ] Fix (right after T28, before sharing the link): phone keyboard layout (fast mode, branch `fix/phone-keyboard`). On iPhone the keyboard hid the message box, pushed the chat header off screen, and the page stayed shifted after the keyboard closed. Wanted (WhatsApp behaviour, D8): header fixed at top, message box fixed just above the keyboard (or at the bottom), only the messages scroll; sending jumps to the newest message. Fix 1A: `h-dvh` instead of `h-svh`, viewport meta `interactive-widget=resizes-content` (Android), and a small `visualViewport` listener so iOS sizes the screen to the visible area and the page never scrolls as a whole. No new library. Check on iPhone (Safari and Chrome) and Android if one can be borrowed.
+- [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs
 
 ### Phase 9: Measure it
-- [ ] T29. Prometheus metrics and a Grafana dashboard
-- [ ] T30. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
+- [ ] T30. Prometheus metrics and a Grafana dashboard
+- [ ] T31. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
 
 ### Phase 10: Kubernetes
-- [ ] T31. Run Parley on local Kubernetes
-- [ ] T32. Optional, only if ready before the AWS free plan ends (around mid-December 2026): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
+- [ ] T32. Run Parley on local Kubernetes
+- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
 
 ### Phase 11: Show it
-- [ ] T33. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
+- [ ] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
