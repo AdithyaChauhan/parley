@@ -45,7 +45,7 @@ api = APIRouter(prefix="/api")
 
 @api.get("/health")
 def health():
-    return {"status": "ok", "copy": settings.copy_name}
+    return {"status": "ok", "copy": settings.copy_name, "version": settings.app_version}
 
 
 @api.get("/health/db")

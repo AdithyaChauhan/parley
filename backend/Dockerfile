@@ -23,6 +23,12 @@ COPY . .
 
 USER parley
 
+# The commit this image was built from, shown in /api/health (D31). CI passes
+# it with --build-arg APP_VERSION=<commit>; a plain build says "dev". Last, so
+# a new commit doesn't throw away the cached package layer above.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 EXPOSE 8000
 # A list (not one string), so uvicorn itself is the main program and gets
 # `docker stop`'s signal. --forwarded-allow-ips "*": trust the real browser IP

@@ -14,57 +14,72 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
 - Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
 - Test devices: a Windows laptop (Chrome, Edge) and an iPhone (Safari, Chrome). There is no Android, so briefs ask for "a phone".
+- Phone testing over the laptop's Wi-Fi IP (`http://192.168.x.x:5173`) is plain http, so sending (`crypto.randomUUID`), service workers and push don't work there. Use it for layout only, and test sends and push on the live site.
 - Each task's "Done when" also needs the task's "In my words" in LEARNING.md filled in by Adithya. For frontend tasks (fast mode, see CLAUDE.md), Claude Code drafts it and Adithya just reviews it.
 
 ---
 
 ## You are here
 
-### Fix: phone keyboard layout (frontend fast mode)
-- **Branch:** `fix/phone-keyboard`
-- **Why now:** Parley is live (T28), and the link goes on the resume next. On an iPhone, the keyboard broke the chat screen.
-- **Mode:** frontend fast mode (CLAUDE.md). There are no backend changes. Adithya tests on a Windows laptop and an iPhone (no Android).
+### Task 29: Auto-deploy from GitHub, secrets in AWS, and an alarm (teaching mode for the infra, friend style)
+- **Branch:** `feature/auto-deploy`
+- **Goal:** after a merge to `main`, GitHub builds the images, stores them in AWS (ECR), and updates the server by itself, one backend copy at a time, so chats keep working during a deploy. The server's secrets live in AWS Systems Manager Parameter Store instead of only in a file. If the server breaks, you get an email.
+- **Mode:** teaching mode for the infra (example first, short, "In my words" at the end), with recaps. **Anything that creates or changes AWS resources waits for Adithya's OK on the plan, including the cost** (CLAUDE.md). Secrets never pass through a chat.
 
-**What's broken (iPhone, T28 screenshots):**
-1. With the keyboard open, the message box is sometimes hidden behind the keyboard, so you type blind.
-2. When the box does show, the whole page has slid up, and the chat header (back arrow, name, online) is off screen.
-3. After the keyboard closes, the page stays slid up: the header is half cut off, and the newest message is hidden behind the message box.
-- **Cause:** `ChatScreen.tsx` uses `h-svh` (a fixed height), so iOS scrolls the whole page instead of shrinking the message list.
+**Step 0, before the task (Claude Code gives the exact commands, and Adithya confirms before anything is deleted): a fresh database on the server.**
+- Wipe the test accounts and chats (an empty database volume, then `migrate` builds the tables again), and clear Redis.
+- Then sign up clean demo accounts (for example "Ana" and "Ben") with new passwords.
+- After this, the link can go on the resume.
 
-**Target (WhatsApp behaviour, D8):**
+**Example first (Claude Code shows this before any code):**
 ```
-┌──────────────────────┐
-│ ← Ana  online        │  header: always at the top
-├──────────────────────┤
-│ messages scroll here │  only this part scrolls
-├──────────────────────┤
-│ [Write message…] (>) │  message box: just above the keyboard (or at the bottom)
-├──────────────────────┤
-│      ⌨ keyboard      │
-└──────────────────────┘
+ you merge a PR into main
+   → GitHub Actions: tests pass (CI) → build parley-backend + parley-web, tagged with the commit (e.g. a410b04)
+   → log in to AWS with OIDC (a short-lived pass, no AWS keys stored in GitHub)
+   → push both images to ECR (AWS's private image store)
+   → SSM "send command" to the server (no SSH): run deploy/aws/deploy-from-ecr.sh a410b04
+ on the server:
+   fetch secrets from Parameter Store → write .env (chmod 600)
+   pull the two images from ECR → migrate → restart backend_a → wait healthy → restart backend_b → wait healthy → worker → web
+   /api/health now says "version": "a410b04"
+ if the server's health checks fail → CloudWatch alarm → email to you
 ```
+- **OIDC** means GitHub proves "I am the parley repo, on main" to AWS, and AWS hands it a pass that lasts minutes. There are no long-lived keys that could leak.
+- **ECR** is a private Docker Hub inside your AWS account.
+- **Parameter Store** is a locked box for secrets in AWS. The server reads it with its own role.
 
-**Approach (1A, approved):**
-- `h-dvh` instead of `h-svh` for the full-screen layouts.
-- Viewport meta `interactive-widget=resizes-content` (Android Chrome, harmless elsewhere).
-- A small `visualViewport` listener so iOS sizes the screen to the visible area. The page as a whole never scrolls (no body scroll on the chat screen), and only the message list scrolls (`min-h-0` + `overflow-y-auto`).
-- The message box text is at least 16 px, because iOS zooms the page when you tap a smaller input.
-- Respect the iPhone home-bar area at the bottom (`env(safe-area-inset-bottom)`) when the keyboard is closed.
-- **Scrolling:** sending jumps to the newest message. A new incoming message keeps you at the bottom if you were already there. If you've scrolled up to read old messages, it doesn't yank you down.
-- No new library. Desktop and tablet layouts from T27 must not change.
+**Steps:**
+1. **Terraform** (`deploy/aws/terraform/`, plan → your OK → apply):
+   - Two ECR repositories (`parley-backend`, `parley-web`), with a rule that keeps only the last 10 images.
+   - The GitHub OIDC provider, plus a role GitHub can use **only from `AdithyaChauhan/parley` on `main`**. It may only push to those two repositories and send commands to this one server.
+   - Add to the server's role: pull from those two repositories, read `/parley/prod/*` from Parameter Store, and write container logs to CloudWatch.
+   - CloudWatch: a log group with 7-day retention, an alarm on the server's status checks (and high CPU for 15 minutes), and an SNS email to you. You click "Confirm subscription" in the email once.
+2. **Secrets into Parameter Store:** a one-time script you run **on the server** reads the current `.env` and stores each value as a SecureString under `/parley/prod/`. The values never show on screen and never leave AWS.
+3. **`deploy/aws/deploy-from-ecr.sh`** (AWS-only, D29):
+   - Fetch the parameters, write `.env` (600), and log in to ECR.
+   - Pull the given tag, run `migrate`, then restart **one copy at a time**, waiting for healthy each time (a rolling restart), then the worker, then web.
+   - It runs as the repo owner, not root, to avoid git's "dubious ownership" error from T28.
+   - A small Compose file in `deploy/aws/` swaps `build:` for the ECR `image:`.
+4. **`.github/workflows/deploy.yml`:** it runs on push to `main` only **after CI passes**, and can also be started by hand with a version tag (that's the rollback). It builds, pushes to ECR, sends the SSM command, waits, and fails the run if the server doesn't come back healthy.
+   - GitHub stores only **variables** (role ARN, region, instance id), no secrets.
+5. **Version in `/api/health`:** the image gets `APP_VERSION` (the commit) at build time, so you can see which version is live.
+6. **The generic path stays (D29):** `deploy/server/deploy.sh` with a plain `.env` still works on any server.
+   - `deploy.sh` now refuses to run anywhere except `/opt/parley`. It got run on the laptop by mistake after T28.
+7. **Small leftover from the phone keyboard fix:** add the desktop spot-check line to LEARNING.md's "Checked" list.
 
-**Testing on the iPhone before merging:** run Vite on the laptop so the phone can reach it on the same Wi-Fi (Claude Code gives the exact steps, including any Windows firewall prompt). If that doesn't work, deploy the branch to the server temporarily with `deploy.sh web`, then switch the server back to `main` after merging.
-
-- **Not in this task:** a "turn on notifications" hint, new features, Android-only tuning.
+- **Cost** (Claude Code checks the real prices and shows them with the plan): ECR storage and CloudWatch logs are cents a month, SNS email and Parameter Store standard are free. The server cost doesn't change.
+- **Not in this task:** a load balancer, several servers, blue/green deploys, and backups (still a known gap).
 - **Done when:**
-  - On the iPhone (Safari and Chrome), with the keyboard open: the header is visible, the box sits just above the keyboard, and you see what you type.
-  - Scrolling up through old messages: the header and box stay put, and only the messages move.
-  - Sending jumps to the newest message. Closing the keyboard leaves no shift, and the newest message is visible.
-  - Tapping the box doesn't zoom the page, and nothing scrolls sideways.
-  - Desktop spot check (DevTools 1440, 1024, 390): same as T27.
-  - Lint and build are clean, and CI is green (run link in the report).
-  - After merging, the server runs it: `deploy.sh web` on `main`, checked on the iPhone on the live site.
-  - Claude Code drafts the LEARNING.md section, including "In my words" (fast mode).
+  - The fresh database is done, and clean demo accounts work on the live site.
+  - Merging a small change to `main` deploys by itself: the Actions run is green, and `/api/health` shows the new version.
+  - **During a deploy, a chat between the laptop and the iPhone keeps working.** Lines reconnect to the other copy, and nothing is lost.
+  - GitHub has **no AWS keys** (only variables), and the role only works from this repo on `main`.
+  - `.env` on the server is rebuilt from Parameter Store, and the laptop's plain `.env` path still works (D29).
+  - Container logs show in CloudWatch, and a test alarm (`set-alarm-state`) sends you an email.
+  - Rollback: running the workflow by hand with the previous version puts it back, which `/api/health` confirms.
+  - All tests pass, CI is green (run links in the report), and "In my words" is filled in by Adithya.
+
+"In my words" prompts: how GitHub gets into AWS without a stored key (OIDC); why the copies restart one at a time; where the secrets live now and who can read them; what happens when the alarm fires.
 
 ---
 
@@ -116,8 +131,8 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 8: Go live
 - [x] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
-- [ ] Fix (right after T28): phone keyboard layout (brief in "You are here")
-- [ ] Before sharing the link: a fresh, empty database on the server (removes the test accounts), then sign up clean demo accounts
+- [x] Fix: phone keyboard layout (PR #29)
+- [ ] Before sharing the link: a fresh, empty database on the server (removes the test accounts), then sign up clean demo accounts (step 0 of T29)
 - [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs. Notes from T28: SSM commands run as root while `/opt/parley` belongs to ssm-user, so git needs `safe.directory` (or run as ssm-user); restart the backend copies one at a time on a deploy (a full `deploy.sh` restarted both together); builds move from the server to CI; backups are still a known gap.
 
 ### Phase 9: Measure it
@@ -137,4 +152,5 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Maybe later: Status (24-hour stories, which bring back the eye icon: a good topic for expiry and fan-out), voice and video calls (WebRTC, a big topic on its own, which bring back the calls icon).
 - Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service
+- Small phone polish, only if wanted: a slimmer phone chat header (plain back arrow, 32 px avatar, 18 px name, 56 px tall). UI/UX polish isn't a priority.
 - Small: a hint near "Turn on notifications" (it lives only in the gear menu and is easy to confuse with the browser's own site toggle).
