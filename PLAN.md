@@ -80,7 +80,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - **Not in this task:** auto-deploy, ECR, SSM Parameter Store and CloudWatch (T29), backups (noted as a known gap), iPhone push (it needs the app added to the home screen), and a bought domain.
 - **Done when:**
   - https://<your-subdomain>.duckdns.org opens Parley with a valid padlock, and http:// redirects to https.
-  - Ana on the laptop (Chrome) and Ben on a **real Android phone** (Chrome) can sign up, chat live, and see ticks and typing. The layout looks right on the phone (T27).
+  - Ana on the laptop (Chrome) and Ben on a **real phone** (Android or iPhone) can sign up, chat live, and see ticks and typing. The phone keyboard problem found here is fixed separately, in the phone keyboard fix right after this task.
   - A browser notification arrives on the laptop (Edge or Chrome) on the live site.
   - In DevTools, the refresh cookie shows `Secure` and `HttpOnly`.
   - Claude Code shows the security group (only 80 and 443), and that ports 5432, 6379, 5672 and 15672 don't answer from the internet.
@@ -140,6 +140,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 8: Go live
 - [ ] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
+- [ ] Fix (right after T28, before sharing the link): phone keyboard layout (fast mode, branch `fix/phone-keyboard`). On iPhone the keyboard hid the message box, pushed the chat header off screen, and the page stayed shifted after the keyboard closed. Wanted (WhatsApp behaviour, D8): header fixed at top, message box fixed just above the keyboard (or at the bottom), only the messages scroll; sending jumps to the newest message. Fix 1A: `h-dvh` instead of `h-svh`, viewport meta `interactive-widget=resizes-content` (Android), and a small `visualViewport` listener so iOS sizes the screen to the visible area and the page never scrolls as a whole. No new library. Check on iPhone (Safari and Chrome) and Android if one can be borrowed.
 - [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs
 
 ### Phase 9: Measure it

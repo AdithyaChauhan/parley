@@ -53,6 +53,7 @@ No dead buttons on the live app. Anything that doesn't work yet is hidden, not s
 - emoji and attach, and file drop
 - the "Messages" and "Participants" tabs (in v2, a group's members show in the side panel, reached by tapping the name, like WhatsApp's group info)
 A hidden button comes back only in the task that makes it work: attach and drop with files, emoji with reactions, the "..." menu with groups (all v2). The eye icon comes back with Status and the calls icon with calls (maybe later). Dashboard, Tasks and Stats came from the reference design, not WhatsApp, so they stay gone.
+Phone keyboard (fix after T28): like WhatsApp, the chat header stays at the top and the message box sits just above the keyboard (or at the bottom when it's closed). Only the message list scrolls, and the page as a whole never scrolls. Sending a message jumps to the newest one.
 The fake file numbers are removed (T27). Every chat's side panel shows "No files yet" until v2. In a 1:1 chat, the side panel shows "online" or "last seen", not "2 members".
 
 **D9. Message rules**
