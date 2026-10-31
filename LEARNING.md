@@ -1167,3 +1167,72 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What this task does: Parley now fits every screen, from a 360 px phone to a wide desktop. From 1280 px all four columns show. Below that, the files panel swaps places with the chat when you tap the name, and a phone shows one screen at a time. Buttons that don't work yet are hidden, so nothing on the live app looks broken.
 - What I'd check first if it broke: rebuild web and hard-reload first, since an old build fooled me once. Then open DevTools' device toolbar at the width where it breaks and find the column that's too wide: usually a missing `min-w-0`, `shrink-0` or size prefix.
 - What still confuses me: when two classes clash at the same size, like `hidden` and `flex` in one `cn(...)`, I think tailwind-merge keeps the last one. I'm not sure how it decides that across different sizes.
+
+---
+
+### Task 28: Parley live on AWS (one EC2 server, Terraform, HTTPS)
+**What was built**
+- Live at https://parley-adithya.duckdns.org (Mumbai, `ap-south-1`), on one t3.small server built by Terraform. Everything else is generic and runs on any Linux server (D29).
+- Before any code:
+  - `docker stats` on the laptop: the whole stack used about 490 MiB idle (RabbitMQ 159, two backends 169, worker 77, db 49, redis 27, web 9). With Ubuntu and Docker that's about 1 GB, so 2 GB plus 2 GB swap is enough, even for building on the server.
+  - The account had no default VPC in Mumbai at all, so Terraform builds its own network.
+  - Secret scan before going public: gitleaks over a mirror of the GitHub repo (every branch and all 27 PR refs, which GitHub shows to anyone once public), plus a check that no real `.env` value appears in any version of any file. Clean, so the repo went public.
+- `deploy/aws/terraform/` (all AWS-only, D29):
+  - `versions.tf`: Terraform `~> 1.16.0`, AWS provider `= 6.67.0` (it ships a minor every week, so a 4-week-old one, D27), and `default_tags` putting `project=parley` on everything.
+  - `variables.tf`: region, server size, disk size.
+  - `network.tf`: VPC `10.0.0.0/16`, one public subnet `10.0.1.0/24` in ap-south-1a, an internet gateway and a route table sending `0.0.0.0/0` through it. All free.
+  - `server.tf`: a security group with only tcp 80 and 443 in; an IAM role that EC2 can wear, with only `AmazonSSMManagedInstanceCore`; Ubuntu 24.04 found through Canonical's SSM pointer; `cpu_credits = "standard"`; IMDSv2 only with hop limit 1 (added after the planner's review); an encrypted 20 GB gp3 disk; `ignore_changes = [ami]`; an Elastic IP.
+  - `user_data.sh`: installs Docker and the Compose plugin from Docker's repo on first boot. Each `apt-get` waits up to 5 minutes for Ubuntu's own first-boot updates (`DPkg::Lock::Timeout=300`, also from the review).
+  - `outputs.tf`: the IP, the instance id and the Session Manager command.
+  - `.terraform.lock.hcl` is committed (it pins the provider). `.gitignore` keeps `.terraform/`, the state and saved plans (`*.tfplan`) out of Git.
+- The plan was shown in plain words, reviewed by the planner (twice), saved to a file, and only that file was applied: 11 resources, about $22 a month in credits. Session Manager saw the server 15 s after it started.
+- `docker-compose.prod.yml`, laid on top of `docker-compose.yml`: no ports for db, Redis and RabbitMQ (`!reset []`), web on 80 → 8080 and 443 → 8443 (`!override`), `restart: unless-stopped` on everything but `migrate`, logs capped at 3 × 10 MB, `COOKIE_SECURE=true`, Nginx reloading every 6 h, and a `certbot` service (`v5.8.0`) that checks for renewal every 12 h. The laptop file is unchanged, so the CI containers job still tests the local run.
+- `deploy/server/nginx.prod.conf`: port 80 only serves `/.well-known/acme-challenge/` and redirects everything else with a 301. Port 443: the certificate at the fixed path `live/parley/`, TLS 1.2 and 1.3 only, and the same `/`, `sw.js` and `/api/` rules as T26. HSTS for one year (no preload, no includeSubDomains) was added only after https was proven.
+- `deploy/server/` scripts:
+  - `setup.sh [branch]`: Docker if it's missing, a 2 GB swap file, and `git clone` into `/opt/parley`. Safe to run again.
+  - `.env.prod.example`: the 10 settings a server needs. Every secret was made on the server with `openssl rand -hex` and written straight into `.env` with `sed`, so it never showed on screen. The production VAPID keys were made with the backend image, on the server.
+  - `first-cert.sh <domain> <email>`: a practice run on Let's Encrypt's test server, then the real certificate (certbot standalone on port 80), then `up -d --build`, then `certbot reconfigure` to webroot plus `renew --dry-run`. The deploy hook (`chgrp 101` + `chmod g+rX`) is saved with the certificate, so every renewal runs it.
+  - `deploy.sh [web]`: pull, rebuild what changed, always recreate `web`, and clear old images. `web` leaves the backend copies running (D28).
+- `deploy/README.md`: any Linux server, AWS with Terraform, and how to turn it all off.
+- Checked on the live site:
+  - From the internet: http → 301 → https with the path kept. A valid Let's Encrypt certificate (Oct 30, 2026 → Jan 28, 2027). TLS 1.1 refused. `/api/health` answered by A and B. Ports 80 and 443 open; 22, 5432, 6379, 5672, 15672, 8000, 8080 and 8443 never answer. The security group in AWS has exactly the two rules.
+  - On the server: every service up and healthy, `migrate` exited 0, the key `-rw-r----- root 101`, renewal set to webroot with the hook saved, about 1 GB of 1.9 GB used, swap barely touched, disk 41% full.
+  - Real IP: the backends logged the laptop's public IP, not Docker's gateway.
+  - Ana on the laptop and Adi on an iPhone (Chrome): chat live, ticks, typing. The refresh cookie: `HttpOnly`, `Secure`, `SameSite=Lax`, rotated on every refresh.
+  - Push: Adi's Chrome device saved (`fcm.googleapis.com`), and the worker logged `#10 ... sent` 5 s after the message. The notification had no message text, and clicking it opened the chat.
+  - Failover: Adi's line on A, the other person's on B. `stop backend_a` mid-chat: new lines opened on B the same second, messages #11 to #19 went both ways while A was down, and the chat ended with 19 messages numbered 1 to 19 with no gaps, both bookmarks at 19.
+  - `deploy.sh web`: pulled, recreated only `web`, HSTS showed on every https answer, and the backends kept running.
+  - `terraform plan -destroy` shown, not run: the same 11 resources, nothing else.
+- Found along the way:
+  - AWS refuses an apostrophe in a security group rule's description ("Let's" became "Lets").
+  - Git's `autocrlf` on Windows could turn `user_data.sh` into CRLF on a later checkout, and bash on the server would choke on the `\r`. Terraform strips it with `replace()`.
+  - Non-root Nginx proven to fail on the key ("Permission denied" on `privkey.pem`, which certbot makes `-rw------- root`). The deploy hook's `chgrp`/`chmod` fixed it in the same local test.
+  - A Session Manager shell may not set `$USER`, so `setup.sh` uses `id -un`.
+  - A single file mounted into a container keeps the old version after `git pull` replaces it, so `deploy.sh` always recreates `web`.
+  - The first "no notification": the browser's site permission was on, but nobody had clicked Parley's own "Turn on notifications" (in the gear menu), so no device was saved and the worker logged "skip: no devices". Once clicked, it worked.
+  - iPhone keyboard: the message box could hide behind the keyboard and the header slid off screen (`h-svh` doesn't shrink for the keyboard). It's its own fix after this task (`fix/phone-keyboard`).
+  - A new public IP gets scanned within minutes: a few `400 GET /` in Nginx's log, not from us.
+
+**New ideas**
+- Infrastructure as code (Terraform): servers described in files. `plan` compares the files with the state and with AWS and lists what would change. `apply` does it. `destroy` removes everything in the state. A saved plan (`-out`) means `apply` does exactly what was reviewed.
+- State: Terraform's receipt of what it built (ids, IPs). It lives only on the laptop, never in Git. Without it, Terraform forgets what it made.
+- A VPC is a private network. A subnet is a slice of it in one zone. The internet gateway is its door. The route table says "anything outside goes through the door", which is what makes the subnet public.
+- Security group: a firewall in front of the server. Only listed ports come in. A dropped port gives no answer at all, unlike "refused", which means it's open but nothing listens.
+- Session Manager: a shell through AWS. The server's agent calls out to AWS, and AWS never calls in. So there's no port 22 and no key file. The IAM role (instance profile) is what allows it.
+- The metadata service (IMDS): where a server asks AWS about itself and gets its role's keys. IMDSv2 needs a token first, and hop limit 1 keeps containers from getting one.
+- Elastic IP: a fixed public IP, so DNS is set once. Every public IPv4 costs money now, even attached.
+- Let's Encrypt's HTTP check: it gives a secret, certbot puts it at `/.well-known/acme-challenge/...` on port 80, and Let's Encrypt fetches it from the internet. Only whoever controls the domain's server can do that. Certificates last 90 days and renew at 30 days left. Standalone (certbot answers port 80 itself) is used once; webroot (certbot drops the file, Nginx serves it) is used for renewals.
+- Why port 80 only redirects: the check needs it, but the app is never served over plain http, where anyone on the network could read or change it.
+- HSTS: the https answer tells the browser to skip http for this site for a year.
+- Compose override files: a second file laid on top of the first. `!reset` empties a list and `!override` replaces it, so the laptop file stays as it is.
+- Restart policies (`unless-stopped`), log rotation (`max-size`/`max-file`) and swap: what a server needs that a laptop doesn't.
+- Turning it off: `destroy`, not stop. A stopped server's disk and IP still cost about $5.50 a month.
+
+**In my words** (Adithya writes this)
+- What Terraform plan, apply and destroy do: Terraform is a tool that builds servers from code. "Plan" is a dry run that lists exactly what it is about to create or change. "Apply" is the command that actually builds the servers, networks, and firewalls. "Destroy" is the undo button; it deletes everything Terraform created so you stop getting billed.
+
+- Why there's no SSH port, and how you still get a shell: Hackers constantly scan the internet for open SSH ports (port 22) to guess passwords. Instead, Parley uses AWS Session Manager. The server reaches out to AWS to ask for commands, rather than AWS reaching in. Because there is no open port, hackers can't even try to break in, but I can still get a secure shell through the AWS console.
+
+- How Let's Encrypt proves you own the domain, and why http only redirects: Let's Encrypt gives you a secret code and tells you to put it at a specific URL on your server. It then visits that URL from the outside. Since only the domain owner controls the server, passing the test proves ownership. Port 80 (HTTP) only redirects to Port 443 (HTTPS) because HTTP is unencrypted. If the app were served over HTTP, anyone on the same Wi-Fi could read your messages and passwords.
+
+- Why db, Redis and RabbitMQ must have no open ports on a server: If their ports are open, the entire internet can try to connect to them, guess passwords, or flood them. They are internal helpers that only your backend servers need to talk to. By keeping their ports closed to the outside world, they become completely invisible and safe from the public internet.
