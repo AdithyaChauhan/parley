@@ -85,18 +85,21 @@ jobs:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
           EVENT: ${{ github.event_name }}
         run: |
-          for name in backend web; do
-            if aws ecr describe-images --repository-name "parley-$name" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
-              echo "parley-$name:$TAG is already in ECR"
-              continue
+          # $1 = the image's name in ECR, $2 = the folder it's built from.
+          build_and_push() {
+            if aws ecr describe-images --repository-name "parley-$1" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
+              echo "parley-$1:$TAG is already in ECR"
+              return
             fi
             if [ "$EVENT" = workflow_dispatch ]; then
-              echo "parley-$name:$TAG isn't in ECR. A rollback can only use one of the last 10 versions."
+              echo "parley-$1:$TAG isn't in ECR. A rollback can only use one of the last 10 versions."
               exit 1
             fi
-            docker build --build-arg "APP_VERSION=$TAG" -t "$REGISTRY/parley-$name:$TAG" "./$name"
-            docker push "$REGISTRY/parley-$name:$TAG"
-          done
+            docker build --build-arg "APP_VERSION=$TAG" -t "$REGISTRY/parley-$1:$TAG" "./$2"
+            docker push "$REGISTRY/parley-$1:$TAG"
+          }
+          build_and_push backend backend
+          build_and_push web frontend
 
       # The only command this role may run, on the only server it may reach (D31).
       - name: Deploy on the server
