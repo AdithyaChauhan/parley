@@ -37,9 +37,14 @@ x-parley-copy: &parley-copy
   healthcheck:
     # Slim has no curl, so ask with Python. A non-2xx answer or no answer fails.
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
-    interval: 5s
+    # Every check starts a fresh Python, which costs CPU: every 5 s, each copy
+    # used ~3.7% of the server around the clock (T29). So every 1 s while
+    # starting (a deploy sees "healthy" quickly, D31), then every 30 s.
+    interval: 30s
     timeout: 5s
     retries: 10
+    start_period: 30s
+    start_interval: 1s
   # `docker stop` waits this long for a clean shutdown before forcing it.
   # uvicorn closes the live lines at once (1012), so it rarely needs it (D28).
   stop_grace_period: 10s
@@ -95,9 +100,14 @@ services:
     healthcheck:
       # Healthy only once the port takes connections, not just when it's booting.
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
-      interval: 5s
+      # Every check starts a whole Erlang program (about a second): every 5 s,
+      # that was ~9% of the server around the clock (T29). So every 2 s while
+      # starting, then every 30 s.
+      interval: 30s
       timeout: 10s
       retries: 10
+      start_period: 60s
+      start_interval: 2s
 
   # Brings the database tables up to date once, then exits. The others wait
   # for it, so the two copies never migrate at the same time (D27).

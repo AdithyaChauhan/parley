@@ -35,7 +35,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    runs-on: ubuntu-latest
+    # The same Ubuntu as the server and CI (D31).
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
@@ -46,14 +47,14 @@ jobs:
     steps:
       # The version: the commit CI tested, or the tag typed in by hand. Passed
       # through env, never pasted into the script, so a typed tag can't run
-      # as a command.
+      # as a command. Spaces (often copied along with a tag) are dropped first.
       - name: Pick the version
         env:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.tag }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ "$EVENT" = workflow_dispatch ]; then TAG="$INPUT_TAG"; else TAG="${HEAD_SHA::7}"; fi
+          if [ "$EVENT" = workflow_dispatch ]; then TAG="${INPUT_TAG//[[:space:]]/}"; else TAG="${HEAD_SHA::7}"; fi
           [[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]] || { echo "Not a commit id: $TAG"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "Deploying $TAG"
@@ -122,7 +123,10 @@ jobs:
           [ "$STATUS" = Success ]
 
       # Through the internet, like a browser: all 10 answers must carry the new
-      # version, and both copies must answer (D28).
+      # version. Not "both copies must answer": Nginx sends quick requests to
+      # the copy with fewer open live lines (least_conn, D28), so while people
+      # chat, all 10 can land on one copy. The server already waited for both
+      # copies to be healthy.
       - name: Check the live site
         run: |
           for i in $(seq 1 10); do
@@ -131,5 +135,3 @@ jobs:
           done > answers.txt
           cat answers.txt
           [ "$(grep -c "\"version\":\"$TAG\"" answers.txt)" -eq 10 ]
-          grep -q '"copy":"A"' answers.txt
-          grep -q '"copy":"B"' answers.txt

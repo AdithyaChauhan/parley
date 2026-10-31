@@ -1,5 +1,5 @@
 # One image for backend, worker and migrate (D27). Compose picks the command.
-FROM python:3.13.17-slim-trixie
+FROM python:3.13.18-slim-trixie
 
 # Logs show up at once in `docker compose logs` (no waiting in a buffer),
 # and Python doesn't write .pyc cache files into the image.

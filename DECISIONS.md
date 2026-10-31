@@ -287,3 +287,10 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - ECR tags are immutable (a version can't be overwritten), with basic scan on push. `deploy.yml` uses a concurrency group, so two deploys never overlap.
   - The deploy starts on `workflow_run` after CI on `main` passes, and checks out the exact commit CI tested.
   - The alarm email lives in a gitignored `terraform.tfvars` (the repo is public). `*.tfvars` goes in `.gitignore`.
+- Learned while building T29:
+  - GitHub's OIDC subject for this repo uses the immutable-id format (`repo:AdithyaChauhan@<owner id>/parley@<repo id>:ref:refs/heads/main`). The trust rule matches it exactly, so a new repo with the same name can't deploy.
+  - The GitHub role can also **read** images in the two repositories, because Docker checks whether an image exists before pushing it.
+  - The live check after a deploy is "the new version on every answer", not "answers from both copies".
+  - The rollback input ignores spaces. The AWS server sits on a detached commit, where `deploy.sh` refuses to run.
+  - The ECR login token (12 h) sits in ssm-user's Docker config on the server. That's accepted (host-only, short-lived).
+  - Runners are pinned to `ubuntu-24.04`, the same as the server.

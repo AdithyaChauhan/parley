@@ -12,6 +12,9 @@ RUN npm run build
 
 # Stage 2: only Nginx and the built files. Node and node_modules stay behind.
 FROM nginx:1.30.6-alpine
+# Security fixes Alpine published after this image was made (the T29 scan found
+# curl and brotli). It stays on the same Alpine version: fixes only.
+RUN apk upgrade --no-cache
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
