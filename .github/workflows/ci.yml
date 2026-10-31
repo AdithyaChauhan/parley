@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    # The same Ubuntu as the server (24.04). ubuntu-latest moves to newer ones
+    # by itself, which could change a run with no change in this file (D31).
+    runs-on: ubuntu-24.04
     # A live test waiting for an event that never comes would wait forever.
     # Stop a stuck run after 10 minutes instead of GitHub's 6 hours.
     timeout-minutes: 10
@@ -95,7 +97,7 @@ jobs:
       - run: pytest
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     defaults:
@@ -117,7 +119,7 @@ jobs:
 
   # Builds both images and starts all of Parley, like on the laptop (D27).
   containers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:

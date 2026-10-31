@@ -81,6 +81,20 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 "In my words" prompts: how GitHub gets into AWS without a stored key (OIDC); why the copies restart one at a time; where the secrets live now and who can read them; what happens when the alarm fires.
 
+**T29 follow-up (branch `fix/deploy-check`, planner-approved Oct 31), to finish T29:**
+1. `deploy.yml`: the live check requires the new version on **every** answer, not answers from both copies (least_conn sends quick requests to the copy with fewer open lines). The rollback input ignores spaces before checking the format.
+2. Security patches (D27: patches are taken at once): `python:3.13.18-slim-trixie` for the backend. In the web image, `apk upgrade --no-cache` in the Nginx stage, which fixes the curl and brotli findings. Compare the ECR scan before and after.
+3. Pin the GitHub runners to `ubuntu-24.04` in `ci.yml` and `deploy.yml`, the same as the server (`ubuntu-latest` is moving to 26).
+4. Idle CPU: the server sits at ~20% CPU with Parley idle, and its CPU credits are slowly draining. Find the process (read-only first: `top -bn2 -d5`, `ps aux --sort=-%cpu | head`, `pidstat`). Report it, and fix it only if the cause is clear.
+5. LEARNING.md: the T29 section, plus the desktop spot-check line for the phone keyboard fix: "Desktop spot-check (Edge DevTools): 1440 has four columns and the panel folds; 1024 has three columns and the name swaps in the panel with a back arrow; 390 is one screen at a time. Same as T27."
+6. Proofs:
+   - **Before merging:** run Deploy by hand on this branch with the live tag. AWS must refuse the login, which proves "only main can deploy".
+   - **The test alarm:** `set-alarm-state` sends the ALARM and OK emails.
+   - **After merging:** the auto-deploy recreates `web` (because the frontend Dockerfile changed), which gives the "after" number for the fast stop.
+7. Adithya, by hand (Claude Code gives the steps):
+   - A GitHub ruleset on `main`: PR required, the 3 CI checks required, no force push or delete, and no bypass. This enforces D13.
+   - Delete the old `delivery-delay-github-actions-build-role` in IAM (keep the OIDC provider).
+
 ---
 
 ## All tasks

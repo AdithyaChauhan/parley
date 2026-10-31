@@ -1262,6 +1262,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
   - iPhone: dragging on the header, the message box, an empty chat and a short chat list moves nothing (no grey strip).
   - Live site, with the branch put up for the test (`deploy.sh web`), in iPhone Chrome and Safari: a send jumps to the newest message, a scrolled-up iPhone doesn't jump when the laptop sends, and closing the keyboard leaves no shift. Edge notifications work after turning them on in the gear menu.
   - Gear menu: closes on a tap or click outside, and on Esc (laptop and iPhone).
+  - Desktop spot-check (Edge DevTools): 1440 has four columns and the panel folds; 1024 has three columns and the name swaps in the panel with a back arrow; 390 is one screen at a time. Same as T27.
   - Lint and build clean.
 - Found along the way:
   - Sending fails on `http://192.168.x.x`: `crypto.randomUUID()` only works on a secure page (https or localhost). So sending was tested on the live site instead.
@@ -1285,3 +1286,78 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What this fix does: It makes the chat work on an iPhone like a native app. When the keyboard opens, the header stays at the top, the message box sits right above the keyboard, and only the messages scroll. The page itself is locked so it doesn't bounce around when you drag your finger. It also stops Safari from zooming in when you tap the text box, and it makes sure new messages don't yank you to the bottom if you're busy reading older ones.
 - What I'd check first if it broke: I would check if the page is locked (look for the `page-locked` class on the HTML element) and check what the `--visible-height` CSS variable is set to. Most importantly, I'd test on a real iPhone, because Chrome DevTools doesn't simulate the iOS keyboard correctly. Also, I'd remember that sending messages only works over HTTPS, so testing on a local Wi-Fi IP address won't work.
 - What still confuses me: Why iOS decides to slide the page up instead of just shrinking it when the keyboard opens, and why `overflow: hidden` wasn't enough to stop the bounce until we forced the body to `position: fixed`.
+
+---
+
+### Task 29: Auto-deploy from GitHub, secrets in AWS, and an alarm
+**What was built**
+- Step 0, a fresh database on the live server: `down`, the `parley_db_data` volume removed (3 old test accounts), Redis emptied with `FLUSHALL`, then `up` (`migrate` built the tables again). Clean demo accounts Ana (laptop) and Ben (iPhone). The link is ready for the resume.
+- `/api/health` shows `"version"`, the commit the image was built from (`ARG APP_VERSION` in the backend Dockerfile, placed last so the package layer stays cached). On the laptop it says `dev`.
+- `deploy/aws/terraform/` (AWS-only, D29). Every change was a plan in plain words, an OK, then `apply`:
+  - `ecr.tf`: two image stores, `parley-backend` and `parley-web`. Tags can't be overwritten, each image is scanned on push, only the last 10 are kept, and `force_delete` lets `destroy` remove them even with images inside.
+  - `deploy.tf`:
+    - Reads the GitHub OIDC provider that already existed for the delivery-delay project (a `data` source, so `destroy` never deletes it).
+    - The role `parley-github-deploy`, which only this repo's `main` can use. It may push to (and read) the two stores, and run one SSM document on one server.
+    - That document, `parley-deploy`, takes one input, a commit id (`^[0-9a-f]{7,40}$`). It runs `git fetch`, `git checkout --detach <commit>` and the deploy script as the repo's owner (ssm-user), not as root.
+  - `server.tf`: the server's role may also pull images, read `/parley/prod/*` and write logs. A temporary "write `/parley/prod/*`" rule (`allow_secret_upload`) existed only while the secrets were stored, and the second apply removed it.
+  - `monitoring.tf`: the log group `/parley/containers` (7 days), an SNS topic with the email, and two alarms. One fires on failed status checks for 2 minutes (or no data at all), the other on CPU above 80% for 15 minutes. Both also email when things are OK again.
+  - `variables.tf`, `outputs.tf`: the repo in GitHub's id form, the alarm email (from a gitignored `terraform.tfvars`), the role ARN and the registry address.
+  - In all: 14 added, 1 removed (the temporary write), 2 fixes. About $0.36 a month in credits.
+- `deploy/aws/store-secrets.sh`, run once on the server: the 10 settings from `.env` became encrypted parameters under `/parley/prod/`. Values go in through stdin, so they never show on screen or in the process list. Then it reads everything back and compares, printing only "matches". The AWS CLI came from `sudo snap install aws-cli --classic`.
+- `deploy/aws/deploy-from-ecr.sh` and `docker-compose.ecr.yml`:
+  - `.env` comes from Parameter Store. It's written next to the old one and moved over it in one step, and the script stops if `JWT_SECRET` is missing.
+  - Then: ECR login and pull; the helpers are recreated only if their settings changed; `migrate`.
+  - `backend_a`, wait 15 s (Nginx finds its new address), `backend_b`, the worker.
+  - `web` only if `frontend/`, `nginx.prod.conf` or a Compose file changed since the running version. It stops with SIGTERM (Nginx's fast stop).
+  - Parley's own containers log to CloudWatch. The helpers keep local logs.
+- `.github/workflows/deploy.yml`:
+  - It starts after CI passes on `main` (`workflow_run`), or by hand with a version (the rollback), and never two at a time.
+  - It checks out the exact commit CI tested, logs in with OIDC (`configure-aws-credentials@v6.3.0`), and builds and pushes only versions not already in ECR.
+  - It runs `parley-deploy`, then checks that every answer from the live site shows the new version.
+  - GitHub holds 4 variables and no secrets.
+- `deploy/server/deploy.sh` refuses to run outside `${PARLEY_DIR:-/opt/parley}` and on a detached commit ("This server is deployed by GitHub Actions"). `deploy/README.md` got a part 3 for all of this.
+- Follow-up (`fix/deploy-check`):
+  - The live check asks only for the new version (not answers from both copies), and the rollback box ignores spaces.
+  - Runners pinned to `ubuntu-24.04`.
+  - `python:3.13.18-slim-trixie`, and `apk upgrade` in the web image (curl 8.22.0 → 8.23.0, brotli 1.2.0 → 1.2.1).
+  - The health checks of RabbitMQ and the backends run every 30 s once a container is up, and every 1-2 s only while it starts.
+- Checked:
+  - First deploy from ECR (`95196b3`, by hand), with `/api/health` asked twice a second from the laptop. While `backend_a` was replaced, B answered all 22 asks. While `backend_b` was replaced, A answered all 18. Web was gone for ~9 s (its old, slow stop).
+  - Merging PR #31 deployed `cdd1bb5` by itself: green, 871 asks over 15 minutes, 0 failures. Web was left running, since nothing it's built from changed.
+  - Rollback by hand to `95196b3`: green, and `/api/health` showed it. Forward again to `cdd1bb5`: Ana and Ben sent 4 messages during it, all arrived once and in order, and "Reconnecting..." flashed.
+  - Parameter Store matched `.env` exactly, and no secret ever showed on screen.
+  - CloudWatch has one log stream per Parley container. The test alarm (`set-alarm-state`) sent the ALARM email, and the OK email came 1.5 minutes later by itself.
+- Found along the way:
+  - Redis saves to disk when it stops, so restarting it doesn't empty it. `FLUSHALL` does.
+  - Pasting several lines into Session Manager mixes them up. One line at a time works.
+  - Stopping web took 10.3 s: Nginx's default stop waits for every open live line. Hence SIGTERM.
+  - The first automatic deploy failed twice:
+    - GitHub's ID card for this repo uses the newer immutable form, `repo:AdithyaChauhan@91404342/parley@1423740237:ref:refs/heads/main`, so the exact match failed.
+    - Then the push was refused at its last step. CloudTrail showed every layer uploaded and then `ecr:BatchGetImage` denied: Docker asks whether the image exists before saving it.
+    - Also, the web image was built from `./web` instead of `frontend/`.
+  - "Both copies must answer" can't pass while someone chats: Nginx's least_conn sends quick asks to the copy with fewer open live lines.
+  - A version pasted with a trailing space was refused by the format check.
+  - iPhone browser tabs can't get web push at all. iOS allows it only for apps added to the Home Screen.
+  - The idle server used ~19% CPU. Measured per container over 60 s: RabbitMQ 9%, each backend 3.7%. It was their health checks, which start a whole program (Erlang or Python) every 5 seconds.
+  - ECR's scan found 8 critical and 17 high in the web image (curl and brotli from Alpine), and 4 high in the backend (glibc and zlib from Debian, with no fix published yet).
+
+**New ideas**
+- CI/CD: CI tests every change. CD (continuous deployment) puts a change that passed live by itself.
+- OIDC: for each run, GitHub signs an ID card saying which repo and branch it is. AWS checks the card against the role's trust rule (exact match) and hands out a pass that lasts an hour. There's no stored key that could leak.
+- Least privilege: each role gets only what its job needs. GitHub can push images and press one button. The server can pull, read its secrets and write logs.
+- An image registry (ECR) stores versions under tags. Immutable tags mean a version name always means the same image. A lifecycle rule deletes old ones, and a scan lists known security holes in the packages inside.
+- SSM Run Command: AWS passes a command to the server's agent, so there's no SSH. A custom document limits it to one script with one checked input.
+- Parameter Store SecureString: a setting encrypted with an AWS key. Whoever's role allows reading it can read it, and nobody else.
+- Rolling restart: replace one copy at a time and wait until it's healthy, so the other copy carries everyone. Wait for the load balancer to notice before touching the second one.
+- Expand, then contract: add new columns in one deploy, remove old ones in a later one, because the old copy briefly runs on the new tables.
+- Rollback = deploy an older version again. It works because images can't change and the server checks out that commit's files too.
+- CloudWatch: logs (Docker's `awslogs` driver), metrics, and alarms that send to SNS (email). "Missing data counts as failing" also catches a server that's gone silent.
+- CloudTrail: AWS's own record of every call, including refused ones. That's how the missing permission was found.
+- Health checks cost CPU, since each one starts a program. `start_period` + `start_interval` check often only while a container starts.
+- Nginx stops two ways. SIGQUIT is graceful (waits for open connections). SIGTERM is fast (closes them, and the apps reconnect).
+
+**In my words** (Adithya writes this)
+- How GitHub gets into AWS without a stored key (OIDC):
+- Why the copies restart one at a time:
+- Where the secrets live now and who can read them:
+- What happens when the alarm fires:
