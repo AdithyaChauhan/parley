@@ -9,6 +9,7 @@ import { SidePanel } from "./SidePanel"
 import type { ChatSummary, NarrowView, ServerMessage } from "./types"
 import { useOutbox } from "./useOutbox"
 import { useTyping } from "./useTyping"
+import { useVisibleArea } from "./useVisibleArea"
 
 // The chat list shows each chat's newest message, so it's on this device now (D20)
 function reportListDelivered(list: ChatSummary[]) {
@@ -47,6 +48,8 @@ export function ChatScreen({ user }: { user: User }) {
   const live = useLiveConnection()
   // Who is typing in which chat, for the chat list and the open conversation
   const typing = useTyping()
+  // The screen's size follows the visible part of the page (the keyboard, on a phone)
+  useVisibleArea()
 
   // My real chats, newest activity first. The first one opens on its own.
   useEffect(() => {
@@ -188,8 +191,10 @@ export function ChatScreen({ user }: { user: User }) {
   })
 
   return (
-    // Fills the whole browser window, with no outer frame (D8)
-    <div className="flex h-svh w-full flex-col overflow-hidden bg-card md:flex-row">
+    // Fills the part of the window you can see, with no outer frame (D8). Pinned
+    // there (fixed), so the page itself never scrolls: on a phone with the
+    // keyboard open, only the message list moves.
+    <div className="fixed inset-x-0 top-[var(--visible-top,0px)] flex h-[var(--visible-height,100dvh)] flex-col overflow-hidden bg-card md:flex-row">
       <IconRail myName={user.name} />
       <ChatColumn
         chats={chats}

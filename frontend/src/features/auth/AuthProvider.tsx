@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if (checking) {
     return (
-      <main role="status" className="flex min-h-svh flex-col items-center justify-center gap-3 bg-background">
+      <main role="status" className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-background">
         <Logo className="size-12 animate-pulse" />
         <p className="text-sm text-muted-foreground">Loading...</p>
       </main>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   Bell,
   BellOff,
@@ -96,6 +96,25 @@ export function ChatColumn({
   const [menuOpen, setMenuOpen] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const shown = (chats ?? []).filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
+  // The gear and its menu, so a tap inside them doesn't count as "outside"
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // While the gear menu is open: a tap or click anywhere else, or Esc, closes it
+  useEffect(() => {
+    if (!menuOpen) return
+    function closeIfOutside(e: PointerEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false)
+    }
+    function closeOnEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false)
+    }
+    document.addEventListener("pointerdown", closeIfOutside)
+    document.addEventListener("keydown", closeOnEsc)
+    return () => {
+      document.removeEventListener("pointerdown", closeIfOutside)
+      document.removeEventListener("keydown", closeOnEsc)
+    }
+  }, [menuOpen])
 
   return (
     <section
@@ -108,7 +127,7 @@ export function ChatColumn({
       {/* No header, even on a phone: the profile is the top of the column (D8) */}
       <div className="relative flex shrink-0 flex-col items-center pt-6 pb-4">
         {/* The gear opens a small menu with "Log out" */}
-        <div className="absolute top-5 right-0">
+        <div ref={menuRef} className="absolute top-5 right-0">
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
@@ -143,7 +162,8 @@ export function ChatColumn({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search"
-          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+          // 16px on a phone: an iPhone zooms the whole page when you tap a smaller box
+          className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-body"
         />
         <Search className="size-4 text-muted-foreground" />
       </label>
@@ -172,7 +192,7 @@ export function ChatColumn({
         </div>
       </div>
 
-      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-4 scrollbar-thin">
+      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-4 scrollbar-thin">
         {shown.map((chat) => (
           <ChatRow
             key={chat.id}

@@ -61,6 +61,7 @@ export function Conversation({
 
   const firstKey = messages[0]?.clientMsgId
   const lastKey = messages.at(-1)?.clientMsgId
+  const lastIsMine = messages.at(-1)?.senderId === myId
 
   // Older messages were added on top: put the same message back under your eyes, no jump
   useLayoutEffect(() => {
@@ -71,11 +72,13 @@ export function Conversation({
     }
   }, [firstKey])
 
-  // First load, or a new message at the bottom: show the newest
+  // A new message at the bottom. Show it on first load, when I sent it, or when
+  // I was already at the bottom. Scrolled up reading older ones? Their new
+  // message doesn't pull me down (D8).
   useLayoutEffect(() => {
     const list = listRef.current
-    if (list) list.scrollTop = list.scrollHeight
-  }, [lastKey])
+    if (list && (lastIsMine || atBottom.current)) list.scrollTop = list.scrollHeight
+  }, [lastKey, lastIsMine])
 
   // Below 1280px the chat can load while hidden (behind the chat list on a
   // phone, or the side panel), and a hidden list can't scroll. So when it
@@ -85,11 +88,18 @@ export function Conversation({
     if (list && list.clientHeight > 0) list.scrollTop = list.scrollHeight
   }, [view])
 
-  // "is typing..." came or went, so the list got shorter or taller: if you were at the bottom, stay there
-  useLayoutEffect(() => {
+  // The list got shorter or taller: the phone keyboard opened or closed, or
+  // "is typing..." came or went. If you were at the bottom, stay there, so the
+  // newest message never hides behind the message box.
+  useEffect(() => {
     const list = listRef.current
-    if (list && atBottom.current) list.scrollTop = list.scrollHeight
-  }, [typing])
+    if (!list) return
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) list.scrollTop = list.scrollHeight
+    })
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [])
 
   // "Read" (D20): this chat is showing, the window is in front, and the newest
   // message is on screen. Then tell the server the highest number with no hole
@@ -184,11 +194,12 @@ export function Conversation({
         </button>
       </header>
 
-      {/* overflow-anchor none: the browser mustn't move the scroll on its own; handleScroll and the effects do it */}
+      {/* overflow-anchor none: the browser mustn't move the scroll on its own; handleScroll and the effects do it.
+          overscroll-contain: the iPhone's bounce at the top or bottom stays in the list and doesn't drag the page. */}
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 [overflow-anchor:none] scrollbar-thin md:p-6"
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain p-4 [overflow-anchor:none] scrollbar-thin md:p-6"
       >
         {loading && <p className="m-auto text-sm text-muted-foreground">Loading messages...</p>}
         {failed && <p className="m-auto text-sm text-muted-foreground">Can't reach Parley. Reload to try again.</p>}
@@ -220,7 +231,8 @@ export function Conversation({
         </div>
       )}
 
-      <div className="shrink-0 px-4 pb-4">
+      {/* Clear of the iPhone's home bar when it overlaps the page; 16px otherwise (the browser's own tab already keeps clear) */}
+      <div className="shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
       </div>
     </section>

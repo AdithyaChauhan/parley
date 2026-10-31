@@ -260,3 +260,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - The repo was scanned (gitleaks over all branches and PR refs, plus the real `.env` values) and is clean, so it can go public.
   - Terraform `1.16.x` (installed: 1.16.6). Per D27's version rule, we stay on 1.16 for now, since 1.17 is a new minor version.
   - The budget alert is $30/month (80% actual, 100% forecast, 100% actual). It excludes credits, so it counts real usage and fires on Parley's ~$22 only if something extra runs. Credits as of Oct 30: $140.52.
+- After T28 (done Oct 31, 2026): live at https://parley-adithya.duckdns.org (Elastic IP 16.4.0.127). The server runs `main` from `/opt/parley`. HSTS is on for one year, without `preload` (the DuckDNS name may be dropped after Feb).
+- Deploying: `bash deploy/server/deploy.sh` (full) or `deploy.sh web` (frontend only). `web` is always recreated, because a single-file mount keeps the old `nginx.prod.conf` after `git pull`. Known: a full deploy can restart both backend copies together, so live lines reconnect within seconds (nothing is lost). T29 restarts them one at a time.
+- Off switch: `terraform destroy` (11 resources), not "stop" (a stopped server still costs ~$5.50/month for the disk and IP). Afterwards, clear the IP on duckdns.org.
+- Known gaps: no backups (the database lives on the one disk), and images are built on the server (T29 moves builds to CI).

@@ -14,7 +14,7 @@ type AuthCardProps = {
 // On a phone it fills the width with a 16px gap on each side.
 export function AuthCard({ title, children, switchText, switchLabel, switchTo }: AuthCardProps) {
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background px-4 py-8">
+    <main className="flex min-h-dvh items-center justify-center bg-background px-4 py-8">
       <div className="w-full max-w-100 rounded-card bg-card px-6 py-10 shadow-sm shadow-foreground/5 sm:px-10">
         <Logo className="mx-auto size-12" />
         <h1 className="mt-4 text-center text-header">{title}</h1>
