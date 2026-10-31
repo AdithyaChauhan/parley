@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Which backend copy this is, when several run at once (D23). Shown in
     # /api/health, so you can check which copy a window talks to.
     copy_name: str = "A"
+    # Which version of the code is running: the commit, baked into the image
+    # at build time (APP_VERSION, D31). "dev" on the laptop.
+    app_version: str = "dev"
     # The refresh cookie's Secure flag: the browser then sends it over HTTPS
     # only. Off for plain http://localhost, where the browser would drop such a
     # cookie; turned on with HTTPS in T26b (D28).

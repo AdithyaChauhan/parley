@@ -10,6 +10,22 @@ set -euo pipefail
 # Run from the repo folder, wherever the script was called from.
 cd "$(dirname "$0")/../.."
 
+# Only in the server's repo folder: after T28 it once ran on the laptop by
+# mistake (D31). PARLEY_DIR: the folder setup.sh cloned into, if not the default.
+DIR="${PARLEY_DIR:-/opt/parley}"
+if [ "$(pwd -P)" != "$(cd "$DIR" 2>/dev/null && pwd -P)" ]; then
+  echo "deploy.sh only runs in $DIR on a server, not in $(pwd -P)." >&2
+  exit 1
+fi
+
+# On the AWS server, every deploy checks out one exact commit instead of a
+# branch, and GitHub Actions does the deploying (D31).
+if ! git symbolic-ref -q HEAD >/dev/null; then
+  echo "This server is deployed by GitHub Actions: it's on commit $(git rev-parse --short HEAD), not a branch." >&2
+  echo "Put a version live with Actions > Deploy instead." >&2
+  exit 1
+fi
+
 compose() {
   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app "$@"
 }

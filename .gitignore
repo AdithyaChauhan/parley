@@ -16,3 +16,6 @@ __pycache__/
 *.tfstate.*
 # A saved plan, so `apply` does exactly what was reviewed. It can hold secrets too.
 *.tfplan
+# Your own values for Terraform's variables, like the alarm email (D31). The
+# repo is public, so they stay on the laptop.
+*.tfvars

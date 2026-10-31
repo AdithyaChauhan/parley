@@ -58,6 +58,72 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Our account's id, for the Parameter Store addresses below.
+data "aws_caller_identity" "me" {}
+
+# What else the server may do in AWS (D31): pull Parley's images, read its
+# secrets under /parley/prod, and send container logs to CloudWatch. All of it
+# runs on the server itself, never inside a container (hop limit 1, above).
+resource "aws_iam_role_policy" "server_deploy" {
+  name = "pull-images-read-secrets-write-logs"
+  role = aws_iam_role.server.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrLogin"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        # Pull only, from Parley's two stores. The server can't push.
+        Sid      = "PullParleyImages"
+        Effect   = "Allow"
+        Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+        Resource = [for repo in aws_ecr_repository.parley : repo.arn]
+      },
+      {
+        # Read the secrets (the folder itself, and everything in it).
+        Sid    = "ReadParleySecrets"
+        Effect = "Allow"
+        Action = ["ssm:GetParametersByPath", "ssm:GetParameters", "ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:${var.region}:${data.aws_caller_identity.me.account_id}:parameter/parley/prod",
+          "arn:aws:ssm:${var.region}:${data.aws_caller_identity.me.account_id}:parameter/parley/prod/*",
+        ]
+      },
+      {
+        # Docker's CloudWatch log driver: one stream per container, in our group.
+        Sid      = "WriteContainerLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.containers.arn}:*"
+      },
+    ]
+  })
+}
+
+# Write access to the secrets, only while store-secrets.sh runs once (D31).
+# count = 0 means "this doesn't exist": the second apply, with
+# allow_secret_upload = false, removes it again.
+resource "aws_iam_role_policy" "server_secret_upload" {
+  count = var.allow_secret_upload ? 1 : 0
+  name  = "store-secrets-once"
+  role  = aws_iam_role.server.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "StoreParleySecrets"
+      Effect   = "Allow"
+      Action   = "ssm:PutParameter"
+      Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.me.account_id}:parameter/parley/prod/*"
+    }]
+  })
+}
+
 # The holder that attaches the role to the machine.
 resource "aws_iam_instance_profile" "server" {
   name = "parley-server"

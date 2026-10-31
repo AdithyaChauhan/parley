@@ -17,3 +17,20 @@ variable "disk_gb" {
   type        = number
   default     = 20
 }
+
+variable "github_repo" {
+  description = "The only GitHub repo allowed to deploy, and only from main (D31)."
+  type        = string
+  default     = "AdithyaChauhan/parley"
+}
+
+variable "alert_email" {
+  description = "Where alarm emails go. No default: set it in terraform.tfvars, which is gitignored (D31)."
+  type        = string
+}
+
+variable "allow_secret_upload" {
+  description = "true only while store-secrets.sh runs on the server: lets it write /parley/prod/* once, then apply again with false (D31)."
+  type        = bool
+  default     = false
+}

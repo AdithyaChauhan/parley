@@ -53,7 +53,7 @@ No dead buttons on the live app. Anything that doesn't work yet is hidden, not s
 - emoji and attach, and file drop
 - the "Messages" and "Participants" tabs (in v2, a group's members show in the side panel, reached by tapping the name, like WhatsApp's group info)
 A hidden button comes back only in the task that makes it work: attach and drop with files, emoji with reactions, the "..." menu with groups (all v2). The eye icon comes back with Status and the calls icon with calls (maybe later). Dashboard, Tasks and Stats came from the reference design, not WhatsApp, so they stay gone.
-Phone keyboard (fix after T28): like WhatsApp, the chat header stays at the top and the message box sits just above the keyboard (or at the bottom when it's closed). Only the message list scrolls, and the page as a whole never scrolls. Sending a message jumps to the newest one.
+Phone keyboard (PR #29): like WhatsApp, the chat header stays at the top and the message box sits just above the keyboard (or at the bottom when it's closed). The page is locked while the chat screen shows (no scroll, no bounce), and only the lists scroll. Text boxes are at least 16 px on phones (iOS zooms smaller ones). Sending jumps to the newest message, and a new message doesn't pull you down if you've scrolled up. There's no pull-to-refresh (live chat doesn't need it). No installable app (PWA) for now, since people open the link in a browser.
 The fake file numbers are removed (T27). Every chat's side panel shows "No files yet" until v2. In a 1:1 chat, the side panel shows "online" or "last seen", not "2 members".
 
 **D9. Message rules**
@@ -260,7 +260,30 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - The repo was scanned (gitleaks over all branches and PR refs, plus the real `.env` values) and is clean, so it can go public.
   - Terraform `1.16.x` (installed: 1.16.6). Per D27's version rule, we stay on 1.16 for now, since 1.17 is a new minor version.
   - The budget alert is $30/month (80% actual, 100% forecast, 100% actual). It excludes credits, so it counts real usage and fires on Parley's ~$22 only if something extra runs. Credits as of Oct 30: $140.52.
-- After T28 (done Oct 31, 2026): live at https://parley-adithya.duckdns.org (Elastic IP 16.4.0.127). The server runs `main` from `/opt/parley`. HSTS is on for one year, without `preload` (the DuckDNS name may be dropped after Feb).
+- After T28 (done Oct 31, 2026): live at https://parley-adithya.duckdns.org (Elastic IP 16.4.0.127). The server runs `main` from `/opt/parley` (from T29: an exact commit of `main`, set by each deploy, D31). HSTS is on for one year, without `preload` (the DuckDNS name may be dropped after Feb).
 - Deploying: `bash deploy/server/deploy.sh` (full) or `deploy.sh web` (frontend only). `web` is always recreated, because a single-file mount keeps the old `nginx.prod.conf` after `git pull`. Known: a full deploy can restart both backend copies together, so live lines reconnect within seconds (nothing is lost). T29 restarts them one at a time.
 - Off switch: `terraform destroy` (11 resources), not "stop" (a stopped server still costs ~$5.50/month for the disk and IP). Afterwards, clear the IP on duckdns.org.
 - Known gaps: no backups (the database lives on the one disk), and images are built on the server (T29 moves builds to CI).
+
+**D31. Auto-deploy (T29)**
+- GitHub Actions deploys `main` after CI passes: images are built in CI, tagged with the commit, pushed to ECR (keep the last 10), and the server is told to update through SSM (no SSH). It can also be run by hand with an older tag, which is the rollback.
+- GitHub reaches AWS through OIDC: a role that only `AdithyaChauhan/parley` on `main` can use, allowed only to push to the two ECR repositories and to send commands to this one server. GitHub stores no AWS keys, only variables.
+- Production secrets live in SSM Parameter Store (SecureString, `/parley/prod/*`). The server's role reads them and writes `.env` (600) on each deploy. Locally and on any other server, a plain `.env` still works (D29).
+- Deploys restart the backend copies one at a time (wait for healthy in between), so live lines move to the other copy and nothing is lost.
+- `/api/health` shows the running version (the commit).
+- CloudWatch: container logs (7-day retention), and an alarm on the server's status checks and high CPU, sending an email through SNS.
+- `deploy/server/deploy.sh` refuses to run outside `${PARLEY_DIR:-/opt/parley}` (setup.sh allows another folder on generic servers).
+- Agreed at the T29 pre-check:
+  - The account already has a GitHub OIDC provider (made for the old delivery-delay project). Parley's Terraform only **reads** it (a data source) and owns just its own role, so `destroy` never deletes something shared. If the delivery-delay leftovers are cleaned up, delete its role, not the provider.
+  - Storing the secrets needs write access once: a Terraform variable switches on "write /parley/prod/*" for the server role, the secrets are stored, then a second apply removes it.
+  - The AWS CLI on the server comes from `sudo snap install aws-cli --classic` (one time). The scripts stop with a clear message if it's missing.
+  - GitHub may run only Parley's own SSM document, `parley-deploy`, on only this server. It takes only a version tag (7-40 hex characters) and runs only the deploy. It can't run any other command, so it can't read the secrets.
+  - Each deploy checks out the exact commit (`git checkout --detach <commit>`, as ssm-user), so a rollback also rolls back the Compose files, `nginx.prod.conf` and the scripts. On the AWS server, the workflow is how you deploy. `deploy/server/deploy.sh` there stops with "this server is deployed by GitHub Actions" when it finds a detached commit.
+  - `web` is recreated only when `frontend/` or `deploy/server/nginx.prod.conf` changed. `web` stops with SIGTERM (Nginx's fast shutdown), so it doesn't wait 10 s for open live lines. They reconnect anyway (D21). Measure the blip before and after.
+  - Rolling restart: after `backend_a` is healthy, wait 15 s (Nginx re-checks names every 10 s, D28) before restarting `backend_b`.
+  - Table changes in two steps from now on (expand, then contract): add new columns or tables in one deploy, and remove old ones in a later deploy, because the old copy runs for a moment on the new tables.
+  - Only Parley's own containers (backend_a, backend_b, worker, web, migrate) send logs to CloudWatch, set in the AWS-only Compose file. The helpers keep local logs, so the first deploy doesn't restart Redis.
+  - The only new GitHub Action is `aws-actions/configure-aws-credentials`, pinned to a version a few weeks old (D27). Building, pushing and SSM use plain `docker` and `aws` commands.
+  - ECR tags are immutable (a version can't be overwritten), with basic scan on push. `deploy.yml` uses a concurrency group, so two deploys never overlap.
+  - The deploy starts on `workflow_run` after CI on `main` passes, and checks out the exact commit CI tested.
+  - The alarm email lives in a gitignored `terraform.tfvars` (the repo is public). `*.tfvars` goes in `.gitignore`.

@@ -1,0 +1,42 @@
+# AWS only (D29, D31): laid on top of docker-compose.yml and
+# docker-compose.prod.yml by deploy-from-ecr.sh. Parley's own images come from
+# ECR, tagged with the commit, instead of being built on the server, and their
+# logs also go to CloudWatch. deploy-from-ecr.sh sets ECR_REGISTRY and APP_TAG.
+
+# Parley's own containers send their logs to CloudWatch, one stream per
+# container. The helpers keep their local logs, so a deploy never restarts
+# Redis (D31). `docker compose logs` still works: Docker keeps a local copy.
+# !override: replace the json-file settings from docker-compose.prod.yml
+# entirely (awslogs refuses json-file's max-size and max-file).
+x-cloudwatch: &cloudwatch
+  logging: !override
+    driver: awslogs
+    options:
+      awslogs-region: ap-south-1
+      awslogs-group: /parley/containers
+      # The stream's name: the container's, like parley-backend_a-1.
+      tag: "{{.Name}}"
+      # If CloudWatch is slow, drop log lines rather than make Parley wait.
+      mode: non-blocking
+      max-buffer-size: 4m
+
+# The backend image from ECR. !reset null: never build it on the server.
+x-backend-image: &backend-image
+  <<: *cloudwatch
+  build: !reset null
+  image: ${ECR_REGISTRY:?}/parley-backend:${APP_TAG:?}
+
+services:
+  migrate: *backend-image
+  backend_a: *backend-image
+  backend_b: *backend-image
+  worker: *backend-image
+
+  web:
+    <<: *cloudwatch
+    build: !reset null
+    image: ${ECR_REGISTRY:?}/parley-web:${APP_TAG:?}
+    # Nginx's fast stop. The default (SIGQUIT) waits for every open live line
+    # until Docker's 10 s limit (measured 10.3 s in T29). The apps reconnect by
+    # themselves anyway (D21).
+    stop_signal: SIGTERM

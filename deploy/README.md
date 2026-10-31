@@ -13,7 +13,11 @@ deploy/
     first-cert.sh      first HTTPS certificate, then starts Parley (run once)
     deploy.sh          puts new code live
     nginx.prod.conf    Nginx with HTTPS (port 80 only redirects)
-  aws/terraform/   only for AWS: builds the server itself
+  aws/             only for AWS
+    terraform/              the server, image stores, deploy role, alarms
+    store-secrets.sh        copies .env into Parameter Store (run once)
+    deploy-from-ecr.sh      puts one version live from ECR (GitHub runs it)
+    docker-compose.ecr.yml  images from ECR, logs to CloudWatch
 ```
 
 ## 1. Any Linux server
@@ -79,7 +83,8 @@ c start backend_a
 ```
 
 **Known gaps:** no backups yet (the database lives in the `db_data` volume on
-this one disk), and images are built on the server itself.
+this one disk), and images are built on the server itself (on AWS, GitHub
+builds them instead: part 3).
 
 ## 2. On AWS, with Terraform
 
@@ -114,7 +119,64 @@ so `setup.sh` skips it).
 laptop and is never committed. Keep a private backup copy: without it,
 Terraform can't remove the server for you.
 
-## 3. Turning it all off
+## 3. On AWS: deploys from GitHub
+
+Merging into `main` puts it live by itself (`.github/workflows/deploy.yml`):
+
+```
+CI green on main → build parley-backend + parley-web, tagged with the commit
+  → log in to AWS with OIDC (no AWS keys stored in GitHub)
+  → push both images to ECR → run the parley-deploy SSM document on the server
+server: .env from Parameter Store → pull → migrate → backend_a → 15 s →
+  backend_b → worker → web (only if it changed) → /api/health shows the commit
+```
+
+The backend copies restart one at a time, so chats keep working. Table
+changes must work for the old copy too, which runs on the new tables for a
+moment: add in one deploy, remove in a later one.
+
+**Set up (once).** Terraform needs your alarm email in
+`deploy/aws/terraform/terraform.tfvars` (gitignored):
+
+```
+alert_email = "you@example.com"
+```
+
+1. `terraform plan -var allow_secret_upload=true -out=parley.tfplan`, then
+   `terraform apply parley.tfplan`. Click "Confirm subscription" in the email AWS
+   sends.
+2. On the server: `sudo snap install aws-cli --classic`, then
+   `bash deploy/aws/store-secrets.sh`. It copies `.env` into Parameter Store
+   (`/parley/prod/*`, encrypted) without showing any value.
+3. `terraform plan -out=parley.tfplan` and apply again: this removes the
+   server's write access to the secrets. From now on it can only read them.
+4. On GitHub, Settings > Secrets and variables > Actions > **Variables** (not
+   secrets): `AWS_ROLE_ARN` (`terraform output github_role_arn`), `AWS_REGION`
+   (`ap-south-1`), `INSTANCE_ID` (`terraform output instance_id`) and
+   `SITE_URL` (`https://your.domain.example`).
+
+**Roll back.** Actions > Deploy > Run workflow, from `main`, with an older
+version (one of the last 10 commits in ECR, from this setup on).
+
+**Who can do what.** GitHub's role only works for this repo's `main`, may
+only push to the two image stores, and may only run `parley-deploy` (which
+takes nothing but a commit id) on this one server. It can't read the secrets.
+The server can pull images, read `/parley/prod/*` and write its logs.
+
+**Change a secret.** In the AWS console: Systems Manager > Parameter Store,
+edit the value, then run the Deploy workflow again (the server rewrites `.env`
+from it on every deploy).
+
+**Logs and alarms.** Parley's containers log to CloudWatch
+(`/parley/containers`, kept 7 days); `docker compose logs` on the server still
+works. An email goes out when the server fails its status checks or stops
+reporting, or its CPU stays above 80% for 15 minutes.
+
+The server now sits on an exact commit, not a branch, so
+`deploy/server/deploy.sh` stops there with "This server is deployed by
+GitHub Actions".
+
+## 4. Turning it all off
 
 ```bash
 cd deploy/aws/terraform
@@ -123,7 +185,14 @@ terraform destroy          # asks "yes", then removes the server, disk, IP and n
 ```
 
 This deletes the server's disk, so the live database and chats are gone for
-good. The billing stops when it finishes. Only stopping the server isn't
+good, and also the image stores, the deploy role and the alarms. The billing
+stops when it finishes. The secrets in Parameter Store aren't Terraform's
+(store-secrets.sh made them) and cost nothing, but delete them too:
+
+```bash
+aws ssm get-parameters-by-path --path /parley/prod --query 'Parameters[].Name' --output text \
+  | xargs aws ssm delete-parameters --names
+``` Only stopping the server isn't
 enough: the disk and the Elastic IP still cost about $5.50 a month.
 
 Nothing else depends on AWS: deleting `deploy/aws/` or running `terraform
