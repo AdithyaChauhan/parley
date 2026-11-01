@@ -1365,6 +1365,6 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 
 - Why the copies restart one at a time: If we restarted both backend servers at the exact same time, the live chat would go down while they rebooted. By doing a rolling restart, Copy A restarts while Copy B handles all the traffic. Once A is healthy again, B restarts. The user never notices a drop in service.
 
-- Where the secrets live now and who can read them: Secrets (like database passwords and JWT keys) no longer live in a plain text file on the server. They live in the AWS Parameter Store as encrypted SecureStrings. Only the server's specific AWS IAM role is allowed to read them. If a hacker breaks in, they need the server's temporary AWS credentials to decrypt the values.
+- Where the secrets live now and who can read them: In AWS Parameter Store, encrypted. On every deploy the server reads them with its own role and writes a locked .env file (only its owner can read it). GitHub can't read them. Only the server and my admin login can.
 
 - What happens when the alarm fires: AWS CloudWatch watches the server. If the CPU stays above 80% for 15 minutes, or if the server stops reporting its status, the alarm triggers an SNS topic. That topic immediately sends an email to my inbox telling me the server is struggling. When the server recovers, it sends a second email saying the state is OK again.
