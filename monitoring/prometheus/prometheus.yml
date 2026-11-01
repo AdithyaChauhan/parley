@@ -1,0 +1,52 @@
+# Who Prometheus asks for numbers, and how often (D32). Inside Parley's
+# network, every part is reached by its Compose name (D27).
+global:
+  # Every 15 s, ask each part "what are your numbers?" (a scrape).
+  scrape_interval: 15s
+
+scrape_configs:
+  # The two backend copies give the same numbers, so a "copy" label tells
+  # them apart on the dashboard.
+  - job_name: backend
+    static_configs:
+      - targets: ["backend_a:8000"]
+        labels:
+          copy: A
+      - targets: ["backend_b:8000"]
+        labels:
+          copy: B
+
+  # The notification worker's own page (app/notify/worker.py).
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9100"]
+
+  # The helpers, through their exporters: small programs that read a tool's
+  # numbers and show them as a /metrics page.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis_exporter:9121"]
+
+  # RabbitMQ needs no exporter: its Prometheus plugin is already on in our
+  # image. This page adds all queues together...
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  # ...and this one has each queue on its own: notify, notify.failed and the
+  # timer queues.
+  - job_name: rabbitmq_queues
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  # CPU and memory per container.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]

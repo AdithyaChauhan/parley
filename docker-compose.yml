@@ -1,6 +1,7 @@
 # `docker compose up` starts only the helpers (db, redis, rabbitmq), for dev
 # with uvicorn and Vite on the laptop. `docker compose --profile app up --build`
-# also starts Parley itself, at http://localhost:8080 (D27).
+# also starts Parley itself, at http://localhost:8080 (D27). Add
+# `--profile monitoring` for Prometheus and Grafana, at http://localhost:3000 (D32).
 
 # Shared by the backend copies, worker and migrate: one image, three commands (D27).
 # `<<: *parley-backend` below pastes this block into each of them.
@@ -164,6 +165,90 @@ services:
       backend_b:
         condition: service_healthy
 
+  # ---- Monitoring (D32): only with --profile monitoring. ----
+  # No health checks: nothing waits on these (like worker and web, D27).
+  # No ports except Grafana's, and that one only on this machine.
+
+  # Asks every part for its numbers every 15 s, and keeps them for 7 days.
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    profiles: [monitoring]
+    command:
+      # The image's own two settings, plus the 7 days.
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # A volume, so the 7 days survive a restart.
+      - prometheus_data:/prometheus
+
+  # Draws the dashboard. Its data source and the dashboard are files in the
+  # repo, so it sets itself up on any machine.
+  grafana:
+    image: grafana/grafana:13.2.5
+    profiles: [monitoring]
+    ports:
+      # 127.0.0.1: only this machine can open it, never the network (D32).
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Log in as admin with GRAFANA_ADMIN_PASSWORD from .env. Blank is allowed
+      # here, so the server's deploys (whose .env has none) keep working...
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      # The Parley dashboard is the first thing you see after logging in.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/parley.json
+      # Otherwise Grafana downloads and updates ~18 plugins we don't use (Loki,
+      # Tempo, MySQL ...) from the internet on every start: unpinned (D27) and
+      # slow. The Prometheus data source is built in.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    # ...but Grafana itself refuses to start without one, so it's never admin/admin.
+    # $$ is a plain $ (Compose would read it as one of its own variables).
+    entrypoint: ["/bin/sh", "-c", "[ -n \"$$GF_SECURITY_ADMIN_PASSWORD\" ] || { echo 'Set GRAFANA_ADMIN_PASSWORD in .env' >&2; exit 1; }; exec /run.sh"]
+    # No volume: Grafana starts fresh each time, from the files. So the
+    # password in .env always applies, and nothing clicked can drift.
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+
+  # The exporters: small programs that read a helper's numbers and show them
+  # as a /metrics page. The app's own Postgres user (4A at the T30 pre-check):
+  # the exporter only reads stats.
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    profiles: [monitoring]
+    environment:
+      DATA_SOURCE_URI: db:5432/${POSTGRES_DB}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.93.0
+    profiles: [monitoring]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+
+  # CPU and memory per container. It reads them from the machine itself, so it
+  # gets read-only views of the machine's folders.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    profiles: [monitoring]
+    command:
+      # Only containers, every 15 s (like Prometheus), and only CPU and memory:
+      # the rest costs CPU and memory of its own.
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --enable_metrics=cpu,memory
+      # Just the Compose project and service as labels (parley, backend_a ...),
+      # not every label Docker has on a container.
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
 volumes:
   db_data:
   rabbitmq_data:
+  prometheus_data:

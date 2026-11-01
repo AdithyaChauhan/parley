@@ -147,6 +147,27 @@ jobs:
           grep -q '"copy":"A"' answers.txt
           grep -q '"copy":"B"' answers.txt
 
+      # The way Prometheus reaches them: by name, inside Parley's network (D32).
+      # Asked from the web container, which has wget.
+      - name: Both copies and the worker answer /metrics inside the network
+        run: |
+          for target in backend_a:8000 backend_b:8000 worker:9100; do
+            docker compose --profile app exec -T web wget -qO- "http://$target/metrics" > metrics.txt
+            grep -q -E '^(http_requests_total|notify_jobs_total)' metrics.txt
+            echo "$target: ok"
+          done
+
+      # Nginx passes on only /api/ (D32): /metrics gets the app's page, and
+      # /api/metrics is a route that doesn't exist.
+      - name: /metrics isn't reachable through Nginx
+        run: |
+          curl --silent --show-error http://localhost:8080/metrics > page.txt
+          if grep -q -E 'http_requests_total|# HELP' page.txt; then
+            echo "Nginx passed /metrics on to a backend copy"
+            exit 1
+          fi
+          [ "$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8080/api/metrics)" = 404 ]
+
       - name: Show the logs if something failed
         if: failure()
         run: docker compose --profile app logs

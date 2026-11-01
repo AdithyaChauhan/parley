@@ -6,6 +6,7 @@ import uuid
 import redis
 import redis.asyncio
 
+from app import metrics
 from app.live import manager
 
 # The Redis clients made in T20 (D22). Used as presence.client and
@@ -63,6 +64,7 @@ def publish(user_ids: list[uuid.UUID], event: dict) -> None:
             for user_id in user_ids:
                 pipe.publish(_channel(user_id), text)
             pipe.execute()
+        metrics.PUSHES_PUBLISHED.inc(len(user_ids))
     except redis.RedisError:
         log.exception("Live push failed")
 
@@ -75,6 +77,7 @@ async def publish_async(user_ids: list[uuid.UUID], event: dict) -> None:
             for user_id in user_ids:
                 pipe.publish(_channel(user_id), text)
             await pipe.execute()
+        metrics.PUSHES_PUBLISHED.inc(len(user_ids))
     except redis.RedisError:
         log.exception("Live push failed")
 
@@ -115,6 +118,7 @@ async def _deliver(message: dict) -> None:
     if message["type"] != "message":
         return  # unsubscribe confirmations and the like
 
+    metrics.PUSHES_RECEIVED.inc()
     user_id = uuid.UUID(message["channel"].removeprefix("user:"))
     text = message["data"]
     # Only real events {"type": ..., "data": ...} reach the apps.

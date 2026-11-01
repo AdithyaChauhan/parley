@@ -2,12 +2,19 @@ import uuid
 
 from fastapi import WebSocket
 
+from app import metrics
+
 # The switchboard: user id -> that user's open lines on THIS copy, one per tab.
 # Each backend copy keeps its own; pushes reach it through the radio (bus.py, D23).
 #
 # No lock here: only the async side touches this list, and it runs one piece
 # of code at a time, switching only at an "await".
 lines: dict[uuid.UUID, set[WebSocket]] = {}
+
+# live_lines_open counts the switchboard each time Prometheus asks, instead of
+# +1/-1 on every change: disconnect() can run twice for one line (a failed
+# send, then the line's own goodbye), and a +1/-1 count would drift.
+metrics.LIVE_LINES.set_function(lambda: sum(len(user_lines) for user_lines in lines.values()))
 
 
 def connect(user_id: uuid.UUID, websocket: WebSocket) -> None:

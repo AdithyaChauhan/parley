@@ -1,0 +1,13 @@
+# Load every dashboard file in /etc/grafana/dashboards (mounted from
+# monitoring/grafana/dashboards in the repo, D32).
+apiVersion: 1
+
+providers:
+  - name: parley
+    type: file
+    # The repo's file is the truth: a change clicked in Grafana can't be saved
+    # over it. Change the file instead.
+    allowUiUpdates: false
+    disableDeletion: true
+    options:
+      path: /etc/grafana/dashboards

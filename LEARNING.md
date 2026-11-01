@@ -1368,3 +1368,84 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Where the secrets live now and who can read them: In AWS Parameter Store, encrypted. On every deploy the server reads them with its own role and writes a locked .env file (only its owner can read it). GitHub can't read them. Only the server and my admin login can.
 
 - What happens when the alarm fires: AWS CloudWatch watches the server. If the CPU stays above 80% for 15 minutes, or if the server stops reporting its status, the alarm triggers an SNS topic. That topic immediately sends an email to my inbox telling me the server is struggling. When the server recovers, it sends a second email saying the state is OK again.
+
+---
+
+### Task 30: Metrics with Prometheus and a Grafana dashboard
+**What was built**
+- `backend/requirements.txt`: `prometheus-client==0.26.0`, the official library that keeps the numbers in memory and writes them out as the `/metrics` text.
+- `backend/app/metrics.py` (new): every backend number in one list, plus the middleware.
+  - `http_requests_total` and `http_request_duration_seconds` (a histogram), by method, route template and status.
+  - `live_lines_open`, `messages_sent_total`, `live_pushes_published_total`, `live_pushes_received_total` and `rate_limited_total{rule}`.
+  - `_route()`: the route's full template, like `/api/chats/{chat_id}/messages`, never the real id. FastAPI 0.143 keeps only the inner part on the route itself (`/chats/{chat_id}/messages`), so the full one comes from FastAPI's own route list (`iter_route_contexts()`), read once on the first request. An address with no route gets one shared label, `unmatched`.
+  - `measure()`: times every HTTP request and counts it, also when the route crashes (counted as 500). `/metrics` itself isn't counted, so an idle Parley shows 0 requests/s.
+- `backend/app/main.py`: plugs in the middleware, and serves `/metrics` outside `/api`, so Nginx never passes it on. It's `async`, so it reads the switchboard on the event loop, never halfway through a change.
+- `backend/app/live/manager.py`: `live_lines_open` counts the switchboard each time Prometheus asks (`set_function`) instead of +1/-1, because `disconnect()` can run twice for one line.
+- `backend/app/live/bus.py`: published = one per person, counted once Redis took them. Received = one per event this copy heard.
+- `backend/app/messages/routes.py`: `messages_sent_total` counts new messages only, not resends.
+- `backend/app/limits/service.py`: each 429 counts under its rule, and every rule starts at 0.
+- `backend/app/notify/worker.py`: `notify_jobs_total{outcome}`, one per try: `sent`, the 4 skips, `failed` (a retry was booked) and `parked`. All 7 start at 0. The worker's own `/metrics` page is on port 9100, in a background thread (`start_http_server`). It starts in `main()` only, so the tests never open the port.
+- `monitoring/prometheus/prometheus.yml` (new): 8 targets, asked every 15 s. Both backend copies (with a `copy` label, A or B), the worker, the Postgres and Redis exporters, RabbitMQ's two pages (totals, and `/metrics/detailed?family=queue_coarse_metrics` for each queue) and cAdvisor.
+- `monitoring/grafana/provisioning/` (new): the data source (Prometheus, with a fixed id) and where to find the dashboard file, so Grafana sets itself up with nothing to click.
+- `monitoring/grafana/dashboards/parley.json` (new): one page, 12 panels.
+  - Requests/s by copy, latency p50/p95/p99, 5xx and 429s.
+  - Open live lines per copy, messages per minute, notification outcomes (fixed colours: sent green, skips blue or purple, failed orange, parked red).
+  - Queue depth (`notify`, `notify.failed`), Postgres connections, Redis memory, Redis commands/s.
+  - CPU and memory per container.
+  - A stopped copy shows as a line falling to 0, through Prometheus's own `up` number.
+- `docker-compose.yml`: 5 services under `--profile monitoring`, with pinned images (D27):
+  - `prom/prometheus:v3.15.1`: 7 days, kept in a volume.
+  - `grafana/grafana:13.2.5`: only on `127.0.0.1:3000`. The password comes from `GRAFANA_ADMIN_PASSWORD`: Compose allows it blank (the server's `.env` has none), but the start command refuses to start without one. The home page is the Parley dashboard. It has no volume, so it starts fresh from the files each time. Plugin downloads at start are turned off.
+  - `quay.io/prometheuscommunity/postgres-exporter:v0.20.1`, with the app's own Postgres user (4A).
+  - `oliver006/redis_exporter:v1.93.0`.
+  - `ghcr.io/google/cadvisor:v0.60.6`: not privileged, CPU and memory only, and only the Compose project and service as labels.
+- `.env.example`: `GRAFANA_ADMIN_PASSWORD`.
+- `.github/workflows/ci.yml` (containers job): both copies and the worker answer `/metrics` inside the network (asked from `web`, by name, the way Prometheus does). Through Nginx, `/metrics` has no numbers in it and `/api/metrics` is a 404.
+- Tests:
+  - `test_metrics.py`, 7 new: a request moves the counter and the timing; `/metrics` doesn't count itself; routes are labelled by template, never the real id; `unmatched`; live lines follow the switchboard; pushes counted when published and when heard; a 429 counted by its rule.
+  - `test_notify_worker.py`: a skip moves only its own counter, and 10 fake fails give 3 `failed` + 1 `parked`.
+  - 134 pass.
+- Step 6, the server (decided: 6A): the server runs only the `/metrics` pages (inside its network, never published), and the dashboard stays on the laptop.
+  - Measured on the server (read-only, through Session Manager): 1,905 MB, 1,012 MB available, swap quiet (1 page read back in 60 s). Parley's 8 containers use ~370 MB.
+  - Measured on the laptop: the monitoring stack needs ~550-830 MB (Grafana alone 370-650 MB, Prometheus ~110 MB, cAdvisor ~40 MB, the exporters ~28 MB).
+  - That would leave 180-460 MB for Parley and Postgres's disk cache. Grafana's swings alone are bigger than the lower end, so swap would get used. A bigger server (t3.medium) would cost ~$16/month more in credits.
+- Checked:
+  - `docker compose --profile app --profile monitoring up`: all 8 targets up, and Grafana opens straight onto the dashboard.
+  - Two windows chatting: messages ~6/min, live lines B=2 and A=0, requests moved, 5xx and 429 flat. Notification outcomes: 5 × `skip: no devices` (the worker log and the counter agree, 0 failed).
+  - Stopping `backend_b` at 21:30 moved both lines to A. Stopping `backend_a` at 21:34 moved them back to B. The total stayed 2 and messages kept arriving.
+  - A blank Grafana password stops it with "Set GRAFANA_ADMIN_PASSWORD in .env". A server-style `.env` with no Grafana line gives a clean production config, with no warnings.
+  - Through Nginx on the laptop: `/metrics` gives the app's page, and `/api/metrics` a 404.
+  - The live site after the merge: added with "In my words".
+- Found along the way:
+  - FastAPI 0.143 no longer copies a route with its full address when a router is included: `route.path` was missing `/api`. The template test caught it.
+  - A label's first appearance hides its first event, because Prometheus works from the change between two scrapes. So the rules and outcomes start at 0. A route's first burst inside one 15 s gap also vanishes from `increase()`: the login didn't show in a 25-minute view, but the raw totals had it.
+  - Compose reads every service, even ones whose profile is off. A required `${VAR:?}` would have broken `--profile app`, and with it the server's deploys.
+  - Grafana downloaded or updated ~18 plugins from the internet on every start (Loki, Tempo, MySQL ...). Turned off with `GF_PLUGINS_PREINSTALL_DISABLED`. It still starts a ~25-40 MB helper for each built-in data source.
+  - On Docker Desktop, Grafana doesn't notice an edited dashboard file. Restart it: `docker compose --profile monitoring restart grafana`.
+  - cAdvisor moved to `ghcr.io/google/cadvisor` (the old `gcr.io` address has no new versions), and it works here without `privileged`.
+  - In a GitHub step, `! grep ...` never fails the step (bash's `-e` skips it). `if grep ...; then exit 1; fi` does.
+  - Latency: p95/p99 spiked to ~900 ms from one login. With a few requests a minute, p95 is just the slowest one.
+    - argon2 alone: ~150 ms warm, and 240-340 ms after a quiet minute. A warm login is ~200 ms; the first one after a pause is ~0.9 s.
+    - The monitoring stack used ~3% CPU and swap was quiet, so it's most likely the laptop waking up from idle. Not proven.
+
+**New ideas**
+- Prometheus pulls: every 15 s it asks each part for its numbers (a "scrape") and keeps them with the time. The parts never send anything themselves.
+- Counter: only goes up (requests, messages). Gauge: goes up and down (open live lines). Histogram: drops each timing into buckets (≤ 0.05 s, ≤ 0.1 s ...).
+- p95: line up the requests from fastest to slowest, and p95 is the time of the one 95% of the way along. The average hides the slow few; p95 shows what 1 person in 20 waits.
+- `rate()` and `increase()`: work out "per second" and "how many lately" from how fast a counter grows. A restart that sets it back to 0 is handled by Prometheus.
+- `histogram_quantile()`: reads p95 from the buckets, guessing where inside the bucket it falls.
+- Labels split one number into groups. Each combination is its own line, kept for 7 days. Real ids would make one line per chat (too many groups), so routes use the template, plus `unmatched`.
+- Middleware: a step every request passes through on its way in and out, so no route can forget to be counted.
+- Exporter: a small program that reads a tool's numbers (Postgres, Redis) and shows them as a `/metrics` page.
+- `up`: Prometheus's own number for each target: 1 if the scrape worked, 0 if not.
+- Provisioning: Grafana sets up its data source and dashboards from files, so the dashboard lives in the repo and rebuilds itself on any machine.
+- cAdvisor: reads each container's CPU and memory from the kernel's own per-container accounting.
+
+**In my words** (Adithya writes this)
+- What Prometheus does every 15 seconds: It acts like a security guard doing rounds. Every 15 seconds, it knocks on the door of every part of the app (the backend, database, queues) and asks, "Give me your numbers." It records those numbers with a timestamp. The app never pushes data to Prometheus; Prometheus pulls the data from the app.
+
+- Counter vs gauge vs histogram: A counter is like a stadium turnstile; it only goes up (like total messages sent). A gauge is like a thermometer; it goes up and down (like how many people are online right now). A histogram is a sorting machine; it groups timings into buckets (like how many requests took less than 0.1 seconds vs 0.5 seconds).
+
+- What p95 means and why it matters more than the average: Imagine 100 people wait in line. 90 wait 1 minute, but 10 wait 10 minutes. The average is 1.9 minutes, which sounds fine. But p95 is 10 minutes: the slowest 1 in 20 waited ten times longer. p95 means "95% of people waited less than this number." It exposes the slow outliers that the average washes away. A single slow person out of 100 needs p99 or the max to show up.
+
+- Why route labels use the template and not the real id: If we used the real chat ID (like /api/chats/123), we would create a brand new line on the graph for every single chat. With a million chats, Prometheus would run out of memory and crash. By using the template (/api/chats/{chat_id}), all million chats are grouped into one single line, keeping the dashboard fast and readable.
