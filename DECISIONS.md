@@ -219,6 +219,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Real IP: Nginx overwrites `X-Forwarded-For` with `$remote_addr`, and uvicorn trusts forwarded headers because the backend port is only reachable inside Parley's network.
 - Nginx looks up container names again every 10 s (`resolver 127.0.0.11 valid=10s`), so a new backend container with a new address is found without restarting Nginx.
 - Worker and web have no health check, since nothing waits on them. The CI containers job builds, starts and checks the whole stack.
+- Health checks that start a heavy program (an Erlang VM for RabbitMQ, Python for the backends) run every 30 s once a container is up, and faster (`start_interval`) while it's starting. At 5 s they took ~19% of the server's CPU (T29 follow-up). Light checks (`pg_isready`, `redis-cli ping`) may stay at 5 s.
 
 **D28. Several copies behind Nginx**
 - Two backend copies (`backend_a`, `backend_b`) run the same image, and differ only in `COPY_NAME`. `migrate` still runs once, first.
@@ -294,3 +295,18 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - The rollback input ignores spaces. The AWS server sits on a detached commit, where `deploy.sh` refuses to run.
   - The ECR login token (12 h) sits in ssm-user's Docker config on the server. That's accepted (host-only, short-lived).
   - Runners are pinned to `ubuntu-24.04`, the same as the server.
+  - The old delivery-delay roles stay on purpose (that project continues). They're narrow, limited to that repo's main.
+  - T29 finished Nov 1, 2026 (PRs #30 to #33). Every merge to `main` deploys, rolling, with a green live check. The web stop is ~0.2 s with SIGTERM (it was 10.3 s).
+
+**D32. Metrics (T30)**
+- Prometheus scrapes every part every 15 s and keeps 7 days. Grafana draws one dashboard. Both live in Compose under the `monitoring` profile, with pinned images, and the data source and dashboard are files in the repo.
+- The backend uses the official `prometheus-client` with our own small middleware. Routes are labelled by template, never by real ids. `/metrics` is on the app port, and Nginx never passes it on (only `/api/`).
+- The worker serves its own metrics on port 9100. The helpers use exporters (Postgres, Redis), RabbitMQ's built-in metrics, and cAdvisor for CPU and memory per container.
+- Nothing is opened to the internet. On the laptop, Grafana is on `127.0.0.1:3000`. On the server, only through Session Manager port forwarding, if memory allows (decided in T30).
+- Agreed at the T30 pre-check:
+  - `GRAFANA_ADMIN_PASSWORD` may be blank in Compose (so the server's deploys, which don't have it, keep working), but Grafana's start command refuses to start without one and says why. That means never admin/admin.
+  - One worker counter, `notify_jobs_total{outcome}`: `sent`, the 4 skips, `failed` (a retry was booked) and `parked`. The panel adds up, with no separate retries counter.
+  - The Postgres exporter uses the app's user on the laptop. If the dashboard goes on the server (step 6), it first gets its own read-only user (`pg_monitor`).
+  - Route labels use FastAPI's real templates (like `/api/chats/{chat_id}/messages`), unknown addresses share one `unmatched` label, `/metrics` doesn't count itself, and Prometheus adds the `copy` label.
+  - Queue depth per queue comes from RabbitMQ's detailed metrics page (`queue_coarse_metrics`), with no RabbitMQ changes.
+  - cAdvisor comes from `ghcr.io/google/cadvisor` and needs read-only access to the whole machine. That's fine on the laptop, and gets weighed in step 6.

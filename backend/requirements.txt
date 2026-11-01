@@ -13,3 +13,4 @@ websockets==17.3
 redis==8.1.0
 pika==1.4.4
 pywebpush==2.5.0
+prometheus-client==0.26.0

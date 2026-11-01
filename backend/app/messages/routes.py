@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import metrics
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.models import ChatMember
@@ -40,6 +41,7 @@ def send_message(
 
     message, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
     if created:
+        metrics.MESSAGES_SENT.inc()
         members = member_ids(db, chat_id)
         # Saved first (D9), then shouted to everyone in the chat, my other tabs
         # too (D20), on whichever copy their lines are (D23).

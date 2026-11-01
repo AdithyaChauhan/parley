@@ -14,6 +14,7 @@ import pika
 import pika.exceptions
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.spec import Basic, BasicProperties
+from prometheus_client import Counter, disable_created_metrics, start_http_server
 from sqlalchemy import select
 
 from app.auth.models import User
@@ -36,6 +37,28 @@ MAX_TRIES = 1 + len(queues.RETRIES)
 BACKOFF_MAX_SECONDS = 30
 # How often the loop wakes up with no jobs, to check whether to stop.
 IDLE_SECONDS = 1
+# The worker's own /metrics page, for Prometheus (D32). Only reachable inside
+# Parley's network, like the backend's port 8000.
+METRICS_PORT = 9100
+
+# Without this, every counter also shows a second "_created" line (as in app/metrics.py).
+disable_created_metrics()
+# One count per try, by how it ended (D32). Every try ends exactly one way, so
+# the panel adds up to "tries handled". "failed" is also the retry count.
+JOBS = Counter("notify_jobs_total", "Notification job tries, by outcome", ["outcome"])
+OUTCOMES = [
+    "sent",
+    "skip: already read",
+    "skip: message or member gone",
+    "skip: no devices",
+    "skip: already notified",
+    "failed",  # this try failed, and a retry was booked
+    "parked",  # gave up after try 4, or a broken job: it's in notify.failed
+]
+# Each outcome shows 0 from the start, so the first one of each isn't hidden
+# (Prometheus counts "how many lately" from the change between two visits).
+for _outcome in OUTCOMES:
+    JOBS.labels(_outcome)
 
 redis_client = presence.new_client(settings.redis_url)
 # Log line or real browser push, picked by the setting NOTIFIER (D26).
@@ -98,10 +121,12 @@ def _retry_or_park(channel: BlockingChannel, body: bytes, label: str, attempt: i
         # Try 1 failed → retry box 1 (10 s), try 2 → box 2 (1 min), try 3 → box 3 (5 min).
         box = queues.RETRIES[attempt - 1]
         queues.send_job(channel, box, body, {"attempt": attempt + 1})
+        JOBS.labels("failed").inc()
         seconds = settings.notify_retry_ms[attempt - 1] / 1000
         log.warning("%s, try %s: failed (%s), next try in %g s", label, attempt, error, seconds)
     else:
         queues.send_job(channel, queues.FAILED, body, {"attempt": attempt, "last_error": error})
+        JOBS.labels("parked").inc()
         log.error("%s, try %s: failed (%s), parked in %s", label, attempt, error, queues.FAILED)
 
 
@@ -113,6 +138,7 @@ def on_job(channel: BlockingChannel, method: Basic.Deliver, properties: BasicPro
     except BrokenJob as error:
         # Straight to the parked jobs: retrying can't fix bad JSON (D25).
         queues.send_job(channel, queues.FAILED, body, {"attempt": attempt, "last_error": f"broken job: {error}"})
+        JOBS.labels("parked").inc()
         log.error("Broken job parked in %s: %s", queues.FAILED, error)
         channel.basic_ack(method.delivery_tag)
         return
@@ -124,6 +150,7 @@ def on_job(channel: BlockingChannel, method: Basic.Deliver, properties: BasicPro
         # The notifier, PostgreSQL or Redis failed: maybe fine later (D25).
         _retry_or_park(channel, body, label, attempt, f"{type(error).__name__}: {error}")
     else:
+        JOBS.labels(outcome).inc()
         log.info("%s, try %s: %s", label, attempt, outcome)
     channel.basic_ack(method.delivery_tag)
 
@@ -183,6 +210,8 @@ def main() -> None:
     # PID 1, which ignores SIGTERM unless it asks for it. Turn it into Ctrl+C,
     # so it takes the same clean path below (D27).
     signal.signal(signal.SIGTERM, signal.default_int_handler)
+    # The /metrics page runs in a small background thread, beside the job loop.
+    start_http_server(METRICS_PORT)
     try:
         serve()
     except KeyboardInterrupt:

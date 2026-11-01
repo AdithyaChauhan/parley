@@ -3,6 +3,7 @@ import time
 import uuid
 
 import pytest
+from prometheus_client import REGISTRY
 
 from app.config import settings
 from app.notify import notifier, queues, replay, worker
@@ -56,6 +57,11 @@ def _logged(caplog, text):
     return lambda: text in caplog.text
 
 
+def _tries(outcome) -> float:
+    """The worker's notify_jobs_total for one outcome, as /metrics shows it (D32)."""
+    return REGISTRY.get_sample_value("notify_jobs_total", {"outcome": outcome})
+
+
 def test_sends_when_unread_and_notes_it_in_redis(client, sign_up, rabbit, caplog):
     _ana_sends_ben(client, sign_up)
 
@@ -72,10 +78,14 @@ def test_skips_when_already_read(client, sign_up, rabbit, caplog):
     ben, chat_id = _ana_sends_ben(client, sign_up)
     # Ben reads it within the wait (through the HTTP door, D20).
     client.post(f"/api/chats/{chat_id}/read", json={"seq": 1}, headers=ben)
+    skipped, sent = _tries("skip: already read"), _tries("sent")
 
     _run_worker(rabbit, _logged(caplog, "try 1: skip: already read"))
 
     assert "notify Ben" not in caplog.text
+    # The skip moves its own counter, and only that one.
+    assert _tries("skip: already read") == skipped + 1
+    assert _tries("sent") == sent
 
 
 def test_a_job_that_runs_twice_notifies_once(client, sign_up, rabbit, caplog):
@@ -106,9 +116,13 @@ def test_with_two_fake_fails_it_is_sent_on_try_3(client, sign_up, rabbit, caplog
 def test_with_ten_fake_fails_it_is_parked_after_try_4(client, sign_up, rabbit, caplog, monkeypatch):
     monkeypatch.setattr(settings, "notify_fake_fail_times", 10)
     _ana_sends_ben(client, sign_up)
+    failed, parked = _tries("failed"), _tries("parked")
 
     _run_worker(rabbit, lambda: _count(rabbit, queues.FAILED) == 1)
 
+    # Every try ends one way: 3 retries booked, then parked (D32).
+    assert _tries("failed") == failed + 3
+    assert _tries("parked") == parked + 1
     assert "try 4: failed (NotifyFailed: fake fail (4 of 10)), parked in notify.failed" in caplog.text
     _method, properties, _body = rabbit.basic_get(queues.FAILED, auto_ack=True)
     assert properties.headers == {"attempt": 4, "last_error": "NotifyFailed: fake fail (4 of 10)"}

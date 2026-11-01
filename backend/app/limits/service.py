@@ -7,6 +7,8 @@ from typing import NamedTuple
 import redis
 from fastapi import HTTPException, status
 
+from app import metrics
+
 # The Redis clients made in T20 (D22). Used as presence.client, like tickets.py.
 from app.presence import service as presence
 
@@ -29,6 +31,12 @@ SIGNUP_IP = Rule("signup_ip", 5, 60 * 60)  # per IP
 START_CHAT = Rule("start_chat", 20, 60)  # per user
 TICKET = Rule("ticket", 10, 60)  # per user
 PUSH_SUBSCRIBE = Rule("push_subscribe", 10, 60)  # per user (D26)
+
+# Each rule's 429 count shows 0 on /metrics from the start. Prometheus counts
+# "how many lately" from the change between two visits, so a rule that first
+# shows up at 1 would hide its first 429.
+for _rule in (SEND, LOGIN_EMAIL, LOGIN_IP, SIGNUP_IP, START_CHAT, TICKET, PUSH_SUBSCRIBE):
+    metrics.RATE_LIMITED.labels(_rule.name)
 
 
 def key(rule: Rule, who: object) -> str:
@@ -88,6 +96,7 @@ def enforce(rule: Rule, who: object) -> None:
     429 "Too many requests" with Retry-After, the seconds to wait."""
     wait = hit(key(rule, who), rule.limit, rule.window_seconds)
     if wait:
+        metrics.RATE_LIMITED.labels(rule.name).inc()
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "Too many requests, slow down",

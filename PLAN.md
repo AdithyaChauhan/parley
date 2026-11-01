@@ -21,79 +21,66 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Task 29: Auto-deploy from GitHub, secrets in AWS, and an alarm (teaching mode for the infra, friend style)
-- **Branch:** `feature/auto-deploy`
-- **Goal:** after a merge to `main`, GitHub builds the images, stores them in AWS (ECR), and updates the server by itself, one backend copy at a time, so chats keep working during a deploy. The server's secrets live in AWS Systems Manager Parameter Store instead of only in a file. If the server breaks, you get an email.
-- **Mode:** teaching mode for the infra (example first, short, "In my words" at the end), with recaps. **Anything that creates or changes AWS resources waits for Adithya's OK on the plan, including the cost** (CLAUDE.md). Secrets never pass through a chat.
-
-**Step 0, before the task (Claude Code gives the exact commands, and Adithya confirms before anything is deleted): a fresh database on the server.**
-- Wipe the test accounts and chats (an empty database volume, then `migrate` builds the tables again), and clear Redis.
-- Then sign up clean demo accounts (for example "Ana" and "Ben") with new passwords.
-- After this, the link can go on the resume.
+### Task 30: Metrics with Prometheus and a Grafana dashboard (teaching mode, friend style)
+- **Branch:** `feature/metrics`
+- **Goal:** one dashboard that shows what Parley is doing right now: requests per second, how fast they are, errors, open live lines per copy, messages sent, notification outcomes, queue depth, and how hard each container is working. T31's load test reads its numbers from here.
+- **Mode:** teaching mode (example first, short, "In my words" at the end), with recaps. Claude Code runs the long checks. It works on the laptop first (D29). Nothing new is opened to the internet.
 
 **Example first (Claude Code shows this before any code):**
 ```
- you merge a PR into main
-   → GitHub Actions: tests pass (CI) → build parley-backend + parley-web, tagged with the commit (e.g. a410b04)
-   → log in to AWS with OIDC (a short-lived pass, no AWS keys stored in GitHub)
-   → push both images to ECR (AWS's private image store)
-   → SSM "send command" to the server (no SSH): run deploy/aws/deploy-from-ecr.sh a410b04
- on the server:
-   fetch secrets from Parameter Store → write .env (chmod 600)
-   pull the two images from ECR → migrate → restart backend_a → wait healthy → restart backend_b → wait healthy → worker → web
-   /api/health now says "version": "a410b04"
- if the server's health checks fail → CloudWatch alarm → email to you
+ every 15 s, Prometheus asks each part "what are your numbers?" (a "scrape")
+   backend_a:8000/metrics  → http_requests_total{route="/api/chats/{id}/messages",status="201"} 1532
+   backend_b:8000/metrics  → live_lines_open 7
+   worker:9100/metrics     → notify_jobs_total{outcome="sent"} 41, {outcome="skip: already read"} 230
+   postgres / redis exporters, RabbitMQ's built-in metrics, cAdvisor (CPU and memory per container)
+ Prometheus keeps the numbers over time → Grafana draws them:
+   ┌ requests/s by copy ┐ ┌ p95 latency ┐ ┌ open live lines A|B ┐ ┌ queue: notify / failed ┐
 ```
-- **OIDC** means GitHub proves "I am the parley repo, on main" to AWS, and AWS hands it a pass that lasts minutes. There are no long-lived keys that could leak.
-- **ECR** is a private Docker Hub inside your AWS account.
-- **Parameter Store** is a locked box for secrets in AWS. The server reads it with its own role.
+- A **counter** only goes up (requests, messages). A **gauge** goes up and down (open live lines). A **histogram** puts timings into buckets, so you can read p50, p95 and p99. p95 = 95% of requests were faster than this.
+- **Labels** split one number into groups (by route, status, copy). Routes use their template (`/api/chats/{id}`), never the real id, or the number of groups explodes.
 
 **Steps:**
-1. **Terraform** (`deploy/aws/terraform/`, plan → your OK → apply):
-   - Two ECR repositories (`parley-backend`, `parley-web`), with a rule that keeps only the last 10 images.
-   - The GitHub OIDC provider, plus a role GitHub can use **only from `AdithyaChauhan/parley` on `main`**. It may only push to those two repositories and send commands to this one server.
-   - Add to the server's role: pull from those two repositories, read `/parley/prod/*` from Parameter Store, and write container logs to CloudWatch.
-   - CloudWatch: a log group with 7-day retention, an alarm on the server's status checks (and high CPU for 15 minutes), and an SNS email to you. You click "Confirm subscription" in the email once.
-2. **Secrets into Parameter Store:** a one-time script you run **on the server** reads the current `.env` and stores each value as a SecureString under `/parley/prod/`. The values never show on screen and never leave AWS.
-3. **`deploy/aws/deploy-from-ecr.sh`** (AWS-only, D29):
-   - Fetch the parameters, write `.env` (600), and log in to ECR.
-   - Pull the given tag, run `migrate`, then restart **one copy at a time**, waiting for healthy each time (a rolling restart), then the worker, then web.
-   - It runs as the repo owner, not root, to avoid git's "dubious ownership" error from T28.
-   - A small Compose file in `deploy/aws/` swaps `build:` for the ECR `image:`.
-4. **`.github/workflows/deploy.yml`:** it runs on push to `main` only **after CI passes**, and can also be started by hand with a version tag (that's the rollback). It builds, pushes to ECR, sends the SSM command, waits, and fails the run if the server doesn't come back healthy.
-   - GitHub stores only **variables** (role ARN, region, instance id), no secrets.
-5. **Version in `/api/health`:** the image gets `APP_VERSION` (the commit) at build time, so you can see which version is live.
-6. **The generic path stays (D29):** `deploy/server/deploy.sh` with a plain `.env` still works on any server.
-   - `deploy.sh` now refuses to run anywhere except `/opt/parley`. It got run on the laptop by mistake after T28.
-7. **Small leftover from the phone keyboard fix:** add the desktop spot-check line to LEARNING.md's "Checked" list.
-
-- **Cost** (Claude Code checks the real prices and shows them with the plan): ECR storage and CloudWatch logs are cents a month, SNS email and Parameter Store standard are free. The server cost doesn't change.
-- **Not in this task:** a load balancer, several servers, blue/green deploys, and backups (still a known gap).
+1. **Backend metrics** with the official `prometheus-client` (pinned), plus a small middleware we write ourselves:
+   - `http_requests_total` and a request-duration histogram, by method, route template and status.
+   - `live_lines_open` (gauge).
+   - `messages_sent_total`.
+   - Pushes published and received through Redis pub/sub.
+   - 429s by limit rule.
+   - Served at `/metrics` on port 8000. Nginx passes only `/api/` on, so `/metrics` is never reachable from outside. Test that.
+2. **Worker metrics** on its own port (9100): jobs by outcome (`sent`, each skip reason, `failed`, `parked`) and retries.
+3. **Exporters:** `postgres_exporter`, `redis_exporter`, RabbitMQ's built-in Prometheus metrics (check whether the plugin is already on), and cAdvisor (CPU and memory per container, which T31 needs).
+4. **Prometheus + Grafana** in Compose, under their own `monitoring` profile (`docker compose --profile app --profile monitoring up`). Images are pinned to exact tags (D27).
+   - Grafana is reachable only on the laptop (`127.0.0.1:3000`), and its admin password comes from `.env`.
+   - The data source and the dashboard are **files in the repo** (provisioning), so the dashboard rebuilds itself on any machine.
+   - Prometheus keeps 7 days of data.
+5. **The dashboard (one page):**
+   - Requests/s by copy
+   - Latency p50 / p95 / p99
+   - 5xx error rate and 429s
+   - Open live lines per copy
+   - Messages per minute
+   - Notification outcomes
+   - Queue depth (`notify`, `notify.failed`)
+   - Postgres connections
+   - Redis memory and commands/s
+   - CPU and memory per container
+6. **The server (decide after measuring):** check memory on the server with the monitoring stack. If it fits next to Parley (with swap barely used), run it there too, reachable only through **Session Manager port forwarding** (no new public port). Otherwise, the server runs only the metrics endpoints, and the dashboard stays on the laptop. Claude Code measures, then proposes.
+7. **Tests:**
+   - `/metrics` shows the counters, and a request moves them.
+   - Routes are labelled by template.
+   - `/metrics` through Nginx doesn't return metrics.
+   - The worker's counter moves for a skipped job.
+   - CI's containers job checks that both copies answer `/metrics` inside the network.
+- **Not in this task:** alerts in Grafana (CloudWatch already emails, D31), tracing, log search.
 - **Done when:**
-  - The fresh database is done, and clean demo accounts work on the live site.
-  - Merging a small change to `main` deploys by itself: the Actions run is green, and `/api/health` shows the new version.
-  - **During a deploy, a chat between the laptop and the iPhone keeps working.** Lines reconnect to the other copy, and nothing is lost.
-  - GitHub has **no AWS keys** (only variables), and the role only works from this repo on `main`.
-  - `.env` on the server is rebuilt from Parameter Store, and the laptop's plain `.env` path still works (D29).
-  - Container logs show in CloudWatch, and a test alarm (`set-alarm-state`) sends you an email.
-  - Rollback: running the workflow by hand with the previous version puts it back, which `/api/health` confirms.
-  - All tests pass, CI is green (run links in the report), and "In my words" is filled in by Adithya.
+  - `docker compose --profile app --profile monitoring up` on the laptop, and Grafana at `localhost:3000` shows the dashboard by itself.
+  - Chatting between two windows moves the numbers: requests, messages, open live lines per copy, and notification outcomes.
+  - Stopping `backend_a` shows on the dashboard (its line drops and B takes the live lines).
+  - `/metrics` isn't reachable through Nginx (locally or on the live site).
+  - The server decision from step 6 is made and written down.
+  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
 
-"In my words" prompts: how GitHub gets into AWS without a stored key (OIDC); why the copies restart one at a time; where the secrets live now and who can read them; what happens when the alarm fires.
-
-**T29 follow-up (branch `fix/deploy-check`, planner-approved Oct 31), to finish T29:**
-1. `deploy.yml`: the live check requires the new version on **every** answer, not answers from both copies (least_conn sends quick requests to the copy with fewer open lines). The rollback input ignores spaces before checking the format.
-2. Security patches (D27: patches are taken at once): `python:3.13.18-slim-trixie` for the backend. In the web image, `apk upgrade --no-cache` in the Nginx stage, which fixes the curl and brotli findings. Compare the ECR scan before and after.
-3. Pin the GitHub runners to `ubuntu-24.04` in `ci.yml` and `deploy.yml`, the same as the server (`ubuntu-latest` is moving to 26).
-4. Idle CPU: the server sits at ~20% CPU with Parley idle, and its CPU credits are slowly draining. Find the process (read-only first: `top -bn2 -d5`, `ps aux --sort=-%cpu | head`, `pidstat`). Report it, and fix it only if the cause is clear.
-5. LEARNING.md: the T29 section, plus the desktop spot-check line for the phone keyboard fix: "Desktop spot-check (Edge DevTools): 1440 has four columns and the panel folds; 1024 has three columns and the name swaps in the panel with a back arrow; 390 is one screen at a time. Same as T27."
-6. Proofs:
-   - **Before merging:** run Deploy by hand on this branch with the live tag. AWS must refuse the login, which proves "only main can deploy".
-   - **The test alarm:** `set-alarm-state` sends the ALARM and OK emails.
-   - **After merging:** the auto-deploy recreates `web` (because the frontend Dockerfile changed), which gives the "after" number for the fast stop.
-7. Adithya, by hand (Claude Code gives the steps):
-   - A GitHub ruleset on `main`: PR required, the 3 CI checks required, no force push or delete, and no bypass. This enforces D13.
-   - Delete the old `delivery-delay-github-actions-build-role` in IAM (keep the OIDC provider).
+"In my words" prompts: what Prometheus does every 15 seconds; counter vs gauge vs histogram; what p95 means and why it matters more than the average; why route labels use the template and not the real id.
 
 ---
 
@@ -146,8 +133,8 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 8: Go live
 - [x] T28. Live on AWS: one EC2 server built with Terraform, HTTPS, the generic server setup (works on any Linux server, D29)
 - [x] Fix: phone keyboard layout (PR #29)
-- [ ] Before sharing the link: a fresh, empty database on the server (removes the test accounts), then sign up clean demo accounts (step 0 of T29)
-- [ ] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs. Notes from T28: SSM commands run as root while `/opt/parley` belongs to ssm-user, so git needs `safe.directory` (or run as ssm-user); restart the backend copies one at a time on a deploy (a full `deploy.sh` restarted both together); builds move from the server to CI; backups are still a known gap.
+- [x] Before sharing the link: a fresh, empty database on the server (removes the test accounts), then sign up clean demo accounts (done in T29, step 0)
+- [x] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs. Notes from T28: SSM commands run as root while `/opt/parley` belongs to ssm-user, so git needs `safe.directory` (or run as ssm-user); restart the backend copies one at a time on a deploy (a full `deploy.sh` restarted both together); builds move from the server to CI; backups are still a known gap.
 
 ### Phase 9: Measure it
 - [ ] T30. Prometheus metrics and a Grafana dashboard
@@ -167,4 +154,7 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service
 - Small phone polish, only if wanted: a slimmer phone chat header (plain back arrow, 32 px avatar, 18 px name, 56 px tall). UI/UX polish isn't a priority.
+- Small: a paths filter in `deploy.yml` so docs-only merges skip the deploy (today every merge deploys, safely, one copy at a time).
+- Small: two Tailwind "canonical class" warnings in `ChatScreen.tsx` (style tips; lint and build pass).
+- Re-check: the backend's 4 high scan findings (glibc, zlib) wait for a Debian fix. Look again at the next Python patch.
 - Small: a hint near "Turn on notifications" (it lives only in the gear menu and is easy to confuse with the browser's own site toggle).

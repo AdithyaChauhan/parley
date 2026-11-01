@@ -1,0 +1,18 @@
+# Grafana's data comes from Prometheus (D32). A file, so Grafana sets it up by
+# itself on any machine: nothing to click.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # A fixed id, so the dashboard file can name this data source.
+    uid: prometheus
+    type: prometheus
+    # Grafana's server asks Prometheus (by its Compose name), not the browser.
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Prometheus asks every 15 s, so Grafana never works out a "per second"
+      # from a shorter stretch than that.
+      timeInterval: 15s

@@ -1,12 +1,14 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app import metrics
 from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
 from app.config import settings
@@ -37,6 +39,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Parley", lifespan=lifespan)
+
+# Every HTTP request passes through this on its way in and out: it times the
+# request and counts it by route template and status (D32).
+app.middleware("http")(metrics.measure)
+
+
+# What Prometheus reads every 15 s: every number, as plain text. On the app
+# itself, outside /api on purpose: Nginx passes on only /api/, so Prometheus
+# (inside Parley's network) can read it and the internet can't (D32).
+# async: it runs on the event loop, where live lines open and close, so it
+# never counts the switchboard halfway through a change.
+@app.get("/metrics", include_in_schema=False)
+async def metrics_page():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 # Every backend route lives under /api (D17). The browser sees one site, and
 # Vite (later Nginx) passes anything starting with /api on to this app.
