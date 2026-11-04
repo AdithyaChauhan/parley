@@ -32,6 +32,9 @@ MESSAGES_SENT = Counter("messages_sent_total", "New messages saved")
 # this copy heard for its own lines.
 PUSHES_PUBLISHED = Counter("live_pushes_published_total", "Live events published on Redis, one per person")
 PUSHES_RECEIVED = Counter("live_pushes_received_total", "Live events this copy heard on Redis")
+# How long a line waited for its copy's subscribe lock (D23), once when it
+# opens and once when it closes. Added in T31: the storm showed slow hellos (D33).
+SUBSCRIBE_LOCK_WAIT = Histogram("live_subscribe_lock_wait_seconds", "Waits for the subscribe lock (D23)")
 
 # Requests refused with 429, by the limit rule that refused them (D24).
 RATE_LIMITED = Counter("rate_limited_total", "Requests refused with 429", ["rule"])

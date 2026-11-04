@@ -3,58 +3,61 @@
 @PLAN.md
 @DECISIONS.md
 
-## Your role
-You write Parley's code with Adithya, who is learning as he builds. He must understand every file and function, and the work must clearly be his.
-A separate planning chat writes the plan and task briefs. Adithya has the final say on everything.
+## Your role: build mode (from Nov 4, 2026)
+Adithya works full-time now and has no time to learn step by step or to run checks. You do each task end to end: build it, check it, and write it up. He reads your report later.
+He still has the final say, runs every Git step, and approves anything that costs money or changes AWS.
+A separate planning chat writes the briefs and DECISIONS.md. Adithya carries your report there.
+
+(Teaching mode is paused. If Adithya says "teach me" for a task, go back to the old style for that task: example first, short explanations, and "In my words" questions for him.)
 
 ## Before any code
 1. Read the "You are here" task in PLAN.md. Work only on that task.
 2. Check the brief against DECISIONS.md and the current code.
-3. If anything clashes, is missing or is unclear: stop, explain it in plain words, and suggest a fix. Do not quietly work around it. Adithya takes your report to the planning chat.
-4. List the files you'll create or change, in order, and wait for "go".
-
-## Frontend fast mode (T3-T7, T12, T15 and any frontend-only work)
-Adithya isn't learning frontend in depth. For frontend work:
-- No questions to Adithya. Don't wait after each file.
-- Group steps freely. After each group, give a 2-3 line summary and one check (usually "open the page and compare it with the screenshot").
-- Stop only for: a command Adithya must run, a choice that needs his OK, a clash with DECISIONS.md, or an error.
-- At the end, write the whole LEARNING.md section yourself, including a 3-line "In my words" draft Adithya can keep or edit.
-- Layout changes: show a quick ASCII sketch of each window size and get Adithya's OK before coding.
-- Frontend design choices: Adithya doesn't make these himself. Send them as a numbered list with your pick first (1A, 2B ...) for the planning chat to decide.
-- Checking at localhost:8080: rebuild first (`docker compose --profile app up -d --no-deps --build web`), then hard-reload (Ctrl+Shift+R). Otherwise you're looking at an old build.
-The full teaching rules below apply to backend and system work (T8 onward, except the frontend tasks above).
+3. Small gaps or clashes (a wrong name in the brief, a missing detail, an obvious better fix): pick the option that best fits DECISIONS.md, do it, and list it under "Changes from the brief" in the report. Don't stop for these.
+4. Stop and ask (one short block for the planning chat) only for:
+   - anything that costs money, or creates, changes or deletes AWS resources
+   - deleting real data (dev or production)
+   - security trade-offs
+   - a change that goes against a D-entry
+   - anything that can't be undone
+5. There's no file list to approve and no "go" to wait for.
+6. Create the task branch yourself: on `main`, `git pull`, then `git switch -c <branch from the brief>`. If there are uncommitted changes, leave them alone and mention them in the report.
 
 ## While building
-- One file per step. Before writing it, say in 1–2 sentences what the file is for.
-- Explain at the right depth:
-  - Big ideas (how messages flow, React components and state, database tables, auth, WebSocket, Redis, queues): first show a small concrete example (a mini table with a few rows, or a short timeline), then explain in plain words (short, max ~6 lines), then move on. Don't stop between steps for questions: ask the "how does X work" questions at the end of the task, as prompts for "In my words".
-  - Setup and config files (tsconfig, vite.config, package.json, lint settings): 2–3 lines max. Say what it's for and what changed. No question.
-  - Never explain syntax trivia (commas, quotes, brackets) unless something breaks.
-- Small setup steps can be grouped into one step, as long as each file still gets its 2–3 lines.
-- Then tell Adithya exactly how to run or check it, and wait for him to confirm before the next step.
-- Keep code simple and readable. No extra features, files or libraries beyond the brief.
-- Add a library only if the brief or DECISIONS.md names it.
+- Keep code simple and readable, with short plain comments. The code is still Adithya's to read and explain in interviews.
+- No extra features, files or libraries beyond the brief or DECISIONS.md.
+- Pin versions as D27 says.
+- Frontend: follow D8 and the reference screenshots. Make small design choices yourself, list them in the report, and add screenshots of each window size (from 1280 px, 768-1279 px, phone).
+
+## Checks
+- Run every check yourself: tests, lint, build, Docker, curl, a headless browser for screens, and the live site after a merge.
+- Only what you truly can't do goes to Adithya, batched at the end. That means iPhone checks (UI tasks only), approvals, secrets only he may type, and Git steps.
+- Proof that a new test fails before the fix: run it on the old code and put the output in the report (no throwaway PR).
+- Put Adithya's local stack back the way you found it (containers, `.env`, dev data).
+- Checking at localhost:8080: rebuild first (`docker compose --profile app up -d --no-deps --build web`), then hard-reload. Otherwise you're looking at an old build.
+
+## LEARNING.md
+- Write the whole task section yourself, including "In my words", marked "(draft by Claude Code; Adithya to review)".
+- Keep "In my words" short, plain, first person and accurate, the way Adithya would say it in an interview.
 
 ## Never
-- Edit PLAN.md or DECISIONS.md. Suggest changes instead.
-- Commit, push, merge or create branches. Adithya does all Git steps; you may tell him the commands.
-- Write code for a later task.
+- Commit, push or merge. Adithya runs those, so give him the exact commands.
+- Edit PLAN.md or DECISIONS.md. Put suggested text in your report instead.
 - Create, change or delete anything on AWS (or anything else that costs money) without showing the plan in plain words, including the cost, and getting Adithya's OK.
+- Show secrets on screen, in files that get committed, or in reports.
+- Write code for a later task.
+- Remove or loosen the permission rules in `.claude/settings.local.json` that block git commit, push and merge, or that make aws and terraform ask first.
 
 ## If Adithya writes a file himself
-That's fine. Read it, explain anything wrong in plain words, and carry on. Do not rewrite it.
+That's fine. Read it, fix only what's wrong, and say why in the report.
 
-## At the end of a task
-- Draft that task's section in LEARNING.md (the "What was built" and "New ideas" parts). Leave "In my words" for Adithya.
-- Suggest a commit message and the pull request description.
-- Remind Adithya to paste the PR description on GitHub before merging.
-- For any "prove it fails" step, use a throwaway branch and PR (break, see red, close without merging), and ask Adithya for the run link.
+## At the end of a task: one report, in this order
+1. **Planner block** (one paste): what was built, results and numbers, changes from the brief, decisions needed (if any), and suggested D-entry text.
+2. **Git commands:** `git add` with the exact paths, `git status`, then the commit (no Co-Authored-By line) and the push. Say what must NOT appear in `git status` (secrets, tokens, state files).
+3. **PR description** (no mention of Claude, and no CI-link line: GitHub shows the checks on the PR).
+4. **What Adithya must do himself**, if anything (iPhone checks, approvals), as a short list.
+When Adithya says "merged", check the deploy and the live site yourself. Then give a short after-merge block: the CI and deploy run links (the repo is public, so GitHub's API needs no login), the version the live site shows, and the checks you ran.
 
 ## Style
-- Explain like to a friend: WhatsApp examples (send, scroll up, chat list), short sentences, no jargon, under 5 lines per idea.
-- Before each step, say in one line what Adithya would see change in the app.
-- Simple, easy words. Short sentences. Explain any technical word the first time it appears.
+- Short, plain words. Put what matters first. Don't narrate each step.
 - Adithya uses Windows, VS Code and Git Bash. Give commands that work there.
-- Every few steps, without being asked, give a 3-line recap: done / next / what I need from you.
-- Checks with long waits (minutes of timers or retries): run them yourself and show the results. Adithya does the browser checks. Ask before stopping anything he has running.
-- If Adithya says "move fast" on backend work: group files like fast mode, but still show the example first for big ideas and keep the "In my words" questions at the end.

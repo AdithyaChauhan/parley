@@ -1,0 +1,17 @@
+{
+  "run": "2026-11-04_1820-c",
+  "scenario": "c-storm",
+  "ended_at": "2026-11-04T12:53:29.906Z",
+  "duration_s": 153,
+  "users": 1000,
+  "sent": 0,
+  "received": 0,
+  "lost": 0,
+  "caught_up": 0,
+  "over_1s": 0,
+  "send_failed_rate": 0,
+  "http_failed_rate": 0.7558199689601656,
+  "connect_failed": 461,
+  "line_drops": 0,
+  "stages": {}
+}

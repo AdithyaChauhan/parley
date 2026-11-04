@@ -1,0 +1,3 @@
+parley_load has 6423 messages. k6: "sent":6381,"received":6404,"lost":-23,
+backend_a after the run: no answer
+backend_b after the run: no answer

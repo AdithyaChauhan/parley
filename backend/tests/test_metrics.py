@@ -1,3 +1,4 @@
+import time
 import uuid
 from contextlib import contextmanager
 
@@ -96,6 +97,21 @@ def test_live_lines_open_follows_the_switchboard(client, sign_up):
         assert _value(client, "live_lines_open") == before + 2
 
     assert _value(client, "live_lines_open") == before
+
+
+def test_each_line_waits_for_the_subscribe_lock_on_open_and_on_close(client, sign_up):
+    ana = sign_up("Ana")
+    before = _value(client, "live_subscribe_lock_wait_seconds_count")
+
+    with _open_line(client, ana):
+        assert _value(client, "live_subscribe_lock_wait_seconds_count") == before + 1
+
+    # The goodbye takes the lock too. It runs just after the line closes, so wait for it.
+    for _ in range(50):
+        if _value(client, "live_subscribe_lock_wait_seconds_count") == before + 2:
+            break
+        time.sleep(0.02)
+    assert _value(client, "live_subscribe_lock_wait_seconds_count") == before + 2
 
 
 def test_pushes_are_counted_when_published_and_when_heard(client, sign_up):

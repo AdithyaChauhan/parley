@@ -170,6 +170,7 @@ services:
   # No ports except Grafana's, and that one only on this machine.
 
   # Asks every part for its numbers every 15 s, and keeps them for 7 days.
+  # During a load test, k6 also sends its own (D33).
   prometheus:
     image: prom/prometheus:v3.15.1
     profiles: [monitoring]
@@ -178,6 +179,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=7d
+      # The load test's k6 sends its numbers in, instead of being asked (D33).
+      # Only containers on Parley's network can reach this: no port is published.
+      - --web.enable-remote-write-receiver
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # A volume, so the 7 days survive a restart.

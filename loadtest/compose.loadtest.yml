@@ -1,0 +1,57 @@
+# Only for the load test (D33), layered on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f loadtest/compose.loadtest.yml ...
+# bash loadtest/run.sh does this, and puts the normal backends back afterwards.
+# Compose merges the two files: the keys below replace the same keys there,
+# and everything else stays the same. Paths are from the repo root (the first file).
+
+# The load test's own places: its own database (never the dev data), Redis
+# database 1 (its last_seen notes have no timer, so they stay out of dev's 0),
+# and D24's limits off, since all 1,000 fake users come from this one laptop.
+x-load-env: &load-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/parley_load
+  REDIS_URL: redis://redis:6379/1
+  RATE_LIMITS_ENABLED: "false"
+
+services:
+  migrate:
+    environment: *load-env
+  backend_a:
+    environment: *load-env
+  backend_b:
+    environment: *load-env
+  worker:
+    environment: *load-env
+
+  # Makes parley_load from scratch before every run (seed.py).
+  seed:
+    image: parley-backend
+    profiles: [loadtest]
+    env_file: .env
+    environment:
+      <<: *load-env
+      # seed.py lives outside the image: this lets it import the app's code.
+      PYTHONPATH: /app
+    volumes:
+      # Not read-only: seed.py writes sessions.json (the raw tokens) here.
+      - ./loadtest:/loadtest
+    command: ["python", "/loadtest/seed.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # The fake users (D33). They reach Parley through Nginx, like a browser.
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [loadtest]
+    volumes:
+      - ./loadtest:/scripts:ro
+      - ./loadtest/results:/results
+    environment:
+      BASE_URL: http://web:8080
+      # k6 sends its numbers to Prometheus (remote write), so the dashboard
+      # shows them next to Parley's own.
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      # Timings as real histograms, so Prometheus can work out p95 for any
+      # stretch of time, like Parley's own.
+      K6_FEATURES: native-histograms
+      K6_NO_USAGE_REPORT: "true"

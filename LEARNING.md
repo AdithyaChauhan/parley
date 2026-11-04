@@ -1415,7 +1415,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
   - Stopping `backend_b` at 21:30 moved both lines to A. Stopping `backend_a` at 21:34 moved them back to B. The total stayed 2 and messages kept arriving.
   - A blank Grafana password stops it with "Set GRAFANA_ADMIN_PASSWORD in .env". A server-style `.env` with no Grafana line gives a clean production config, with no warnings.
   - Through Nginx on the laptop: `/metrics` gives the app's page, and `/api/metrics` a 404.
-  - The live site after the merge: added with "In my words".
+  - The live site after the merge (Nov 1, 2026): the deploy run passed (https://github.com/AdithyaChauhan/parley/actions/runs/41326551808). `/api/health` answers `version: c9da4a0` from both copies (8 asks: 4 A, 4 B). Through Nginx, `/metrics` gives the app's page with no numbers in it, and `/api/metrics` is a 404.
 - Found along the way:
   - FastAPI 0.143 no longer copies a route with its full address when a router is included: `route.path` was missing `/api`. The template test caught it.
   - A label's first appearance hides its first event, because Prometheus works from the change between two scrapes. So the rules and outcomes start at 0. A route's first burst inside one 15 s gap also vanishes from `increase()`: the login didn't show in a 25-minute view, but the raw totals had it.
@@ -1449,3 +1449,51 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What p95 means and why it matters more than the average: Imagine 100 people wait in line. 90 wait 1 minute, but 10 wait 10 minutes. The average is 1.9 minutes, which sounds fine. But p95 is 10 minutes: the slowest 1 in 20 waited ten times longer. p95 means "95% of people waited less than this number." It exposes the slow outliers that the average washes away. A single slow person out of 100 needs p99 or the max to show up.
 
 - Why route labels use the template and not the real id: If we used the real chat ID (like /api/chats/123), we would create a brand new line on the graph for every single chat. With a million chats, Prometheus would run out of memory and crash. By using the template (/api/chats/{chat_id}), all million chats are grouped into one single line, keeping the dashboard fast and readable.
+
+### Task 31: Load test with 1,000 fake users
+**What was built**
+- `backend/app/config.py`: `RATE_LIMITS_ENABLED` (on by default). A check makes the app refuse to start with limits off when `COOKIE_SECURE` is true, so a real server always has its limits (D33).
+- `backend/app/limits/service.py`: `enforce()` lets every request through when the switch is off. Only the load test turns it off.
+- `backend/app/metrics.py` and `backend/app/live/bus.py`: `live_subscribe_lock_wait_seconds`, how long a line waits for its copy's subscribe lock (D23). D33 said to add it if line open → hello was slow, and in the storm it was (p50 ~1 s).
+- Tests: `test_limits.py` (the app refuses to start with limits off on HTTPS, and with limits off the 21st send gets through) and `test_metrics.py` (each line waits for the lock once on open and once on close). 137 pass.
+- `docker-compose.yml`: Prometheus accepts k6's numbers (`--web.enable-remote-write-receiver`). Its port stays unpublished.
+- `monitoring/grafana/dashboards/parley.json`: a "Load test" row with end to end, send → 201, fake users with sent/received per second, connect times (with the server's lock wait), and the Docker machine's swap.
+- `.gitignore`: `loadtest/sessions.json`, the raw refresh tokens.
+- `loadtest/` (new):
+  - `seed.py`: makes `parley_load` from scratch: 1,000 users, 500 chats, one saved session each. It refuses any database whose name doesn't end in `_load`. Only the tokens' fingerprints go in the database; the raw tokens go to the gitignored `sessions.json`.
+  - `compose.loadtest.yml`: a second Compose file that points the backends, worker and migrate at `parley_load`, Redis database 1 and limits off, and adds `seed` and k6 (`grafana/k6:2.3.0`).
+  - `lib.js`: one fake user that behaves like the app:
+    - opens with its saved session (refresh), gets a ticket, opens the live line and pings every 25 s;
+    - sends at random moments, sends `read` for what arrives, and catches up by number after a gap;
+    - times send → 201 and end to end (the send time travels inside the message).
+  - `summaryFor()` saves each run's numbers.
+  - `trial.js`, `logins.js`, and `a-baseline.js` to `e-failover.js`: one script per scenario.
+  - `run.sh`: one command per scenario. It seeds, switches the backends, runs k6, checks the database, checks that each copy still answers, saves the results, and puts the normal backends back however it ends.
+  - `results/`: every run's numbers (no tokens in them).
+- `docs/load-test.md`: the write-up, with 4 dashboard screenshots in `docs/load-test/`.
+- Found along the way:
+  - Logins at 10 a second freeze in argon2's memory (64 MB per check), so fake users start from saved sessions instead (D33, option A).
+  - **The big one:** when a request waits so long that Nginx gives up (60 s), its database session is never closed, so its connection stays "idle in transaction" for good. After 15 of those, a copy freezes until it's restarted. That happened in the storm (c), at 50 messages/s (b), after a failover (e), and above ~30 messages/s (d).
+  - Even at 50 users a second, the start-up burst froze the copies. Starting 10 a second keeps the start out of the measurements.
+  - Nginx answers 502 for a few seconds after the backends are switched, until it looks the names up again (D28). `run.sh` waits 12 s.
+  - A k6 limit only counts one step if each step has its own threshold. Per-user timers lag behind a rate change, so users send at random moments (a Poisson process) instead.
+  - Headless Chrome only paints Grafana's charts with `--run-all-compositor-stages-before-draw`.
+
+**New ideas**
+- Load test: many fake users at once, to see where a system slows down, and what runs out first.
+- k6: a load-testing tool. Each virtual user runs a script; here one script plays one chat user.
+- End-to-end latency: from pressing send to the other person's screen having it. It's what a chat user feels, and it includes things the send's 201 doesn't, like the push through Redis and the live line.
+- p50 / p95 / p99: half, 19 in 20 and 99 in 100 waited less than this.
+- Bottleneck: the first thing that runs out. Here, database connections (15 per copy) ran out while the CPUs were nearly idle.
+- Connection pool: a few database connections kept open and lent to requests. When all are lent out, the next request waits.
+- "Idle in transaction": a connection that started a transaction and then went quiet without finishing it. Here it meant connections that were lent out and never given back (a leak).
+- Thread dump: what every thread is doing at one moment (py-spy). It showed 40 threads all waiting for the pool.
+- Remote write: k6 pushes its numbers to Prometheus, instead of Prometheus asking.
+- Native histogram: timings Prometheus can turn into p95 for any stretch of time.
+- Poisson arrivals: each user sends at random moments, so all users together send at a steady average rate.
+- Congestion collapse: past a point, waiting makes everything slower, which makes more things wait (the argon2 pile-up, and the pool leak).
+
+**In my words** (draft by Claude Code, for Adithya to keep or rewrite)
+- What end-to-end latency is, and why it matters more than the send time: the send time only says the server saved my message. End to end says when my friend's phone actually has it, which is what a chat user feels. Here it was 28 ms (p50) at 20 messages a second, and about 1 s (p95) at 30.
+- What the bottleneck was, and how I found it on the dashboard: database connections. Messages per minute climbed, then fell to zero, while latency jumped to 10 s, Postgres connections jumped to ~33 (both pools full), and CPU stayed low. Postgres showed the connections as "idle in transaction", and the thread dump showed every thread waiting for one. Requests that were given up never handed their connection back.
+- Why the load test needs its own database and its own limits switch, and how production is protected: the seed wipes and refills its database, so it only runs on a name ending in `_load` and never touches my dev chats. The 1,000 fake users all come from one laptop, so D24's per-IP limits would block them. The switch is off only in the load test's Compose file, and the app refuses to start with limits off when `COOKIE_SECURE` is on, which is true only on the HTTPS server.

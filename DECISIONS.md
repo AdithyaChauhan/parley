@@ -80,14 +80,14 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 **D13. Git workflow**
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
-- Adithya makes every commit and writes the message in his own words. Commits never have a "Co-Authored-By: Claude" line.
+- Adithya makes every commit. From build mode (D14), Claude Code drafts the message. Commits never have a "Co-Authored-By: Claude" line.
 - PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T34).
 - Private repo; goes public once live chat works.
 
 **D14. Who does what**
 - Adithya: final say. Nothing starts or merges without his OK.
-- Planning chat (Claude on claude.ai): writes the plan, task briefs and decisions; teaches.
-- Claude Code: writes project code, one file at a time. Adithya can write a file himself whenever he wants; he tells Claude Code first. Stops and reports if a brief clashes with the code or with this file.
+- Planning chat (Claude on claude.ai): writes the plan, task briefs and decisions.
+- Claude Code (build mode from Nov 4, 2026): builds, checks and writes up each task end to end, including a draft "In my words". It decides small clashes itself and lists them in its report. It stops only for money, AWS changes, deleting data, security trade-offs, going against a D-entry, or anything that can't be undone. It never commits, pushes or merges. Adithya can write a file himself whenever he wants.
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
 
 **D15. Database access style**
@@ -310,3 +310,43 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - Route labels use FastAPI's real templates (like `/api/chats/{chat_id}/messages`), unknown addresses share one `unmatched` label, `/metrics` doesn't count itself, and Prometheus adds the `copy` label.
   - Queue depth per queue comes from RabbitMQ's detailed metrics page (`queue_coarse_metrics`), with no RabbitMQ changes.
   - cAdvisor comes from `ghcr.io/google/cadvisor` and needs read-only access to the whole machine. That's fine on the laptop, and gets weighed in step 6.
+- Decided in T30 (measured): the server runs only the `/metrics` pages, reachable only inside its network. The monitoring stack (550 to 830 MB, mostly Grafana) doesn't fit next to Parley on the t3.small (about 1 GB free) without swapping, and a bigger server (~$16/month more) isn't worth it for a dashboard. The dashboard runs on the laptop, where the load test runs too (T31). T30 finished Nov 1, 2026 (PR #35).
+
+**D33. Load test (T31)**
+- k6 in Docker (pinned), with scripts in `loadtest/`. It writes its numbers into Prometheus, so they show on the T30 dashboard. It runs on the laptop against the laptop stack, never against the live server.
+- The load test uses its own database (`parley_load`), seeded directly (500 pairs, one shared password hash). The seed script refuses any database whose name doesn't end in `_load`.
+- `RATE_LIMITS_ENABLED` (default on) may be switched off only for the load test. The app refuses to start with limits off when `COOKIE_SECURE` is true, so production always has its limits (D24).
+- The key number is end-to-end latency (send → the partner's live line receives it), measured with p50/p95/p99, plus lost messages (must be 0). "The limit" means p95 end to end over 500 ms or errors over 1%.
+- Agreed at the T31 pre-check:
+  - Laptop: Acer Aspire 7, Ryzen 5 3550H (4 cores / 8 threads), 8 GB RAM (5.9 GB usable), NVMe SSD, Docker Desktop on WSL2. For the runs, WSL gets 3.5 GB through `.wslconfig` (it was 2.8 GB), other apps are closed, and swap is watched on the dashboard and written down.
+  - Laptop memory: WSL gets `memory=3584MB` in `.wslconfig` (whole MB: "3.5GB" with a decimal was ignored). Docker then sees ~3.4 GB.
+  - Fake users start **from a saved session**, like opening Parley while already logged in. The seed also creates one session per user with a made-up refresh token (only its fingerprint goes in the database, D16, and only in `parley_load`). The raw tokens go in a gitignored file that k6 reads and that is never committed. Each fake user trades its token at `/api/auth/refresh` (no argon2), about 50 per second, so 1,000 are ready in ~20 s. Every scenario still ends within ~13 min (the access token lasts 15 min, D16).
+  - Real logins are measured separately by `loadtest/logins.js` (a short ramp: 2, 3, 4, 6 logins/s), with their own table in `docs/load-test.md`. Measured in the pre-check: fine up to ~4/s (p95 ~300-420 ms). At 6/s it collapses (p95 26 s, backends ~900 MB each, swap), and at 10/s nothing finishes, and the backends keep working on requests nobody waits for. That's the argon2 memory problem.
+  - Fake users send `read` for each message they get (both people have the chat open).
+  - The load test uses Redis database 1 (presence keys stay out of dev's database 0) and shares RabbitMQ's `/` vhost (load users have no push devices, so their jobs are skipped).
+  - The subscribe lock (D23) is judged from k6's "line open → hello" time, and a timer is added only if that's slow.
+  - k6's small result files are committed in `loadtest/results/` as proof (checked for tokens first).
+  - `loadtest/compose.loadtest.yml` switches only the backend copies, worker and migrate to `parley_load` with limits off, and adds k6. The run script puts the normal backends back after every run. Prometheus gets `--web.enable-remote-write-receiver` (its port stays unpublished), and the dashboard gets a "Load test" row.
+- T31 results (laptop, finished Nov 4, 2026):
+  - ~20 msg/s is comfortable with 1,000 users connected (end-to-end p95 80 ms). The limit is ~30 msg/s (p95 969 ms). At 40+/s it freezes.
+  - The bottleneck is database connections (15 per copy, 40 threads), not CPU (backends ≤0.9 core, Postgres ≤0.4, of 8). Abandoned requests leak their session ("idle in transaction"), and after 15 leaks a copy freezes until restarted.
+  - Logins: fine up to ~8/s on a fresh Docker, and they collapse at 10/s (argon2 memory). With less free memory, they tipped at 6/s.
+  - The D23 subscribe lock is a real queue in a storm (wait p95 1.5-2.2 s). Gradual connects are fast (p50 6 ms).
+  - The first request after a quiet minute isn't slow (T30's 0.9 s didn't come back).
+  - Both bugs are fixed in "Fix: Parley under load", before T32.
+- Changes from the brief (accepted):
+  - Fake users start at 10/s (50/s froze both copies).
+  - d's steps are 10-50 msg/s, and e runs at ~10 msg/s.
+  - A `live_subscribe_lock_wait_seconds` timer was added.
+  - Sends happen at random moments (Poisson).
+  - Claude Code took the screenshots (a read-only Grafana and headless Chrome).
+  - `run.sh` waits 12 s after switching backends (D28's 10 s name re-check).
+
+**D34. Parley under load (fixes from T31)**
+- A request that's cancelled or abandoned must still close its database session. A test proves it: abandon requests mid-flight, and the pool is back to 0 checked out, with no "idle in transaction" left in Postgres.
+- A send commits and releases its database connection before publishing to Redis and RabbitMQ (D9's "save first" still holds).
+- Fail fast: under overload, a request answers **503 "busy, try again"** with `Retry-After` within a few seconds, well before Nginx's 60 s, instead of waiting or freezing. The thread count and pool size are chosen together, within Postgres's connection limit.
+- The app treats a 503 on a send like a 429: it tries again after `Retry-After` with the same `client_msg_id`, in order.
+- Postgres has `idle_in_transaction_session_timeout` (~60 s) as a safety net.
+- Password checks: at most a few argon2 checks run at once per copy (64 MB each). Others wait briefly, then get 503 "busy, try again". That covers sign-up and log-in.
+- Auto-restart of a frozen copy comes with T32's liveness probe. Async SQLAlchemy (D15) only if the re-runs show it's needed.

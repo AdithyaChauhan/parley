@@ -7,6 +7,8 @@ __pycache__/
 
 # Real secrets (copy .env.example to .env)
 .env
+# The load test's raw refresh tokens (D33): made by loadtest/seed.py, read by k6.
+loadtest/sessions.json
 
 # Terraform's local files (D30): the downloaded AWS plugin, and the state
 # (Terraform's receipt of what it built, which can hold secrets).

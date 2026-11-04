@@ -5,82 +5,51 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 **How to use this file**
 - One task at a time. Each task = one branch = one pull request.
 - "You are here" shows the current task and its brief.
-- After a pull request merges, Adithya tells the planning chat. The planner sends back a new PLAN.md (box ticked, "You are here" moved to the next task). Adithya replaces the file, and that goes in the next task's branch.
+- After Claude Code's report, Adithya pastes its planner block into the planning chat. The planner sends back PLAN.md and DECISIONS.md (box ticked, the next brief in "You are here"). Adithya replaces them before committing, so they go in the same PR.
 - Only the planner (chat Claude) writes task briefs. Claude Code never edits this file. It can only suggest changes.
 - Adithya may write a file himself if he wants. He tells Claude Code, so it knows.
-- Before merging: copy the CI run link from https://github.com/AdithyaChauhan/parley/actions into the report.
+- CI must pass before merging (main's ruleset enforces it). Claude Code finds the CI and deploy run links itself (the repo is public) and puts them in its after-merge block.
 - `/docs` checks with two people: for each person, log in, paste the token into Authorize, confirm with `GET /api/auth/me`, then do their steps.
 - npm audit's "braces" warnings: dev-only and no fixed version yet. Don't raise them again until a fix exists.
 - Never commit straight to `main`. Even a small fix goes through a branch and a PR (D13).
-- Before merging, paste the PR description. Proof steps (like a red-cross test) use a throwaway PR that's closed without merging, and the run links go in the report.
+- When opening the PR, paste the PR description. Proof steps (like a test that fails before the fix) are run locally by Claude Code, with the output in its report.
 - Test devices: a Windows laptop (Chrome, Edge) and an iPhone (Safari, Chrome). There is no Android, so briefs ask for "a phone".
 - Phone testing over the laptop's Wi-Fi IP (`http://192.168.x.x:5173`) is plain http, so sending (`crypto.randomUUID`), service workers and push don't work there. Use it for layout only, and test sends and push on the live site.
-- Each task's "Done when" also needs the task's "In my words" in LEARNING.md filled in by Adithya. For frontend tasks (fast mode, see CLAUDE.md), Claude Code drafts it and Adithya just reviews it.
+- **Build mode (from Nov 4, 2026, CLAUDE.md):** Claude Code builds, checks and writes up each task end to end, including LEARNING.md and a draft "In my words" (marked as a draft). Adithya reviews when he has time, runs the Git steps, and approves anything on AWS or anything that costs money. Briefs no longer ask him for checks, except iPhone checks on UI tasks.
 
 ---
 
 ## You are here
 
-### Task 30: Metrics with Prometheus and a Grafana dashboard (teaching mode, friend style)
-- **Branch:** `feature/metrics`
-- **Goal:** one dashboard that shows what Parley is doing right now: requests per second, how fast they are, errors, open live lines per copy, messages sent, notification outcomes, queue depth, and how hard each container is working. T31's load test reads its numbers from here.
-- **Mode:** teaching mode (example first, short, "In my words" at the end), with recaps. Claude Code runs the long checks. It works on the laptop first (D29). Nothing new is opened to the internet.
+### Fix: Parley under load (database freeze, and the password-check cap) (build mode)
+- **Branch:** `fix/load-hardening`
+- **Why:** the T31 load test found two ways to break Parley. Production runs the same code, so both can happen on the live site.
+  1. **Freeze.** When requests wait too long and get abandoned (by Nginx or the client after 60 s), their database session is never closed. It stays "idle in transaction" and keeps its pool slot. After 15 leaks, a copy freezes: all 40 threads wait for the pool, even `/api/health`, and nothing restarts it. Seen at ~30+ msg/s, in the storm, and after a failover. In b and e a few saved messages weren't delivered live (b: 411 saved, 405 received; e: 1,342 / 1,339).
+  2. **Login flood.** Each password check (argon2) uses 64 MB. Above ~8-10 logins/s, the laptop swapped and collapsed. The 2 GB server would collapse sooner.
 
-**Example first (Claude Code shows this before any code):**
-```
- every 15 s, Prometheus asks each part "what are your numbers?" (a "scrape")
-   backend_a:8000/metrics  → http_requests_total{route="/api/chats/{id}/messages",status="201"} 1532
-   backend_b:8000/metrics  → live_lines_open 7
-   worker:9100/metrics     → notify_jobs_total{outcome="sent"} 41, {outcome="skip: already read"} 230
-   postgres / redis exporters, RabbitMQ's built-in metrics, cAdvisor (CPU and memory per container)
- Prometheus keeps the numbers over time → Grafana draws them:
-   ┌ requests/s by copy ┐ ┌ p95 latency ┐ ┌ open live lines A|B ┐ ┌ queue: notify / failed ┐
-```
-- A **counter** only goes up (requests, messages). A **gauge** goes up and down (open live lines). A **histogram** puts timings into buckets, so you can read p50, p95 and p99. p95 = 95% of requests were faster than this.
-- **Labels** split one number into groups (by route, status, copy). Routes use their template (`/api/chats/{id}`), never the real id, or the number of groups explodes.
+**Part 1: no more leaks, and fail fast instead of freezing**
+- **Prove the leak first** with a test: abandon requests mid-flight (cancel or time out the client), then check that the pool is back to 0 checked-out and Postgres has no "idle in transaction" left. The test must fail before the fix and pass after it.
+- **Make session cleanup safe when a request is cancelled.** Pick the approach that the test proves, for example opening the session with a context manager inside the work instead of a `yield` dependency, or a dependency whose cleanup can't be skipped. Say why in the report.
+- **Release the connection before slow work:** commit and close the database session before publishing to Redis or RabbitMQ (D9's "save first" still holds), so a send doesn't hold its connection during the pushes. Watch out: with SQLAlchemy's default `expire_on_commit=True`, reading the saved row after the commit loads it again and starts a new transaction, which holds a connection ("idle in transaction") until the session closes. Take what the reply and the pushes need first, then close.
+- **Find the trigger:** pin down what makes requests slow enough to be abandoned at ~30 msg/s (T31 left it open), and write it in `docs/load-test.md`.
+- **Fail fast:** under overload, a request answers **503 "busy, try again"** with `Retry-After` within a few seconds, instead of waiting until Nginx gives up at 60 s. For example, a short pool timeout, with the thread count and pool size chosen together. Write down the numbers and why, within Postgres's connection limit (2 copies + worker + migrate + exporters).
+- **The app:** a send that gets 503 is retried like a 429 (after `Retry-After`, same `client_msg_id`, in order, D24).
+- **Safety net in Postgres:** `idle_in_transaction_session_timeout` (about 60 s), so a stuck session can't hold a lock forever.
+- Not in this fix: async SQLAlchemy (D15 stays sync unless the re-runs show it's needed), and auto-restart of a frozen copy (T32's liveness probe).
 
-**Steps:**
-1. **Backend metrics** with the official `prometheus-client` (pinned), plus a small middleware we write ourselves:
-   - `http_requests_total` and a request-duration histogram, by method, route template and status.
-   - `live_lines_open` (gauge).
-   - `messages_sent_total`.
-   - Pushes published and received through Redis pub/sub.
-   - 429s by limit rule.
-   - Served at `/metrics` on port 8000. Nginx passes only `/api/` on, so `/metrics` is never reachable from outside. Test that.
-2. **Worker metrics** on its own port (9100): jobs by outcome (`sent`, each skip reason, `failed`, `parked`) and retries.
-3. **Exporters:** `postgres_exporter`, `redis_exporter`, RabbitMQ's built-in Prometheus metrics (check whether the plugin is already on), and cAdvisor (CPU and memory per container, which T31 needs).
-4. **Prometheus + Grafana** in Compose, under their own `monitoring` profile (`docker compose --profile app --profile monitoring up`). Images are pinned to exact tags (D27).
-   - Grafana is reachable only on the laptop (`127.0.0.1:3000`), and its admin password comes from `.env`.
-   - The data source and the dashboard are **files in the repo** (provisioning), so the dashboard rebuilds itself on any machine.
-   - Prometheus keeps 7 days of data.
-5. **The dashboard (one page):**
-   - Requests/s by copy
-   - Latency p50 / p95 / p99
-   - 5xx error rate and 429s
-   - Open live lines per copy
-   - Messages per minute
-   - Notification outcomes
-   - Queue depth (`notify`, `notify.failed`)
-   - Postgres connections
-   - Redis memory and commands/s
-   - CPU and memory per container
-6. **The server (decide after measuring):** check memory on the server with the monitoring stack. If it fits next to Parley (with swap barely used), run it there too, reachable only through **Session Manager port forwarding** (no new public port). Otherwise, the server runs only the metrics endpoints, and the dashboard stays on the laptop. Claude Code measures, then proposes.
-7. **Tests:**
-   - `/metrics` shows the counters, and a request moves them.
-   - Routes are labelled by template.
-   - `/metrics` through Nginx doesn't return metrics.
-   - The worker's counter moves for a skipped job.
-   - CI's containers job checks that both copies answer `/metrics` inside the network.
-- **Not in this task:** alerts in Grafana (CloudWatch already emails, D31), tracing, log search.
-- **Done when:**
-  - `docker compose --profile app --profile monitoring up` on the laptop, and Grafana at `localhost:3000` shows the dashboard by itself.
-  - Chatting between two windows moves the numbers: requests, messages, open live lines per copy, and notification outcomes.
-  - Stopping `backend_a` shows on the dashboard (its line drops and B takes the live lines).
-  - `/metrics` isn't reachable through Nginx (locally or on the live site).
-  - The server decision from step 6 is made and written down.
-  - All tests pass, CI is green (run link in the report), and "In my words" is filled in by Adithya.
+**Part 2: cap the password checks**
+- Each copy runs at most a few argon2 checks at once (a semaphore). Choose the number from memory: each check uses 64 MB, and the server has ~1 GB free, so leave room. Others wait briefly (a second or two), then get **503 "busy, try again"** with `Retry-After`. Covers sign-up and log-in.
+- The app shows "Busy, try again in a moment" on that 503.
 
-"In my words" prompts: what Prometheus does every 15 seconds; counter vs gauge vs histogram; what p95 means and why it matters more than the average; why route labels use the template and not the real id.
+**Proof (Claude Code runs everything):**
+- T31's numbers are the "before" for b, c, d, e (same laptop, same code). Re-run them after the fix on the same setup (fresh Docker start, other apps closed). `logins.js` gets 8 and 10/s steps, so run it before and after. Put before/after tables in `docs/load-test.md`.
+- Targets:
+  - **0 undelivered messages** in b and e.
+  - **No frozen copy** in any run. Under overload, requests get quick 503s and the copy recovers by itself afterwards.
+  - The limit in d is measured again (it may rise).
+  - Logins at 10/s keep memory flat, with quick 503s instead of a collapse.
+- After the merge: the auto-deploy is green, every answer shows the new version, and the T31 live-site 429 check still passes. No load on the live site (D33).
+- **Done when:** both parts are built, the new tests pass (including the leak test), the before/after tables are in `docs/load-test.md`, the targets are met (or the report explains exactly what's left), CI and the deploy are green, and LEARNING.md has the section with a draft "In my words".
 
 ---
 
@@ -137,11 +106,12 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - [x] T29. Auto-deploy from GitHub: images built in CI and pushed to ECR, deployed through OIDC + SSM (no stored AWS keys, no SSH), secrets in SSM Parameter Store, and a CloudWatch alarm with logs. Notes from T28: SSM commands run as root while `/opt/parley` belongs to ssm-user, so git needs `safe.directory` (or run as ssm-user); restart the backend copies one at a time on a deploy (a full `deploy.sh` restarted both together); builds move from the server to CI; backups are still a known gap.
 
 ### Phase 9: Measure it
-- [ ] T30. Prometheus metrics and a Grafana dashboard
-- [ ] T31. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
+- [x] T30. Prometheus metrics and a Grafana dashboard
+- [x] T31. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
+- [ ] Fix: Parley under load (database freeze + password-check cap), branch `fix/load-hardening`
 
 ### Phase 10: Kubernetes
-- [ ] T32. Run Parley on local Kubernetes
+- [ ] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34)
 - [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
 
 ### Phase 11: Show it

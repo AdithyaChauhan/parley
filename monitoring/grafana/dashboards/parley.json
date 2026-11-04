@@ -249,6 +249,88 @@
           "legendFormat": "{{container_label_com_docker_compose_service}}"
         }
       ]
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Load test (k6, D33): empty unless bash loadtest/run.sh is running",
+      "gridPos": { "x": 0, "y": 29, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "End to end p50 / p95 / p99",
+      "description": "Send → the partner's live line has it: what a chat user feels. Timed by k6, which plays both people.",
+      "gridPos": { "x": 0, "y": 30, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum(rate(k6_e2e_latency_seconds[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(k6_e2e_latency_seconds[$__rate_interval])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum(rate(k6_e2e_latency_seconds[$__rate_interval])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Send → 201 p50 / p95 / p99",
+      "description": "How long until the server says \"saved\", retries included. Timed by k6.",
+      "gridPos": { "x": 8, "y": 30, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum(rate(k6_send_time_seconds[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(k6_send_time_seconds[$__rate_interval])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum(rate(k6_send_time_seconds[$__rate_interval])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Fake users and their messages",
+      "description": "Virtual users running, and messages per second: sent (got 201) and received by the partner. The two lines should sit on top of each other.",
+      "gridPos": { "x": 16, "y": 30, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "sum(k6_vus)", "legendFormat": "virtual users" },
+        { "refId": "B", "expr": "sum(rate(k6_msgs_sent_total[$__rate_interval]))", "legendFormat": "sent/s" },
+        { "refId": "C", "expr": "sum(rate(k6_msgs_received_total[$__rate_interval]))", "legendFormat": "received/s" }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Connect p95: ticket → hello, and line open → hello",
+      "description": "Line open → hello is where each copy's subscribe lock sits (D23). The third line is the server's own wait for that lock: if it's small while open → hello is big, the queue is elsewhere.",
+      "gridPos": { "x": 0, "y": 37, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum(rate(k6_connect_time_seconds[$__rate_interval])))", "legendFormat": "ticket → hello" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(k6_hello_wait_seconds[$__rate_interval])))", "legendFormat": "open → hello" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(live_subscribe_lock_wait_seconds_bucket{job=\"backend\"}[$__rate_interval])))", "legendFormat": "waiting for the subscribe lock (server)" }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Swap used (Docker's whole machine)",
+      "description": "Memory Docker had to move to disk. Above a few MB, timings get worse because of the laptop, not Parley (D33).",
+      "gridPos": { "x": 12, "y": 37, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "container_memory_swap{id=\"/\"}", "legendFormat": "swap used" },
+        { "refId": "B", "expr": "machine_swap_bytes", "legendFormat": "swap size" }
+      ]
     }
   ]
 }
