@@ -1,0 +1,49 @@
+{
+  "run": "2026-11-04_1849-b",
+  "scenario": "b-steady",
+  "ended_at": "2026-11-04T13:34:23.386Z",
+  "duration_s": 840,
+  "users": 1000,
+  "sent": 368,
+  "received": 405,
+  "lost": -37,
+  "caught_up": 0,
+  "over_1s": 248,
+  "send_failed_rate": 0.9974140414737153,
+  "http_failed_rate": 0.9705115914829266,
+  "connect_failed": 836,
+  "line_drops": 111,
+  "e2e_ms": {
+    "min": 155,
+    "med": 1134,
+    "p(95)": 326045,
+    "p(99)": 391569.1,
+    "max": 401099,
+    "count": 405
+  },
+  "send_ms": {
+    "min": 506,
+    "med": 1246,
+    "p(95)": 30477.9,
+    "p(99)": 31431.4,
+    "max": 33043,
+    "count": 368
+  },
+  "connect_ms": {
+    "p(99)": 44,
+    "max": 73,
+    "count": 1000,
+    "min": 14,
+    "med": 17,
+    "p(95)": 29
+  },
+  "hello_wait_ms": {
+    "p(99)": 16,
+    "max": 28,
+    "count": 1000,
+    "min": 5,
+    "med": 6,
+    "p(95)": 10
+  },
+  "stages": {}
+}

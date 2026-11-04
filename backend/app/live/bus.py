@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 import redis
@@ -90,7 +91,10 @@ async def match_lines(user_id: uuid.UUID) -> None:
     a new one opens, the two calls can't cross and leave this copy deaf to Ben.
     Whichever runs second sees the true state and fixes it."""
     channel = _channel(user_id)
+    waiting_since = time.perf_counter()
     async with _lock:
+        # Time spent in line for the lock, behind other lines' subscribes (T31).
+        metrics.SUBSCRIBE_LOCK_WAIT.observe(time.perf_counter() - waiting_since)
         has_lines = user_id in manager.lines
         if has_lines and channel not in _listening:
             confirmed = _confirmed[channel] = asyncio.Event()

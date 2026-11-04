@@ -1,0 +1,33 @@
+{
+  "run": "2026-11-04_1933-a-on",
+  "scenario": "a-baseline",
+  "monitoring": "on",
+  "ended_at": "2026-11-04T14:08:51.614Z",
+  "duration_s": 302,
+  "kinds": {
+    "health_first": {
+      "n": 5,
+      "min_ms": 3.2,
+      "p50_ms": 6.4,
+      "max_ms": 11.9
+    },
+    "health_warm": {
+      "n": 15,
+      "min_ms": 2.6,
+      "p50_ms": 3.2,
+      "max_ms": 4.1
+    },
+    "login_first": {
+      "n": 5,
+      "min_ms": 112,
+      "p50_ms": 146.4,
+      "max_ms": 296.1
+    },
+    "login_warm": {
+      "n": 10,
+      "min_ms": 110.6,
+      "p50_ms": 128.9,
+      "max_ms": 259.9
+    }
+  }
+}

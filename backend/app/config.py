@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The .env file lives in the repo root: config.py -> app -> backend -> root
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
     # only. Off for plain http://localhost, where the browser would drop such a
     # cookie; turned on with HTTPS in T26b (D28).
     cookie_secure: bool = False
+    # D24's limits. Only the load test turns them off (D33): its 1,000 fake
+    # users all come from one laptop, so the per-IP limits would stop it.
+    rate_limits_enabled: bool = True
 
     # Where RabbitMQ lives: notification jobs (D25).
     rabbitmq_url: str
@@ -51,6 +55,14 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     # Who the push services can contact about our pushes: a mailto: address.
     vapid_subject: str = ""
+
+    @model_validator(mode="after")
+    def _limits_stay_on_in_production(self):
+        # COOKIE_SECURE is on only behind HTTPS, so only on a real server.
+        # There, limits off stops the app from starting at all (D33).
+        if self.cookie_secure and not self.rate_limits_enabled:
+            raise ValueError("RATE_LIMITS_ENABLED=false is only for the load test, never with COOKIE_SECURE=true")
+        return self
 
 
 settings = Settings()

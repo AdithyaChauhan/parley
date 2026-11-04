@@ -8,6 +8,7 @@ import redis
 from fastapi import HTTPException, status
 
 from app import metrics
+from app.config import settings
 
 # The Redis clients made in T20 (D22). Used as presence.client, like tickets.py.
 from app.presence import service as presence
@@ -94,6 +95,10 @@ def clear(key: str) -> None:
 def enforce(rule: Rule, who: object) -> None:
     """hit() for one of the rules above, for the routes: a refusal becomes
     429 "Too many requests" with Retry-After, the seconds to wait."""
+    # Switched off only for the load test (D33). config.py refuses this on a
+    # real server, so production always has its limits.
+    if not settings.rate_limits_enabled:
+        return
     wait = hit(key(rule, who), rule.limit, rule.window_seconds)
     if wait:
         metrics.RATE_LIMITED.labels(rule.name).inc()

@@ -2,6 +2,10 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+from pydantic import ValidationError
+
+from app.config import Settings, settings
 from app.limits import service as limits
 from app.presence import service as presence
 
@@ -95,3 +99,22 @@ def test_requests_at_the_same_moment_never_get_past_the_limit(client):
     assert waits.count(0) == 20
     # The 30 refused ones took themselves back out.
     assert presence.client.zcard("limit:test:ana") == 20
+
+
+def test_the_app_refuses_to_start_with_limits_off_on_a_real_server():
+    # COOKIE_SECURE=true means HTTPS, so a real server: limits off is refused (D33).
+    with pytest.raises(ValidationError, match="only for the load test"):
+        Settings(cookie_secure=True, rate_limits_enabled=False)
+    # Production (limits on) and the load test on the laptop (no HTTPS) both start.
+    assert Settings(cookie_secure=True, rate_limits_enabled=True).rate_limits_enabled
+    assert not Settings(cookie_secure=False, rate_limits_enabled=False).rate_limits_enabled
+
+
+def test_with_limits_off_the_21st_send_gets_through(client, sign_up, monkeypatch):
+    # Like the load test's backends (D33). monkeypatch puts it back after the test.
+    monkeypatch.setattr(settings, "rate_limits_enabled", False)
+    ana = sign_up("Ana")
+    sign_up("Ben")
+    chat_id = _start_chat(client, ana, "ben@example.com")
+
+    assert [_send(client, ana, chat_id).status_code for _ in range(21)] == [201] * 21

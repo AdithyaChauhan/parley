@@ -1,0 +1,49 @@
+{
+  "run": "2026-11-04_1918-e",
+  "scenario": "e-failover",
+  "ended_at": "2026-11-04T13:59:18.089Z",
+  "duration_s": 600,
+  "users": 1000,
+  "sent": 1342,
+  "received": 1339,
+  "lost": 3,
+  "caught_up": 0,
+  "over_1s": 4,
+  "send_failed_rate": 0.7258986928104575,
+  "http_failed_rate": 0.5688946222688059,
+  "connect_failed": 2508,
+  "line_drops": 502,
+  "e2e_ms": {
+    "min": 20,
+    "med": 31,
+    "p(95)": 94.3,
+    "p(99)": 348.5,
+    "max": 4074,
+    "count": 1339
+  },
+  "send_ms": {
+    "min": 25,
+    "med": 41,
+    "p(95)": 134,
+    "p(99)": 487.8,
+    "max": 34084,
+    "count": 1342
+  },
+  "connect_ms": {
+    "med": 25,
+    "p(95)": 60,
+    "p(99)": 160,
+    "max": 234,
+    "count": 1000,
+    "min": 18
+  },
+  "hello_wait_ms": {
+    "med": 9,
+    "p(95)": 23,
+    "p(99)": 55,
+    "max": 98,
+    "count": 1000,
+    "min": 1
+  },
+  "stages": {}
+}
