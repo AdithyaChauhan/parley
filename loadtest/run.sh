@@ -40,7 +40,8 @@ run_k6() {
   local out=()
   if [ "${2:-}" = rw ]; then out=(-o experimental-prometheus-rw --tag testid="$1"); fi
   # A failed threshold (scenario d's steps) makes k6 exit with 99: still save.
-  $LOAD run --rm k6 run --quiet "${out[@]}" -e RUN_ID="$1" -e MONITORING="${3:-on}" "/scripts/$SCRIPT" \
+  $LOAD run --rm k6 run --quiet "${out[@]}" -e RUN_ID="$1" -e MONITORING="${3:-on}" \
+    -e START_EVERY_S="${START_EVERY_S:-}" "/scripts/$SCRIPT" \
     || echo "(k6 exited with $?)"
 }
 
@@ -88,8 +89,10 @@ if grep -q '"sent"' "$RESULTS/$RUN_ID.json" 2>/dev/null; then
 else
   echo "(no messages in this scenario)"
 fi
-# Does each copy still answer? A copy whose database connections all leaked
-# freezes for good (docs/load-test.md). In scenario e, backend_a is stopped.
+# Did it recover by itself (D34)? Nothing stuck in PostgreSQL, and each copy
+# answers. In scenario e, backend_a is stopped.
+STUCK="$(docker compose exec -T db psql -U "$POSTGRES_USER" -d parley_load -tAc "select count(*) from pg_stat_activity where state = 'idle in transaction'")"
+echo "Idle in transaction after the run: $STUCK" | tee -a "$RESULTS/$RUN_ID.db.txt"
 for copy in backend_a backend_b; do
   echo "$copy after the run: $($LOAD exec -T web wget -qO- -T 5 "http://$copy:8000/api/health" 2>/dev/null || echo "no answer")"
 done | tee -a "$RESULTS/$RUN_ID.db.txt"

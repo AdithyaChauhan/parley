@@ -1,5 +1,5 @@
 import { useRef, useState } from "react"
-import { api, ApiError, isUnreachable } from "@/lib/api"
+import { api, ApiError, isBusy, isUnreachable } from "@/lib/api"
 import { announce, useLiveEvents } from "@/lib/live"
 import type { Message, ServerMessage } from "./types"
 
@@ -11,8 +11,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 // keeps sending after you switch chats, and a "Not sent" message is still there when you come back.
 //   - No answer (offline, or the server is down): the message waits, with
 //     everything after it, until the line is back. Then they go out in order.
-//   - Too many sends (429, D24): the same "waiting", but it goes again by itself
-//     after the server's Retry-After, still in order.
+//   - Too many sends (429, D24) or a busy server (503, D34): the same "waiting",
+//     but it goes again by itself after the server's Retry-After, still in order.
 //   - A real refusal (like 422): "Not sent, tap to retry", and the next one goes on.
 // Each message keeps its clientMsgId for every try, so if one did get through
 // before the drop, the server hands back that first copy instead of a double (D18).
@@ -52,7 +52,7 @@ export function useOutbox(myId: string) {
         } catch (error) {
           const waitAll = () =>
             update(chatId, (list) => list.map((m) => (m.status === "failed" ? m : { ...m, status: "waiting" })))
-          if (error instanceof ApiError && error.status === 429) {
+          if ((error instanceof ApiError && error.status === 429) || isBusy(error)) {
             // Slow down: this one and everything after it wait, then the loop
             // picks up the oldest again. The queue stays busy meanwhile, so nothing overtakes it.
             waitAll()

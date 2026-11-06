@@ -1,0 +1,36 @@
+{
+  "run": "2026-11-06_1622-c",
+  "scenario": "c-storm",
+  "ended_at": "2026-11-06T10:56:42.208Z",
+  "duration_s": 206,
+  "users": 1000,
+  "sent": 0,
+  "received": 0,
+  "lost": 0,
+  "caught_up": 0,
+  "over_1s": 0,
+  "send_failed_rate": 0,
+  "send_busy": 0,
+  "send_gave_up": 0,
+  "http_failed_rate": 0.17108167770419427,
+  "connect_failed": 257,
+  "connect_busy": 0,
+  "line_drops": 0,
+  "connect_ms": {
+    "count": 1000,
+    "min": 29,
+    "med": 6121,
+    "p(95)": 8656.7,
+    "p(99)": 10526.2,
+    "max": 10943
+  },
+  "hello_wait_ms": {
+    "p(95)": 7973.6,
+    "p(99)": 9718.1,
+    "max": 9854,
+    "count": 1000,
+    "min": 1,
+    "med": 5468
+  },
+  "stages": {}
+}

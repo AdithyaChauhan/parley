@@ -1,0 +1,70 @@
+{
+  "run": "2026-11-06_1559-logins",
+  "scenario": "logins",
+  "ended_at": "2026-11-06T10:34:48.326Z",
+  "duration_s": 256,
+  "steps": [
+    {
+      "rate": 2,
+      "ok": 61,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 138,
+      "p95_ms": 405,
+      "max_ms": 472,
+      "busy_p95_ms": 0
+    },
+    {
+      "rate": 3,
+      "ok": 91,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 126,
+      "p95_ms": 256,
+      "max_ms": 844,
+      "busy_p95_ms": 0
+    },
+    {
+      "rate": 4,
+      "ok": 121,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 118,
+      "p95_ms": 180,
+      "max_ms": 243,
+      "busy_p95_ms": 0
+    },
+    {
+      "rate": 6,
+      "ok": 179,
+      "busy": 2,
+      "failed": 0,
+      "p50_ms": 238,
+      "p95_ms": 2765,
+      "max_ms": 3600,
+      "busy_p95_ms": 2035
+    },
+    {
+      "rate": 8,
+      "ok": 240,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 134,
+      "p95_ms": 392,
+      "max_ms": 676,
+      "busy_p95_ms": 0
+    },
+    {
+      "rate": 10,
+      "ok": 300,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 1358,
+      "p95_ms": 1904,
+      "max_ms": 2146,
+      "busy_p95_ms": 0
+    }
+  ],
+  "failed_total": 0,
+  "dropped": 1
+}

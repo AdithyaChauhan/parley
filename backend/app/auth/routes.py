@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import busy
 from app.auth.deps import get_current_user
 from app.auth.models import User, UserSession
 from app.auth.schemas import LoginRequest, SignupRequest, TokenOut, UserOut
@@ -17,7 +18,7 @@ from app.auth.security import (
     verify_password,
 )
 from app.config import settings
-from app.db import get_db
+from app.db import SessionLocal
 from app.limits import service as limits
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -85,30 +86,35 @@ def _find_session(
 # --- Routes ---
 
 
-@router.post("/signup", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
-def signup(body: SignupRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+@router.post(
+    "/signup", response_model=TokenOut, status_code=status.HTTP_201_CREATED, dependencies=[busy.PASSWORD_SLOT]
+)
+def signup(body: SignupRequest, request: Request, response: Response):
     limits.enforce(limits.SIGNUP_IP, _ip(request))
 
     user = User(name=body.name, email=body.email, password_hash=hash_password(body.password))
-    db.add(user)
-    try:
-        db.commit()
-    except IntegrityError:
-        # The UNIQUE rule on users.email refused the row: the email is taken.
-        db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+    with SessionLocal() as db:
+        db.add(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            # The UNIQUE rule on users.email refused the row: the email is taken.
+            db.rollback()
+            raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
 
-    return _start_session(db, user, response)
+        return _start_session(db, user, response)
 
 
-@router.post("/login", response_model=TokenOut)
-def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+@router.post("/login", response_model=TokenOut, dependencies=[busy.PASSWORD_SLOT])
+def login(body: LoginRequest, request: Request, response: Response):
     # Both counted before the password is checked (D24): a locked email is
     # refused even with the right password, and never costs a slow hash check.
     limits.enforce(limits.LOGIN_IP, _ip(request))
     limits.enforce(limits.LOGIN_EMAIL, body.email)
 
-    user = db.scalar(select(User).where(User.email == body.email))
+    # Closed before the slow password check, which needs no connection (D34).
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == body.email))
 
     password_hash = user.password_hash if user else _DUMMY_PASSWORD_HASH
     if not verify_password(body.password, password_hash) or user is None:
@@ -117,44 +123,45 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
     # A good log-in: this email's count starts again from 0, so only
     # failures since the last good log-in count.
     limits.clear(limits.key(limits.LOGIN_EMAIL, body.email))
-    return _start_session(db, user, response)
+    with SessionLocal() as db:
+        return _start_session(db, user, response)
 
 
-@router.post("/refresh", response_model=TokenOut)
+@router.post("/refresh", response_model=TokenOut, dependencies=[busy.REQUEST_SLOT])
 def refresh(
     response: Response,
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
-    db: Session = Depends(get_db),
 ):
-    # Locked: if two refreshes bring the same cookie at once, the second waits.
-    # By then the first has saved a new fingerprint, so the old cookie no
-    # longer matches and the second gets 401 instead of rotating it again.
-    session = _find_session(db, refresh_token, lock=True)
-    now = datetime.now(timezone.utc)
-    if session is None or session.revoked_at is not None or session.expires_at <= now:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired, please log in again")
+    with SessionLocal() as db:
+        # Locked: if two refreshes bring the same cookie at once, the second waits.
+        # By then the first has saved a new fingerprint, so the old cookie no
+        # longer matches and the second gets 401 instead of rotating it again.
+        session = _find_session(db, refresh_token, lock=True)
+        now = datetime.now(timezone.utc)
+        if session is None or session.revoked_at is not None or session.expires_at <= now:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired, please log in again")
 
-    # Rotate: a new refresh token replaces the old one in the same row,
-    # so the old one stops matching anything.
-    new_token = new_refresh_token()
-    session.refresh_token_hash = hash_refresh_token(new_token)
-    session.expires_at = now + timedelta(days=REFRESH_TOKEN_DAYS)
-    db.commit()
+        # Rotate: a new refresh token replaces the old one in the same row,
+        # so the old one stops matching anything.
+        new_token = new_refresh_token()
+        session.refresh_token_hash = hash_refresh_token(new_token)
+        session.expires_at = now + timedelta(days=REFRESH_TOKEN_DAYS)
+        db.commit()
 
-    _set_refresh_cookie(response, new_token)
-    return TokenOut(access_token=create_access_token(session.user_id, session.id))
+        _set_refresh_cookie(response, new_token)
+        return TokenOut(access_token=create_access_token(session.user_id, session.id))
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, dependencies=[busy.REQUEST_SLOT])
 def logout(
     response: Response,
     refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
-    db: Session = Depends(get_db),
 ):
-    session = _find_session(db, refresh_token)
-    if session is not None and session.revoked_at is None:
-        session.revoked_at = datetime.now(timezone.utc)
-        db.commit()
+    with SessionLocal() as db:
+        session = _find_session(db, refresh_token)
+        if session is not None and session.revoked_at is None:
+            session.revoked_at = datetime.now(timezone.utc)
+            db.commit()
 
     # Must use the same settings as when it was set (path, Secure), or the
     # browser keeps it (D28).
@@ -163,6 +170,6 @@ def logout(
     )
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=UserOut, dependencies=[busy.REQUEST_SLOT])
 def me(user: User = Depends(get_current_user)):
     return user

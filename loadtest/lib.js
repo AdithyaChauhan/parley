@@ -21,10 +21,9 @@ const LIVE = BASE.replace(/^http/, "ws") + "/api/live";
 // SharedArray is read once and shared by every user, not copied 1,000 times.
 const TOKENS = new SharedArray("sessions", () => JSON.parse(open("./sessions.json")));
 // Users start 10 a second: 1,000 are ready in ~100 s. At 50 a second (D33's
-// plan), the start-up burst ran each copy out of its 15 database connections,
-// and requests that gave up after 60 s never gave theirs back (see
-// docs/load-test.md). This keeps the start out of the measurements.
-const START_EVERY_S = 0.1;
+// plan), the start-up burst froze the old code (see docs/load-test.md). This
+// keeps the start out of the measurements, and the same as T31's "before" runs.
+const START_EVERY_S = Number(__ENV.START_EVERY_S) || 0.1;
 
 // Timings, in milliseconds.
 const e2e = new Trend("e2e_latency", true); // send → the partner's live line has it
@@ -39,8 +38,16 @@ const received = new Counter("msgs_received"); // partner messages seen, each on
 const caughtUp = new Counter("msgs_caught_up"); // ...that came by catch-up, not live
 const late = new Counter("msgs_late"); // ...that took over 1 s
 const sendFailed = new Rate("send_failed"); // send tries that didn't get 201/200
-const connectFailed = new Counter("connect_failed"); // no ticket, or no hello within 10 s
+const sendBusy = new Counter("send_busy"); // ...of which a quick 503 "busy" (D34)
+const sendGaveUp = new Counter("send_gave_up"); // sends still not through when the chat ended
+const busyTime = new Trend("busy_time", true); // how fast a send's 503 came
+const connectFailed = new Counter("connect_failed"); // no hello within 10 s, or a broken ticket reply
+const connectBusy = new Counter("connect_busy"); // a ticket 503 "busy" (D34): tries again, like the app
 const lineDrops = new Counter("line_drops"); // a working line that closed on us
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A 503 "busy" says when to come back (D34).
+const retryAfter = (reply) => Number(reply.headers["Retry-After"]) || 1;
 
 // The k6 settings every scenario shares.
 export function optionsFor(plan, extra = {}) {
@@ -79,13 +86,20 @@ export async function fakeUser(plan) {
   // the refresh cookie buys a 15-minute access token, with no password check
   // (D16, D33). Then find my one chat (the app gets it from the chat list too).
   sleep(Math.max(0, at((i - 1) * START_EVERY_S) - Date.now()) / 1000);
-  const session = http.post(`${BASE}/api/auth/refresh`, null, {
-    cookies: { refresh_token: TOKENS[i - 1] },
-    tags: { name: "refresh" },
-  });
+  // A 503 "busy" did nothing yet, so it's safe to ask again (D34).
+  const untilNotBusy = (ask) => {
+    for (;;) {
+      const reply = ask();
+      if (reply.status !== 503) return reply;
+      sleep(retryAfter(reply));
+    }
+  };
+  const session = untilNotBusy(() =>
+    http.post(`${BASE}/api/auth/refresh`, null, { cookies: { refresh_token: TOKENS[i - 1] }, tags: { name: "refresh" } }),
+  );
   if (session.status !== 200) return; // counted in http_req_failed
   const auth = { headers: { Authorization: `Bearer ${session.json("access_token")}`, "Content-Type": "application/json" } };
-  const [myChat] = http.get(`${BASE}/api/chats`, { ...auth, tags: { name: "chats" } }).json();
+  const [myChat] = untilNotBusy(() => http.get(`${BASE}/api/chats`, { ...auth, tags: { name: "chats" } })).json();
   const chat = myChat.id;
   const partner = myChat.other_user_id;
 
@@ -105,7 +119,7 @@ export async function fakeUser(plan) {
     const asked = Date.now();
     const reply = await http.asyncRequest("POST", `${BASE}/api/live/ticket`, null, { ...auth, tags: { name: "ticket" } });
     if (reply.status !== 200) {
-      connectFailed.add(1);
+      (reply.status === 503 ? connectBusy : connectFailed).add(1);
       return retryLater();
     }
 
@@ -213,6 +227,10 @@ export async function fakeUser(plan) {
           ...auth,
           tags: { name: "catch-up" },
         });
+        if (reply.status === 503) {
+          await wait(retryAfter(reply) * 1000);
+          continue;
+        }
         if (reply.status !== 200) break;
         const page = reply.json();
         page.messages.forEach((m) => gotMessage(m, "catchup"));
@@ -227,14 +245,16 @@ export async function fakeUser(plan) {
     }
   }
 
-  // 4. Sending: one at a time, like the app's outbox. A failed try goes
-  // again after 1 s with the same id, so it's never saved twice (D18).
+  // 4. Sending: one at a time, like the app's outbox. A failed try goes again
+  // with the same id, so it's never saved twice (D18): after Retry-After for a
+  // 503 "busy" (D34), or after 1 s. It stops 20 s after the chat ends, in time
+  // for the partner's last catch-up.
   async function sendOne(stage) {
     const first = Date.now();
     const tags = stage ? { stage } : {};
     // The time goes inside the message, so the partner can work out end to end.
     const payload = JSON.stringify({ client_msg_id: crypto.randomUUID(), body: JSON.stringify({ t: first, s: stage }) });
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    while (now() < plan.chatUntil + 20) {
       const reply = await http.asyncRequest("POST", `${BASE}/api/chats/${chat}/messages`, payload, {
         ...auth,
         tags: { name: "send" },
@@ -247,8 +267,15 @@ export async function fakeUser(plan) {
         sent.add(1, tags);
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (reply.status === 503) {
+        sendBusy.add(1, tags);
+        busyTime.add(reply.timings.duration, tags);
+        await wait(retryAfter(reply) * 1000);
+      } else {
+        await wait(1000);
+      }
     }
+    sendGaveUp.add(1, tags);
   }
 
   // When this user sends next, after `from` (seconds since the start). Each
@@ -305,9 +332,13 @@ export function summaryFor(scenario, plan) {
       caught_up: count("msgs_caught_up"),
       over_1s: count("msgs_late"),
       send_failed_rate: values("send_failed")?.rate ?? 0,
+      send_busy: count("send_busy"),
+      send_gave_up: count("send_gave_up"),
       http_failed_rate: values("http_req_failed")?.rate ?? 0,
       connect_failed: count("connect_failed"),
+      connect_busy: count("connect_busy"),
       line_drops: count("line_drops"),
+      busy_ms: round(values("busy_time")),
       e2e_ms: round(values("e2e_latency")),
       send_ms: round(values("send_time")),
       connect_ms: round(values("connect_time")),
@@ -326,9 +357,11 @@ export function summaryFor(scenario, plan) {
     const text =
       `\n${scenario}: ${results.sent} sent · ${results.received} received · lost ${results.lost}` +
       ` (caught up ${results.caught_up}, over 1 s ${results.over_1s})\n` +
-      `failed sends ${(results.send_failed_rate * 100).toFixed(2)}% · failed connects ${results.connect_failed} · line drops ${results.line_drops}\n` +
+      `failed sends ${(results.send_failed_rate * 100).toFixed(2)}% (busy ${results.send_busy}, gave up ${results.send_gave_up})` +
+      ` · failed connects ${results.connect_failed} (busy ${results.connect_busy}) · line drops ${results.line_drops}\n` +
       line("end to end", results.e2e_ms) +
       line("send → 201", results.send_ms) +
+      line("send → 503", results.busy_ms) +
       line("connect", results.connect_ms) +
       line("open → hello", results.hello_wait_ms) +
       line("reconnect", results.reconnect_ms);

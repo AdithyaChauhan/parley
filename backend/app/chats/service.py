@@ -170,9 +170,13 @@ def save_bookmark(
             "read_up_to": moved.read_up_to,
         },
     }
-    # It moved, so they're a member: no stranger gets the receipt. Never raises:
-    # with Redis down the bookmark is still saved, and the ticks catch up later (D24).
-    bus.publish(member_ids(db, chat_id), receipt)
+    # It moved, so they're a member: no stranger gets the receipt.
+    members = member_ids(db, chat_id)
+    # The connection goes back before the push, so a slow Redis can't hold it (D34).
+    db.close()
+    # Never raises: with Redis down the bookmark is still saved, and the ticks
+    # catch up later (D24).
+    bus.publish(members, receipt)
     return moved
 
 
@@ -203,6 +207,9 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
         query = query.where(Chat.id == chat_id)
 
     rows = list(db.execute(query))
+    # The connection goes back before Redis, so a slow Redis can't hold it (D34).
+    # The rows keep their values.
+    db.close()
     # Everyone's online status in one trip to Redis, not one per row (D24).
     # From Redis, not the database: a fast, temporary fact (D22).
     found = presence.statuses([other_id for _, _, other_id, _, _ in rows if other_id is not None])

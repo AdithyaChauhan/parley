@@ -5,9 +5,9 @@
 import { fakeUser, optionsFor, summaryFor } from "./lib.js";
 
 const USERS = 1000;
-// Messages per second, all users together. It starts at 10, because b
-// showed 50 a second already freezes both copies on this laptop.
-const RATES = [10, 20, 30, 40, 50];
+// Messages per second, all users together. The same steps as T31's "before"
+// run, plus 60, in case the limit has moved up (D34).
+const RATES = [10, 20, 30, 40, 50, 60];
 const STEP_S = 100;
 // Everyone is connected ~100 s after the start (10 a second).
 const CHAT_FROM = 120;
@@ -33,6 +33,8 @@ export const options = optionsFor(plan, {
       [`e2e_latency{stage:${rate}}`, ["p(95)<500"]],
       [`send_failed{stage:${rate}}`, ["rate<0.01"]],
       [`msgs_sent{stage:${rate}}`, ["count>=0"]],
+      [`send_busy{stage:${rate}}`, ["count>=0"]],
+      [`busy_time{stage:${rate}}`, ["max>=0"]],
     ]),
   ),
 });

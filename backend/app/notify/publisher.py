@@ -9,7 +9,7 @@ import pika
 import pika.exceptions
 from pika.adapters.blocking_connection import BlockingChannel
 
-from app.messages.models import Message
+from app.messages.schemas import MessageOut
 from app.notify import queues
 
 log = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def _publish_locked(jobs: list[dict]) -> None:
         log.exception("Notification jobs lost")
 
 
-def publish(message: Message, recipient_ids: list[uuid.UUID]) -> None:
+def publish(message: MessageOut, recipient_ids: list[uuid.UUID]) -> None:
     """Drop one job per recipient into notify.wait, after the message is saved
     (D25). Ids and numbers only, never the text (D12). Never raises and never
     waits long: if RabbitMQ is down, the send still succeeds and these

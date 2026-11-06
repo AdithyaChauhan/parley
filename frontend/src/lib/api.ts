@@ -20,7 +20,8 @@ export function setOnLoggedOut(callback: () => void) {
 export class ApiError extends Error {
   status: number
   body: unknown
-  // For a 429 "too many" (D24): seconds to wait before trying again, from the Retry-After header
+  // For a 429 "too many" (D24) or a 503 "busy" (D34): seconds to wait before
+  // trying again, from the Retry-After header
   retryAfter: number | null
 
   constructor(status: number, body: unknown, retryAfter: number | null = null) {
@@ -34,6 +35,12 @@ export class ApiError extends Error {
 // The backend is stopped or broken. (When FastAPI is down, Vite's proxy answers with a 5xx.)
 export function isUnreachable(error: unknown) {
   return error instanceof ApiError && (error.status === 0 || error.status >= 500)
+}
+
+// The backend answered "busy, try again" (D34): a 503 that says when to come
+// back. A 503 with no Retry-After means something else, like live updates being down.
+export function isBusy(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 503 && error.retryAfter !== null
 }
 
 type Options = { method?: string; body?: unknown }
@@ -84,7 +91,7 @@ async function refreshOnce(): Promise<boolean> {
   }
 
   if (response.status === 401) return false // the session is really over
-  if (!response.ok) throw new ApiError(response.status, await readBody(response))
+  if (!response.ok) throw new ApiError(response.status, await readBody(response), readRetryAfter(response))
 
   const { access_token } = (await response.json()) as { access_token: string }
   accessToken = access_token

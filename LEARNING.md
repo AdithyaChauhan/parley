@@ -1473,7 +1473,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - `docs/load-test.md`: the write-up, with 4 dashboard screenshots in `docs/load-test/`.
 - Found along the way:
   - Logins at 10 a second freeze in argon2's memory (64 MB per check), so fake users start from saved sessions instead (D33, option A).
-  - **The big one:** when a request waits so long that Nginx gives up (60 s), its database session is never closed, so its connection stays "idle in transaction" for good. After 15 of those, a copy freezes until it's restarted. That happened in the storm (c), at 50 messages/s (b), after a failover (e), and above ~30 messages/s (d).
+  - (Corrected in the next section: this was a deadlock, not a leak.) **The big one:** when a request waits so long that Nginx gives up (60 s), its database session is never closed, so its connection stays "idle in transaction" for good. After 15 of those, a copy freezes until it's restarted. That happened in the storm (c), at 50 messages/s (b), after a failover (e), and above ~30 messages/s (d).
   - Even at 50 users a second, the start-up burst froze the copies. Starting 10 a second keeps the start out of the measurements.
   - Nginx answers 502 for a few seconds after the backends are switched, until it looks the names up again (D28). `run.sh` waits 12 s.
   - A k6 limit only counts one step if each step has its own threshold. Per-user timers lag behind a rate change, so users send at random moments (a Poisson process) instead.
@@ -1486,7 +1486,7 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - p50 / p95 / p99: half, 19 in 20 and 99 in 100 waited less than this.
 - Bottleneck: the first thing that runs out. Here, database connections (15 per copy) ran out while the CPUs were nearly idle.
 - Connection pool: a few database connections kept open and lent to requests. When all are lent out, the next request waits.
-- "Idle in transaction": a connection that started a transaction and then went quiet without finishing it. Here it meant connections that were lent out and never given back (a leak).
+- "Idle in transaction": a connection that started a transaction and then went quiet without finishing it. Here it meant requests holding a connection while they waited for a thread (T31 first called it a leak; the next section corrects that).
 - Thread dump: what every thread is doing at one moment (py-spy). It showed 40 threads all waiting for the pool.
 - Remote write: k6 pushes its numbers to Prometheus, instead of Prometheus asking.
 - Native histogram: timings Prometheus can turn into p95 for any stretch of time.
@@ -1495,5 +1495,51 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 
 **In my words** (draft by Claude Code, for Adithya to keep or rewrite)
 - What end-to-end latency is, and why it matters more than the send time: the send time only says the server saved my message. End to end says when my friend's phone actually has it, which is what a chat user feels. Here it was 28 ms (p50) at 20 messages a second, and about 1 s (p95) at 30.
-- What the bottleneck was, and how I found it on the dashboard: database connections. Messages per minute climbed, then fell to zero, while latency jumped to 10 s, Postgres connections jumped to ~33 (both pools full), and CPU stayed low. Postgres showed the connections as "idle in transaction", and the thread dump showed every thread waiting for one. Requests that were given up never handed their connection back.
+- What the bottleneck was, and how I found it on the dashboard (the next section corrects the cause: a deadlock, not a leak): database connections. Messages per minute climbed, then fell to zero, while latency jumped to 10 s, Postgres connections jumped to ~33 (both pools full), and CPU stayed low. Postgres showed the connections as "idle in transaction", and the thread dump showed every thread waiting for one. Requests that were given up never handed their connection back.
 - Why the load test needs its own database and its own limits switch, and how production is protected: the seed wipes and refills its database, so it only runs on a name ending in `_load` and never touches my dev chats. The 1,000 fake users all come from one laptop, so D24's per-IP limits would block them. The switch is off only in the load test's Compose file, and the app refuses to start with limits off when `COOKIE_SECURE` is on, which is true only on the HTTPS server.
+
+---
+
+### Fix: Parley under load (D34)
+**What was built**
+- `backend/app/db.py`:
+  - `CAPACITY = 8`: one number for connections, threads and requests at work on each copy, so none of them waits for another.
+  - `pool_size=8, max_overflow=0, pool_timeout=2`: a steady pool, with a short wait as a backstop.
+  - `idle_in_transaction_session_timeout=60s`: PostgreSQL's safety net, set on each app connection.
+  - `get_db` is gone. Every route now opens `with SessionLocal() as db:` inside its own work, the way the worker and the live line already did.
+- `backend/app/busy.py` (new): the gates.
+  - `REQUEST_SLOT`: at most 8 requests at work per copy. Others wait up to 3 s, then get 503 "Busy, try again" with `Retry-After` (1-3 s at random).
+  - `PASSWORD_SLOT`: at most 3 password checks per copy, waiting up to 2 s. Covers sign-up and log-in.
+  - Both are async dependencies, so waiting costs no thread and no connection.
+- `backend/app/main.py`: sets the thread limit in `lifespan`, gives the routers their gate, and turns a pool timeout into the same 503.
+- `backend/app/auth/deps.py`: `get_current_user` uses its own short session and closes it before the route runs. This is the line that ends the deadlock.
+- `backend/app/auth/routes.py`: the password check runs with no connection held.
+- `backend/app/messages/routes.py`, `backend/app/chats/service.py`: read what's needed, close the session, then talk to Redis and RabbitMQ.
+- `backend/app/live/routes.py`: on the live line, a busy database drops that one event, not the line.
+- `frontend/src/lib/api.ts`: `isBusy()`, a 503 with `Retry-After`. `useOutbox.ts` retries a send on it, like a 429. `serverErrors.ts` and `NewChatBox.tsx` show "Busy, try again in a moment."
+- Tests:
+  - `test_under_load.py` (new): a real uvicorn and real sockets, since TestClient can't hang up or land 150 requests together.
+  - `test_busy.py` (new): no connection held during pushes, a full pool gives 503, every working route has a gate, the live line survives a busy database. 151 pass.
+- `loadtest/`: the fake user waits for `Retry-After` on a 503. `logins.js` has 8 and 10/s steps and counts 503s. `d-limit.js` has a 60/s step. `run.sh` also checks for sessions left idle in transaction.
+- `docs/load-test.md`: before and after tables, and the corrected explanation.
+- Found along the way:
+  - **T31 had the cause wrong.** It wasn't a leak. Hanging up and cancelling both gave the connection back. Landing 150 requests at once froze the old code with nobody hanging up.
+  - 15 threads weren't better than 8. Python runs one at a time, and busy threads take turns away from the event loop.
+  - A laptop short of memory changes everything: the first old-code login run collapsed even at 2/s while Windows was paging hard.
+
+**New ideas**
+- Deadlock: two groups each hold what the other needs, so nobody moves. Here requests held connections and wanted threads, while threads wanted connections.
+- Thread pool: a fixed set of threads that run normal (`def`) routes. FastAPI hops to it for each dependency and each route, and a request can wait at every hop.
+- Fail fast: answer "no" quickly instead of waiting. A quick refusal costs little, and the client knows what to do.
+- Load shedding: refusing some work on purpose when overloaded, so the work you accept still finishes.
+- Semaphore: a counter of free slots. Take one to go in, give it back on the way out, and wait if there are none.
+- GIL: Python's lock that lets only one thread run Python at a time. So threads help with waiting (database, network) but not with CPU.
+- Event loop: the single thread that handles all the async work, like pings and pushes. If it can't get a turn, everything lags.
+- Goodput: the useful work that gets through. Past the limit, requests per second can go up while goodput goes down, because refusals cost CPU too.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- What this fix does: under load, Parley used to freeze until someone restarted it. A request held a database connection while it waited for a thread, and the threads waited for a connection, so everything stopped. Now no request holds a connection while it waits. If a copy is too busy, the request gets a quick 503 and the app sends it again with the same id, so nothing is lost or doubled. In the re-runs nothing froze and every saved message arrived.
+- How I found the real cause: my load test blamed a leak from cancelled requests, so I tried to prove that first. Hanging up gave the connection back, and so did cancelling. Then I landed 150 requests at once with nobody hanging up, and got the exact freeze: 15 connections idle in transaction and all 40 threads waiting. The first explanation fit the evidence, but the test showed it was wrong.
+- Why threads, connections and slots are one number: if a request at work always finds a thread, and a thread always finds a connection, nothing waits on anything else. I tried 5, 8 and 15. Throughput was the same, because Python runs one thread at a time, and 8 was the only one with no dropped lines. So the limit is now CPU per copy, and more copies are the next step.
+- What I'd check first if it broke: the dashboard's 503s by route, then each copy's CPU, then `pg_stat_activity` for sessions idle in transaction. Many 503s with high CPU means real overload. Sessions stuck idle in transaction mean a new bug.
+- What still confuses me: why accepted messages per second fall so far past the limit. Refused requests clearly cost CPU, but I haven't measured exactly where it goes.

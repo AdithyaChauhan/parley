@@ -1,0 +1,40 @@
+{
+  "run": "2026-11-06_1800-logins-flood",
+  "scenario": "logins",
+  "ended_at": "2026-11-06T12:32:57.897Z",
+  "duration_s": 122,
+  "steps": [
+    {
+      "rate": 10,
+      "ok": 301,
+      "busy": 0,
+      "failed": 0,
+      "p50_ms": 223,
+      "p95_ms": 975,
+      "max_ms": 1542,
+      "busy_p95_ms": 0
+    },
+    {
+      "rate": 20,
+      "ok": 372,
+      "busy": 201,
+      "failed": 0,
+      "p50_ms": 2421,
+      "p95_ms": 2588,
+      "max_ms": 2715,
+      "busy_p95_ms": 2051
+    },
+    {
+      "rate": 30,
+      "ok": 301,
+      "busy": 537,
+      "failed": 0,
+      "p50_ms": 2542,
+      "p95_ms": 2899,
+      "max_ms": 4031,
+      "busy_p95_ms": 2538
+    }
+  ],
+  "failed_total": 0,
+  "dropped": 90
+}

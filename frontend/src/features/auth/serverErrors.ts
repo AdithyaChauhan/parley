@@ -1,4 +1,4 @@
-import { ApiError, isUnreachable } from "@/lib/api"
+import { ApiError, isBusy, isUnreachable } from "@/lib/api"
 
 type FormErrors = {
   fields: Record<string, string> // shown under that field
@@ -20,6 +20,8 @@ export function serverErrors(error: unknown): FormErrors {
       if (Object.keys(fields).length > 0) return { fields, form: "" }
     }
   }
+  // Too many password checks at once (D34). Checked before "unreachable": it answered.
+  if (isBusy(error)) return { fields: {}, form: "Busy, try again in a moment." }
   if (isUnreachable(error)) return { fields: {}, form: "Can't reach Parley. Try again." }
   return { fields: {}, form: "Something went wrong. Try again." }
 }

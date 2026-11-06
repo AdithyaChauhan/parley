@@ -1,18 +1,19 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import APIRouter, Depends, FastAPI, Response
+import anyio.to_thread
+import sqlalchemy.exc
+from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
 
-from app import metrics
+from app import busy, metrics
 from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
 from app.config import settings
-from app.db import get_db
+from app.db import CAPACITY, SessionLocal
 from app.live import bus
 from app.live.routes import router as live_router
 from app.messages.routes import router as messages_router
@@ -23,6 +24,9 @@ from app.push.routes import router as push_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Runs once when the server starts (before yield) and once when it stops.
+    # As many threads as database connections (D34, db.py). The limit belongs to
+    # the event loop, so it's set here, inside it.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = CAPACITY
     # The live line's Redis client is made here, inside the server's own event
     # loop, and closed on the way out (D22).
     presence.start()
@@ -45,6 +49,13 @@ app = FastAPI(title="Parley", lifespan=lifespan)
 app.middleware("http")(metrics.measure)
 
 
+# A backstop: no connection came free within the pool's timeout (db.py). The same
+# answer as a full gate (busy.py), not a bare 500.
+@app.exception_handler(sqlalchemy.exc.TimeoutError)
+async def no_connection_free(request: Request, error: sqlalchemy.exc.TimeoutError):
+    return JSONResponse(status_code=503, content={"detail": busy.DETAIL}, headers=busy.retry_after())
+
+
 # What Prometheus reads every 15 s: every number, as plain text. On the app
 # itself, outside /api on purpose: Nginx passes on only /api/, so Prometheus
 # (inside Parley's network) can read it and the internet can't (D32).
@@ -65,19 +76,22 @@ def health():
 
 
 @api.get("/health/db")
-def health_db(db: Session = Depends(get_db)):
+def health_db():
     try:
-        db.execute(text("select 1"))
+        with SessionLocal() as db:
+            db.execute(text("select 1"))
     except OperationalError:
         # The database can't be reached: say so clearly instead of a bare 500 error.
         return JSONResponse(status_code=503, content={"database": "unavailable"})
     return {"database": "ok"}
 
 
+# Each of these routes needs a slot first (D34). Auth and the live routes pick
+# theirs route by route: log-in has its own, and the live line stays open for hours.
 api.include_router(auth_router)
-api.include_router(chats_router)
-api.include_router(messages_router)
+api.include_router(chats_router, dependencies=[busy.REQUEST_SLOT])
+api.include_router(messages_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(live_router)
-api.include_router(push_router)
+api.include_router(push_router, dependencies=[busy.REQUEST_SLOT])
 # Last, after every route above is added to the /api router.
 app.include_router(api)

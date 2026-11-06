@@ -91,7 +91,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
 
 **D15. Database access style**
-- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T31) show a need.
+- SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T31) show a need. Revisited after T31 (D34): not needed, since the limit is CPU (about one core per copy), which async wouldn't lift.
 - Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
 - Config comes from `.env` through pydantic-settings. No secrets in committed files.
 
@@ -329,11 +329,11 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - `loadtest/compose.loadtest.yml` switches only the backend copies, worker and migrate to `parley_load` with limits off, and adds k6. The run script puts the normal backends back after every run. Prometheus gets `--web.enable-remote-write-receiver` (its port stays unpublished), and the dashboard gets a "Load test" row.
 - T31 results (laptop, finished Nov 4, 2026):
   - ~20 msg/s is comfortable with 1,000 users connected (end-to-end p95 80 ms). The limit is ~30 msg/s (p95 969 ms). At 40+/s it freezes.
-  - The bottleneck is database connections (15 per copy, 40 threads), not CPU (backends ≤0.9 core, Postgres ≤0.4, of 8). Abandoned requests leak their session ("idle in transaction"), and after 15 leaks a copy freezes until restarted.
+  - The freeze was a deadlock between threads and connections, not CPU (backends ≤0.9 core, Postgres ≤0.4, of 8): a request held a connection while it waited for a thread, and the threads waited for a connection (15 connections, 40 threads). T31 first called it a leak, and tests disproved that (D34).
   - Logins: fine up to ~8/s on a fresh Docker, and they collapse at 10/s (argon2 memory). With less free memory, they tipped at 6/s.
   - The D23 subscribe lock is a real queue in a storm (wait p95 1.5-2.2 s). Gradual connects are fast (p50 6 ms).
   - The first request after a quiet minute isn't slow (T30's 0.9 s didn't come back).
-  - Both bugs are fixed in "Fix: Parley under load", before T32.
+  - Fixed in D34.
 - Changes from the brief (accepted):
   - Fake users start at 10/s (50/s froze both copies).
   - d's steps are 10-50 msg/s, and e runs at ~10 msg/s.
@@ -343,10 +343,29 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - `run.sh` waits 12 s after switching backends (D28's 10 s name re-check).
 
 **D34. Parley under load (fixes from T31)**
-- A request that's cancelled or abandoned must still close its database session. A test proves it: abandon requests mid-flight, and the pool is back to 0 checked out, with no "idle in transaction" left in Postgres.
-- A send commits and releases its database connection before publishing to Redis and RabbitMQ (D9's "save first" still holds).
-- Fail fast: under overload, a request answers **503 "busy, try again"** with `Retry-After` within a few seconds, well before Nginx's 60 s, instead of waiting or freezing. The thread count and pool size are chosen together, within Postgres's connection limit.
-- The app treats a 503 on a send like a 429: it tries again after `Retry-After` with the same `client_msg_id`, in order.
-- Postgres has `idle_in_transaction_session_timeout` (~60 s) as a safety net.
-- Password checks: at most a few argon2 checks run at once per copy (64 MB each). Others wait briefly, then get 503 "busy, try again". That covers sign-up and log-in.
-- Auto-restart of a frozen copy comes with T32's liveness probe. Async SQLAlchemy (D15) only if the re-runs show it's needed.
+- What froze a copy was a deadlock: a request held a database connection while it waited for a thread, and the threads waited for a connection. It wasn't a leak: hanging up and cancelling both give the connection back (tests prove it).
+- A database session opens inside the work (`with SessionLocal() as db:`, in one thread) and closes before anything waits. There's no `get_db`. `get_current_user` has its own short session.
+- A send commits, reads what it needs and closes before publishing to Redis and RabbitMQ (D9's "save first" still holds). Receipts and the chat list's Redis read do the same.
+- One number per copy for threads, connections and requests at work: 8 (`CAPACITY`, chosen by comparing 5, 8 and 15). `pool_size` 8, `max_overflow` 0, `pool_timeout` 2 s. Postgres has ~17 of 100 connections in use.
+- Fail fast: a request waits at most 3 s for a slot, then gets 503 "Busy, try again" with `Retry-After` (1-3 s at random). A pool timeout gives the same 503. Health, metrics and the live line have no gate. `/api/health` stays a `def` route, so a copy with stuck threads fails T32's liveness probe.
+- Password checks: at most 3 at once per copy, waiting up to 2 s, then the same 503. That covers sign-up and log-in.
+- The app treats a 503 with `Retry-After` on a send like a 429: same `client_msg_id`, in order. A 503 without `Retry-After` keeps its old meaning. Log-in, sign-up and start-chat show "Busy, try again in a moment."
+- `idle_in_transaction_session_timeout` is 60 s, set on each app connection, so a deploy doesn't restart Postgres.
+- Results (laptop, Nov 6, 2026): no freeze in any run, 0 undelivered, and the limit is ~35 msg/s (it was ~30). It's now set by CPU (about one core per copy). 10 logins/s stays at ~206 MB (it was 945 MB and swapping). Other apps were open during these runs (Windows paging), so they were harder than T31's.
+- Known and accepted:
+  - Past the limit, accepted messages fall (37/s at 40 offered, 21/s at 60), because refusing costs CPU too.
+  - A live `read` or `delivered` that hits a busy database is dropped, not the line. The app's next one carries the highest number, so the tick catches up then.
+  - A page reload during overload can show the log-in screen if its refresh gets a 503 (a small fix in PLAN's Later list).
+  - D23's subscribe lock is still a queue in a storm (open → hello p50 2.6 s), but nothing freezes.
+- Auto-restart of a stuck copy comes with T32's liveness probe. Async SQLAlchemy (D15) isn't needed.
+
+**D35. Kubernetes on the laptop (T32)**
+- kind (Kubernetes in Docker), one node, pinned by D27's version rule. It runs the same way on the laptop's Docker Desktop and in CI. It's free and uses nothing on AWS.
+- Plain manifests with Kustomize (built into `kubectl`), in `deploy/k8s/`, namespace `parley`. No Helm. T33 can add an EKS overlay.
+- The same images as Compose (D27), tagged with the commit and loaded into kind, with no registry.
+- Deployments for the stateless parts: `backend` (2 replicas, D28), `worker` (1) and `web` (1). StatefulSets with one replica and a volume each for PostgreSQL, Redis and RabbitMQ. On a real cloud, these would usually be managed services.
+- `migrate` is a Job that finishes before the backends start or roll, so two copies never migrate at once (D27).
+- No ingress controller: Parley's own `web` Nginx stays the front door, as in Compose and production, on `localhost:8090` through kind's port mapping.
+- Settings in a ConfigMap. Secrets in a Kubernetes Secret made from the local `.env` by a script, never committed (D15).
+- Probes: liveness never depends on a helper, so a Redis outage never restarts the backends (D24). Heavy checks run every 30 s (D27).
+- Production stays on Docker Compose on EC2 (D30, D31). Kubernetes is for learning and the demo, and T33 is the optional cloud run.
