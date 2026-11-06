@@ -2,13 +2,14 @@ import { useState, type FormEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { checkEmail } from "@/features/auth/validate"
-import { api, ApiError, isUnreachable } from "@/lib/api"
+import { api, ApiError, isBusy, isUnreachable } from "@/lib/api"
 import type { ChatSummary } from "./types"
 
 function startChatError(error: unknown) {
   if (error instanceof ApiError && error.status === 404) return "No Parley account with that email."
   if (error instanceof ApiError && error.status === 400) return "That's you."
   if (error instanceof ApiError && error.status === 429) return "Slow down a moment."
+  if (isBusy(error)) return "Busy, try again in a moment."
   if (isUnreachable(error)) return "Can't reach Parley."
   return "Something went wrong. Try again."
 }

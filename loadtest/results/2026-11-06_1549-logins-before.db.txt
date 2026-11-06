@@ -1,0 +1,3 @@
+Idle in transaction after the run: 14
+backend_a after the run: {"status":"ok","copy":"A","version":"dev"}
+backend_b after the run: {"status":"ok","copy":"B","version":"dev"}

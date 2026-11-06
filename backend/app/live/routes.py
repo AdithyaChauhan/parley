@@ -6,10 +6,12 @@ from datetime import datetime
 
 import anyio.to_thread
 import redis
+import sqlalchemy.exc
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
+from app import busy
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.schemas import BookmarkIn
@@ -79,7 +81,7 @@ def _now() -> float:
     return time.monotonic()
 
 
-@router.post("/ticket", response_model=TicketOut)
+@router.post("/ticket", response_model=TicketOut, dependencies=[busy.REQUEST_SLOT])
 def new_ticket(me: User = Depends(get_current_user)):
     limits.enforce(limits.TICKET, me.id)
     try:
@@ -182,16 +184,22 @@ async def _handle(line: _Line, text: str) -> None:
     except ValidationError:
         return
 
-    if event.type in ("delivered", "read"):
-        await _on_bookmark(line, event)
-    elif event.type == "typing":
-        await _on_typing(line, event)
-    elif event.type == "ping":
-        # The app's heartbeat: "are you still there?" (D21). Only this tab gets
-        # the answer, and no database is touched, so it costs almost nothing.
-        await line.websocket.send_json({"type": "pong", "data": {}})
-        # Pong first, so Redis never slows down the heartbeat.
-        await _tab_alive(line)
+    try:
+        if event.type in ("delivered", "read"):
+            await _on_bookmark(line, event)
+        elif event.type == "typing":
+            await _on_typing(line, event)
+        elif event.type == "ping":
+            # The app's heartbeat: "are you still there?" (D21). Only this tab gets
+            # the answer, and no database is touched, so it costs almost nothing.
+            await line.websocket.send_json({"type": "pong", "data": {}})
+            # Pong first, so Redis never slows down the heartbeat.
+            await _tab_alive(line)
+    except sqlalchemy.exc.TimeoutError:
+        # No connection came free (D34). Only this event is dropped, since the
+        # next read moves the bookmark past it. Closing the line would add a
+        # reconnect to a server that's already busy.
+        log.warning("Database busy, dropped a %s event", event.type)
 
 
 # A missing ticket counts as a bad one, so it also gets 4401.

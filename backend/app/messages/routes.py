@@ -9,7 +9,7 @@ from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.models import ChatMember
 from app.chats.service import get_member, member_ids
-from app.db import get_db
+from app.db import SessionLocal
 from app.limits import service as limits
 from app.live import bus
 from app.messages.models import Message
@@ -33,20 +33,25 @@ def send_message(
     body: SendMessageRequest,
     response: Response,
     me: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     # First, so a flood of sends is turned away before it touches the database (D24).
     limits.enforce(limits.SEND, me.id)
-    _check_member(db, chat_id, me)
+    with SessionLocal() as db:
+        _check_member(db, chat_id, me)
 
-    message, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
+        saved, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
+        # Everything the reply and the pushes need, read now. After the commit,
+        # reading the row loads it again in a new transaction (expire_on_commit),
+        # and that holds the connection until the session closes.
+        message = MessageOut.model_validate(saved)
+        members = member_ids(db, chat_id) if created else []
+
+    # The connection is back in the pool, so slow pushes can't hold it (D34).
     if created:
         metrics.MESSAGES_SENT.inc()
-        members = member_ids(db, chat_id)
         # Saved first (D9), then shouted to everyone in the chat, my other tabs
         # too (D20), on whichever copy their lines are (D23).
-        event = {"type": "message.new", "data": MessageOut.model_validate(message).model_dump(mode="json")}
-        bus.publish(members, event)
+        bus.publish(members, {"type": "message.new", "data": message.model_dump(mode="json")})
         # And a "notify them if they don't read it" job for everyone but me (D25).
         notify.publish(message, [user_id for user_id in members if user_id != me.id])
     else:
@@ -64,12 +69,10 @@ def message_history(
     after: int | None = Query(default=None, ge=0),
     limit: int = Query(default=30, ge=1, le=100),
     me: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
     if before is not None and after is not None:
         # Back and forward at once makes no sense: refused like any other bad query.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Use before or after, not both")
-    _check_member(db, chat_id, me)
 
     query = select(Message).where(Message.chat_id == chat_id)
     if after is not None:
@@ -82,12 +85,14 @@ def message_history(
     else:
         # Opening the chat: the newest ones, newest first.
         query = query.order_by(Message.seq.desc())
-    # One extra: if the extra comes back, there are more past these.
-    rows = list(db.scalars(query.limit(limit + 1)))
+    with SessionLocal() as db:
+        _check_member(db, chat_id, me)
+        # One extra: if the extra comes back, there are more past these.
+        rows = list(db.scalars(query.limit(limit + 1)))
 
-    members = db.scalars(select(ChatMember).where(ChatMember.chat_id == chat_id))
-    return MessagePage(
-        messages=[MessageOut.model_validate(row) for row in rows[:limit]],
-        has_more=len(rows) > limit,
-        members=[MemberOut.model_validate(member) for member in members],
-    )
+        members = db.scalars(select(ChatMember).where(ChatMember.chat_id == chat_id))
+        return MessagePage(
+            messages=[MessageOut.model_validate(row) for row in rows[:limit]],
+            has_more=len(rows) > limit,
+            members=[MemberOut.model_validate(member) for member in members],
+        )

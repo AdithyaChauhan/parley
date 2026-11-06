@@ -21,35 +21,46 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### Fix: Parley under load (database freeze, and the password-check cap) (build mode)
-- **Branch:** `fix/load-hardening`
-- **Why:** the T31 load test found two ways to break Parley. Production runs the same code, so both can happen on the live site.
-  1. **Freeze.** When requests wait too long and get abandoned (by Nginx or the client after 60 s), their database session is never closed. It stays "idle in transaction" and keeps its pool slot. After 15 leaks, a copy freezes: all 40 threads wait for the pool, even `/api/health`, and nothing restarts it. Seen at ~30+ msg/s, in the storm, and after a failover. In b and e a few saved messages weren't delivered live (b: 411 saved, 405 received; e: 1,342 / 1,339).
-  2. **Login flood.** Each password check (argon2) uses 64 MB. Above ~8-10 logins/s, the laptop swapped and collapsed. The 2 GB server would collapse sooner.
+### T32. Run Parley on local Kubernetes (build mode)
+- **Branch:** `feature/local-kubernetes`
+- **Goal:** all of Parley runs on a Kubernetes cluster on the laptop, with one command to start it and one to remove it. Then show what Kubernetes adds: it restarts a stuck copy by itself (D34), replaces a deleted pod, rolls out a new version with nothing lost, and keeps the data when a pod restarts.
+- Local only: nothing on AWS, no cost. Production stays on Docker Compose (D30, D31). The setup choices are in D35.
 
-**Part 1: no more leaks, and fail fast instead of freezing**
-- **Prove the leak first** with a test: abandon requests mid-flight (cancel or time out the client), then check that the pool is back to 0 checked-out and Postgres has no "idle in transaction" left. The test must fail before the fix and pass after it.
-- **Make session cleanup safe when a request is cancelled.** Pick the approach that the test proves, for example opening the session with a context manager inside the work instead of a `yield` dependency, or a dependency whose cleanup can't be skipped. Say why in the report.
-- **Release the connection before slow work:** commit and close the database session before publishing to Redis or RabbitMQ (D9's "save first" still holds), so a send doesn't hold its connection during the pushes. Watch out: with SQLAlchemy's default `expire_on_commit=True`, reading the saved row after the commit loads it again and starts a new transaction, which holds a connection ("idle in transaction") until the session closes. Take what the reply and the pushes need first, then close.
-- **Find the trigger:** pin down what makes requests slow enough to be abandoned at ~30 msg/s (T31 left it open), and write it in `docs/load-test.md`.
-- **Fail fast:** under overload, a request answers **503 "busy, try again"** with `Retry-After` within a few seconds, instead of waiting until Nginx gives up at 60 s. For example, a short pool timeout, with the thread count and pool size chosen together. Write down the numbers and why, within Postgres's connection limit (2 copies + worker + migrate + exporters).
-- **The app:** a send that gets 503 is retried like a 429 (after `Retry-After`, same `client_msg_id`, in order, D24).
-- **Safety net in Postgres:** `idle_in_transaction_session_timeout` (about 60 s), so a stuck session can't hold a lock forever.
-- Not in this fix: async SQLAlchemy (D15 stays sync unless the re-runs show it's needed), and auto-restart of a frozen copy (T32's liveness probe).
+**What runs (namespace `parley`)**
+- `backend`: a Deployment with 2 replicas (D28). `COPY_NAME` is the pod name, so `/api/health` and `hello` show which pod answered.
+- `worker` and `web`: Deployments with 1 replica each.
+- PostgreSQL, Redis and RabbitMQ: StatefulSets with one replica and a volume each, using the same pinned images as Compose.
+- `migrate`: a Job that finishes before the backends start or roll.
+- The front door is `web`'s Nginx on `http://localhost:8090` (not 8080, so it's never mixed up with Compose). Live lines must still spread over both backend pods, and a stopped pod's lines must move to the other within seconds (D28). For example, use a headless Service with D28's `upstream ... resolve` and `least_conn`, or a normal Service. Pick by measuring the spread.
+- Settings go in a ConfigMap. Secrets go in a Secret that a script makes from `.env`, never committed. Resource requests and limits come from measured use.
 
-**Part 2: cap the password checks**
-- Each copy runs at most a few argon2 checks at once (a semaphore). Choose the number from memory: each check uses 64 MB, and the server has ~1 GB free, so leave room. Others wait briefly (a second or two), then get **503 "busy, try again"** with `Retry-After`. Covers sign-up and log-in.
-- The app shows "Busy, try again in a moment" on that 503.
+**Health and updates**
+- Every part has readiness and liveness probes. The backend's liveness probe uses `/api/health` (a `def` route, D34) and must not depend on Redis or RabbitMQ (D24). Heavy checks run every 30 s (D27).
+- A new backend version rolls one pod at a time with no gap (`maxUnavailable: 0`). If requests reach a stopping pod, add a short pause before it stops.
 
-**Proof (Claude Code runs everything):**
-- T31's numbers are the "before" for b, c, d, e (same laptop, same code). Re-run them after the fix on the same setup (fresh Docker start, other apps closed). `logins.js` gets 8 and 10/s steps, so run it before and after. Put before/after tables in `docs/load-test.md`.
-- Targets:
-  - **0 undelivered messages** in b and e.
-  - **No frozen copy** in any run. Under overload, requests get quick 503s and the copy recovers by itself afterwards.
-  - The limit in d is measured again (it may rise).
-  - Logins at 10/s keep memory flat, with quick 503s instead of a collapse.
-- After the merge: the auto-deploy is green, every answer shows the new version, and the T31 live-site 429 check still passes. No load on the live site (D33).
-- **Done when:** both parts are built, the new tests pass (including the leak test), the before/after tables are in `docs/load-test.md`, the targets are met (or the report explains exactly what's left), CI and the deploy are green, and LEARNING.md has the section with a draft "In my words".
+**Scripts and CI**
+- `deploy/k8s/up.sh` creates the cluster if needed, builds and loads the images (tagged with the commit), applies the manifests and waits until everything is ready. `deploy/k8s/down.sh` deletes the cluster. Both run in Git Bash on Windows.
+- A new CI job, `k8s`, builds the images, starts kind, applies the manifests, waits until ready, then checks health and one send end to end. Don't make it a required check yet.
+
+**Demos (Claude Code runs them; results go in `docs/kubernetes.md`)**
+1. Two users chat through `localhost:8090`: send, ticks, live push, online.
+2. At least 20 live lines (a few test users with several lines each, within D24's limits) split over both backend pods.
+3. Delete a backend pod mid-chat. Its lines move to the other pod within seconds, nothing is lost, and a new pod starts.
+4. A stuck copy restarts by itself. Freeze one backend pod's process (for example with SIGSTOP from the kind node). The liveness probe fails, Kubernetes restarts the pod, and its lines move to the other pod. Record how long that took.
+5. A rolling update under light load (~5 msg/s): 0 lost, and afterwards every answer shows the new version.
+6. Stop Redis for a minute (scale it to 0). The backends stay up and aren't restarted (D24), and the lines come back afterwards.
+7. Delete the PostgreSQL pod. It comes back with the same data.
+
+**Memory:** WSL has ~3.4 GB. Stop the Compose stack while the cluster runs (dev data stays in its own volume), and put it back afterwards (CLAUDE.md).
+
+**Not in T32:** EKS (T33), monitoring inside the cluster, and autoscaling (Later list).
+
+- **Done when:**
+  - `up.sh` brings Parley up from nothing, and `down.sh` removes it all.
+  - The 7 demos pass and are written up in `docs/kubernetes.md`, with a table mapping each Compose service to its Kubernetes object.
+  - CI is green, including the new `k8s` job.
+  - The dev stack is back as it was.
+  - LEARNING.md has the section with a draft "In my words".
 
 ---
 
@@ -108,14 +119,14 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 9: Measure it
 - [x] T30. Prometheus metrics and a Grafana dashboard
 - [x] T31. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
-- [ ] Fix: Parley under load (database freeze + password-check cap), branch `fix/load-hardening`
+- [x] Fix: Parley under load: a thread/connection deadlock, and the password-check cap (D34)
 
 ### Phase 10: Kubernetes
-- [ ] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34)
+- [ ] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34, D35)
 - [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
 
 ### Phase 11: Show it
-- [ ] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions, reviewed and tested every change; LEARNING.md shows what he learned)
+- [ ] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
@@ -128,3 +139,5 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Small: two Tailwind "canonical class" warnings in `ChatScreen.tsx` (style tips; lint and build pass).
 - Re-check: the backend's 4 high scan findings (glibc, zlib) wait for a Debian fix. Look again at the next Python patch.
 - Small: a hint near "Turn on notifications" (it lives only in the gear menu and is easy to confuse with the browser's own site toggle).
+- Small: a page reload during overload shows the log-in screen when its refresh gets a 503. Wait for `Retry-After` and try again instead.
+- More capacity, if ever needed (the limit is now about one core per copy): a third copy, autoscaling on Kubernetes (HPA), or `uvicorn[standard]`. A cheaper refusal (for example in Nginx) could also stop accepted messages falling past the limit. None of these is measured yet.

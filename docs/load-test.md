@@ -1,15 +1,107 @@
-# Parley load test (T31)
+# Parley load test (T31, and the fix after it)
 
 1,000 fake users on one laptop, measured end to end and read from the Grafana dashboard (T30).
-Runs: November 1-4, 2026. Times are the laptop's (IST, UTC+5:30), like the screenshots.
+Runs: T31 on November 1-4, 2026 (the old code), and the re-runs after the fix (D34) on November 6. Times are the laptop's (IST, UTC+5:30), like the screenshots.
 
 ## The short version
 
-- **With 1,000 users connected, Parley handles about 20 messages per second comfortably.** End to end (send → the partner's live line has it) is p50 28 ms, p95 80 ms and p99 164 ms, with 0 failed sends.
-- **At about 30 messages per second it crosses the limit** (p95 end to end 969 ms). **Asked for 40 a second, both backend copies freeze.**
-- **The bottleneck is database connections**, not CPU. Each copy has a pool of 15, and CPU stayed under 1 core per copy out of 8. When requests wait too long and are given up, **their connections are never handed back**. After 15 such leaks, a copy is frozen until it's restarted. The same freeze happens when 1,000 users connect within 10 s (scenario c), at a steady 50 messages/s (b), and when a copy dies and its ~500 users move to the other one (e).
-- Real logins are limited by argon2 (64 MB and ~0.1-0.3 s per check). Up to 8 a second is fine on a fresh Docker. At 10 a second, the checks pile up into swap and almost nothing finishes.
+- **After the fix, no run freezes a copy, and every saved message reaches its partner.** Overload now means a quick 503 "busy, try again" (p95 about 4 s), and each copy recovers by itself.
+- **With 1,000 users connected, Parley handles about 30 messages per second cleanly** (end to end p50 50 ms, p95 407 ms) and accepts up to ~37 a second. In T31 the same step had p95 969 ms, and 40 a second froze both copies.
+- **The limit is now CPU.** Python runs one thread at a time, so each copy tops out at about one core, while PostgreSQL stays under 0.4 cores.
+- **What froze a copy was a deadlock, not a leak.** T31 blamed requests that were given up and never handed their connection back. Tests on the old code disproved that: a request held a connection while it waited for a thread, and the threads waited for a connection (see "The bottleneck").
+- **Real logins no longer collapse.** At 10 a second, all 301 went through and each backend stayed at or under ~206 MB. On the old code in the same session: 10 finished, p95 53 s, 945 MB. At 30 a second the extra logins get a 503 within ~2.5 s.
 - The first request after a quiet minute is not slow (the T30 question), whether the monitoring stack is on or off.
+
+## Before and after the fix (D34)
+
+T31's numbers are the "before" for b, c, d and e. `logins.js` got its 8 and 10 steps, so it was run on both the old and the new code on November 6.
+
+The "after" runs used the same laptop, scripts and Docker memory, with a fresh Docker start. **One thing made them harder than T31:** VS Code, WhatsApp and a browser stayed open, so Windows had only ~0.6 GB free (0.35-1.2 GB) and paged in bursts of up to ~8,600 pages/s. T31 had other apps closed.
+
+| Target | Result |
+|---|---|
+| 0 undelivered messages in b and e | **Met.** b: 14,624 saved, 14,624 received. e: 3,533 saved, 3,533 received. |
+| No frozen copy in any run | **Met.** After every run: 0 sessions idle in transaction, and every running copy answers. |
+| Quick 503s under overload | **Met.** d: p50 3.5 s, p95 3.9 s, max 4.6 s. b: p50 3.6 s, p95 4.1 s, p99 5.6 s, max 28 s. |
+| The limit in d measured again | **~35 messages/s** (30 is clean, 40 is over). It was ~30, with a freeze at 40. |
+| Logins at 10/s keep memory flat, with quick 503s | **Met.** ~206 MB per backend at most. It needed no 503s at 10/s, so a flood at 20 and 30/s shows them. |
+
+### b. Steady chat, ~50 messages/s (above the limit)
+
+| | T31 (old code) | After the fix |
+|---|---|---|
+| Copies | Both frozen within a minute | Both fine for all 10 minutes |
+| Saved / received | 411 / 405: **6 undelivered** | 14,624 / 14,624: **0 undelivered** |
+| What the overload looks like | 99.7% of send tries failed | 20-25 messages/s accepted, the rest get a 503 |
+| Live lines | | 500 and 500 for the whole 10 minutes |
+
+890 lines dropped, all in the last seconds: every fake user runs its final catch-up at the same moment, a burst the real app never makes. 15,410 sends were still not accepted when the chat ended. In the real app, those stay "waiting" in the outbox and go out later.
+
+### c. Connection storm: 1,000 users connect within 10 s
+
+| | T31 (old code) | After the fix |
+|---|---|---|
+| Lines up | 24 to 121 of 1,000, then frozen | **1,000 of 1,000** |
+| Failed connects | 1,871 to 2,182 | **0** (233 ticket 503s, tried again) |
+| Connect p50 / p95 | | 5.5 s / 7.4 s |
+| Line open → hello p50 / p95 | 1.2 s / 2.2 s (of the few that got one) | 2.6 s / 4.1 s |
+
+D23's subscribe lock is still a real queue in a storm, but it no longer ends in a freeze.
+
+### d. Find the limit
+
+1,000 users connected, with the target rate raised every 100 s. End to end is p50 / p95 / p99:
+
+| target | T31 reached | T31 end to end | T31 tries refused | after: reached | after: end to end | after: tries refused | 503 p95 |
+|---|---|---|---|---|---|---|---|
+| 10/s | 9.9/s | 25 / 53 / 77 ms | 0% | 10.2/s | 26 / 146 / 360 ms | 0% | |
+| 20/s | 18.7/s | 28 / 80 / 164 ms | 0% | 19.9/s | 53 / 2,190 / 3,037 ms (see below) | 0% | |
+| 30/s | 28.7/s | 45 / 969 / 1,454 ms | 0% | **30.3/s** | **50 / 407 / 624 ms** | 0% | |
+| 40/s | 6.5/s (frozen) | 1 s / 30 s / 271 s | 90% | **37.4/s** | 3.5 s / 35 s / 80 s | ~50% | 3.7 s |
+| 50/s | 0 (frozen) | | 100% | 29.3/s | 20 s / 96 s / 142 s | ~80% | 3.8 s |
+| 60/s | not run | | | 21.3/s | 16 s / 70 s / 97 s | ~90% | 4.0 s |
+
+- Saved 14,840, received 14,840. 0 line drops, 0 failed connects, and every message came live (0 by catch-up).
+- **The 20/s blip was the laptop.** Windows paged at ~5,900 pages/s for about 30 s. Requests in progress rose to ~14 per copy, then drained by themselves within 30 s, with one 503. On the old code, a pause like that is what could set off the freeze.
+- Past the limit, end to end is mostly time spent waiting to try again, in the sender's outbox. It's long, but nothing is lost.
+- Accepted messages/s falls past the limit, because refused requests aren't free: 160-180 a second were also being parsed and answered.
+
+### e. Failover under load: ~10 messages/s, `backend_a` stopped mid-chat
+
+| | T31 (old code) | After the fix |
+|---|---|---|
+| `backend_b` | Frozen within a minute | Took over: 503s stopped within a minute of the stop |
+| Saved / received | 1,342 / 1,339: **3 undelivered** | 3,533 / 3,533: **0 undelivered** |
+| The 500 moved lines | None got back | All 500 back, 0 failed connects |
+| Reconnect p50 / p95 / max | | 20 s / 51 s / 52 s |
+| Messages/s after the stop | 0 | ~10, the same as before |
+
+The moved lines all arrive together, so 887 ticket 503s and 185 send 503s (p95 4.9 s) were part of the takeover. Tickets that were refused push some lines onto D21's longer waits, which is why the slowest reconnect took 52 s.
+
+### Logins per second
+
+| logins/s | Old code | New code |
+|---|---|---|
+| 2 | 60 ok, p95 2,874 ms | 60 ok, p95 1,692 ms |
+| 3 | 91 ok, p95 195 ms | 91 ok, p95 170 ms |
+| 4 | 121 ok, p95 217 ms | 121 ok, p95 149 ms |
+| 6 | 164 ok, p95 4,855 ms | 181 ok, p95 147 ms |
+| 8 | 140 ok, p95 736 ms | 240 ok, p95 168 ms |
+| 10 | **10 ok, 4 failed, p95 53.8 s** (288 logins in all never started, because k6's users were stuck) | **301 ok, p95 1,144 ms** |
+| Biggest backend at 10/s | **945 MB** | **206 MB** |
+| Docker swap at 10/s | 174 MB | 2 MB |
+
+A flood on the new code (a one-off, not in `logins.js`):
+
+| logins/s | ok | 503 "busy" | failed | 503 p95 |
+|---|---|---|---|---|
+| 10 | 301 | 0 | 0 | |
+| 20 | 372 | 201 | 0 | 2.1 s |
+| 30 | 301 | 537 | 0 | 2.5 s |
+
+Each backend stayed at or under 287 MB (about 85 MB, plus 3 x 64 MB), and swap under 28 MB. So a copy takes about 10-15 real logins a second on this laptop, and the rest are told "busy" within ~2.5 s. k6 itself couldn't start 90 of the arrivals while it was adding more fake users.
+
+**The sections a to e below are T31's runs on the old code, kept as the "before".** Their numbers stand. T31's explanation of the freeze was wrong, and "The bottleneck" has the corrected one.
 
 ## The laptop
 
@@ -33,6 +125,7 @@ Runs: November 1-4, 2026. Times are the laptop's (IST, UTC+5:30), like the scree
   3. It sends to its partner at random moments, at the planned average rate.
   4. It sends `read` for every message it gets.
   5. When a message number is skipped, or the line reconnects, it catches up by number.
+  6. When it gets a 503 "busy" (D34), it waits for `Retry-After` and tries again with the same id, like the app. (In T31 it tried 5 times, 1 s apart.)
 - **Timing:**
   - *Send → 201* is timed by the sender.
   - *End to end* is timed by the partner: the send time is written inside the message, and both users run in the same k6 program, so they share one clock.
@@ -67,8 +160,8 @@ Real logins, one new arrival at a time whether or not the last one finished:
 
 - Each argon2 check takes 64 MB and ~0.1-0.3 s. When checks pile up, memory runs into swap, each check gets slower, and more pile up. The rate where that starts depends on how much memory is free: 6/s on Nov 1, 10/s on Nov 4.
 - The backends also keep working on requests nobody waits for any more.
-- On the 2 GB server, a login flood could take the site down even with D24's per-IP limits. The fix is the next task (`fix/password-check-cap`).
-- The 2-6 rows come from `loadtest/logins.js`. The 8-12 rows are a one-off probe with the same code. For the fix's before/after, `logins.js` needs the 8 and 10 steps, because on a fresh Docker 2-6 doesn't show the problem.
+- On the 2 GB server, a login flood could have taken the site down even with D24's per-IP limits. The cap is in D34 (see the top).
+- The 2-6 rows come from `loadtest/logins.js`. The 8-12 rows are a one-off probe with the same code. `logins.js` now has the 8 and 10 steps too.
 - The 11 failures at 2/s were 502s in the first 5 seconds: Nginx still had the old backend addresses (D28). `run.sh` now waits 12 s after switching the backends.
 
 ## c. Connection storm: 1,000 users connect within 10 s
@@ -132,37 +225,78 @@ The T26 failover demo works with a few users. With ~500 lines moving at once, th
 
 ![Failover: A's lines drop, B freezes, messages stop](load-test/e-failover.png)
 
-## The bottleneck: why a copy freezes
+## The bottleneck: what froze a copy, and what limits it now
 
-**The setup.** Each backend copy is one uvicorn process. Normal (`def`) routes, and the live line's database work, run in a pool of 40 threads. SQLAlchemy's connection pool has 15 connections per copy (5 + 10 overflow), and a request waits up to 30 s for one.
+### The freeze was a deadlock, not a leak
 
-**The leak.** When a request waits long enough that Nginx or the client gives up (60 s), the request is cancelled. FastAPI closes the request's database session (`get_db`) when the request finishes or fails, but **not when it's cancelled**: in FastAPI's `contextmanager_in_threadpool`, the cleanup runs for normal endings and for `Exception`, and a cancellation is neither. Every route reads from the database after its commit, so that session has a transaction open, and its connection stays checked out: "idle in transaction", for good. After 15 leaks the copy has no connections left. All 40 threads wait for the pool, so even `/api/health` (a `def` route) can't run. Docker marks the copy unhealthy, but Compose doesn't restart unhealthy containers, so it stays frozen until someone restarts it.
+The old setup per copy: 40 threads for normal (`def`) routes, 15 database connections, and up to 30 s of waiting for a connection.
 
-**The evidence:**
-1. In every frozen run, Postgres held exactly **15 "idle in transaction" connections per copy** (30 in c, b and d; 15 in e, where only `backend_b` was left), for 10+ minutes with no traffic.
-2. Thread dumps (py-spy): **40 threads waiting in `QueuePool._do_get`**, and none inside a database call.
-3. The copies came back only after a restart.
+1. A request's login check (`get_current_user`) ran in one thread and took a connection. Its session stayed open.
+2. The thread was handed back, and the route had to wait for a thread of its own, **still holding that connection** ("idle in transaction").
+3. With about 55 requests in at once, 15 of them held every connection and waited for a thread, while all 40 threads were held by requests waiting for a connection. Nobody could move until the 30 s timeout failed those 40.
+4. So a copy drained about 1.3 requests a second. And uvicorn doesn't cancel a route when its client hangs up, so abandoned requests stayed in the line. A line of thousands takes hours, which looks frozen for good.
 
-**What's not pinned down yet:** why requests hold their connections long enough to start the spiral at ~30 messages/s, when CPU, PostgreSQL and Redis weren't busy. Things to measure in the fix:
-- Every send keeps its connection open while it publishes to Redis and to RabbitMQ (one shared RabbitMQ connection per copy, a confirm per message).
-- There are 40 threads for 15 connections.
+T31 said something else: that a given-up request never closes its session, so it leaks its connection. The tests below disprove it. T31's evidence (15 sessions idle in transaction per copy, 40 threads waiting for the pool) fits the deadlock too.
 
-**Why it matters for production:** the server runs the same code. A burst, like a login flood, many reconnects at once, or a slow database for a minute, can freeze a copy there too, and nothing would restart it.
+| Experiment on the old code | Result |
+|---|---|
+| 5 sends stuck on a row lock, then their clients hang up | The pool is back to 0 once the lock goes. **No leak.** |
+| A request's task really cancelled mid-flight | The pool is back to 0. **No leak.** |
+| 150 requests land at once, and **nobody hangs up** | **The freeze:** 15 idle in transaction, all 40 threads waiting for a connection, `/api/health` silent. In 70 s, 80 answers, all 500. |
+
+### What set it off at ~30 messages/s
+
+Not RabbitMQ or Redis. Thread dumps from a probe of the old code at 20-40 messages/s (135 dumps): 1,791 thread samples waiting for a connection, 77 in a database call, 1 in RabbitMQ, 0 in Redis. Threads were mostly idle, and then all flipped to waiting at once.
+
+T31's own numbers show the climb. At 30 messages/s the busier copy used 0.8 of the ~1 core Python can use, and requests in progress rose from 1 to 3.5 to 5.6 per copy. Within 30 s of the step up to 40, sessions idle in transaction jumped to 25-30 and traffic fell to 0.
+
+So: **as a copy nears its one core, requests start to queue, and any short pause can push it over ~55 at once. Past that point it can't recover.** On November 6, with the laptop short of memory, the same flip came at only 20 messages/s.
+
+### What changed
+
+- A database session opens inside the work (`with SessionLocal() as db:`, in one thread) and closes before anything waits. `get_db` is gone, and `get_current_user` has its own short session. So no connection is ever held across a wait for a thread, whether a request ends normally or is cancelled.
+- A send reads what it needs, closes the session, and only then publishes to Redis and RabbitMQ. The same goes for receipts and the chat list's Redis read. D9's "save first" still holds.
+- Threads, connections and requests at work are one number per copy (below).
+- A request waits for a slot at most 3 s, then gets 503 with `Retry-After`. Waiting costs no thread and no connection. Signing up and logging in have a smaller gate of their own.
+- PostgreSQL ends any app session idle in a transaction for 60 s. It's set per connection, in `db.py`, so a deploy doesn't have to restart the database.
+- On the live line, a busy database drops that one event, not the line.
+- The app retries a send on a 503, like a 429, with the same id and in order. Log-in and sign-up show "Busy, try again in a moment."
+
+### The numbers, and why
+
+| Setting | Value | Why |
+|---|---|---|
+| Threads, connections, requests at work (per copy) | **8** | The same number, so none of them waits for another. Compared below. |
+| PostgreSQL connections in use | ~17 of 100 | 2 x 8, plus the worker and exporters. Room left for migrate and admin. T31 used ~33. |
+| Wait for a request slot | 3 s | Well under Nginx's 60 s, and a person is still looking at the screen. |
+| `Retry-After` | 1-3 s, at random | So everyone refused at the same moment doesn't come back at the same moment. |
+| Pool timeout | 2 s | A backstop only. A thread always finds a connection, so it shouldn't happen. It also answers 503. |
+| Idle in transaction timeout | 60 s | The safety net, so nothing stuck can hold a lock forever. |
+| Password checks at once (per copy) | 3, waiting up to 2 s | 64 MB each. 2 copies x 3 x 64 MB = 384 MB at worst, of the server's ~1 GB free. |
+
+Why 8: the same overload (30, then 50, then 20 messages/s) with three thread counts, one run each. The 15 was the first choice:
+
+| threads | sent in the 50/s step | 503 p50 / p95 / max | line drops | connections |
+|---|---|---|---|---|
+| 5 | 4,281 | 3.2 / 3.5 / 10.7 s | 104 | 11 |
+| **8** | 4,055 | **3.4 / 3.8 / 4.4 s** | **0** | 17 |
+| 15 | 4,160 | 3.9 / 4.3 / 6.6 s | 82 | 31 |
+
+More threads don't go faster, because Python runs one at a time. The throughput is the same within noise, about 27 messages/s here. Busy threads do take turns away from the event loop, which answers pings and delivers pushes. With 15 threads, the full d run reached only ~16 messages/s past the limit, with 896 line drops and a 503 tail up to 32 s (`*-15-threads.*` in the results).
+
+### What limits it now
+
+CPU: 1.1-1.2 cores per copy at the limit, with PostgreSQL at ≤0.4, ~17 connections and nothing waiting on the pool. So the bottleneck has moved from a bug to a real limit.
 
 ## What to change next
 
-1. **Fix the connection leak first.**
-   - Make the session cleanup safe against cancellation.
-   - Make waiting for a connection fail fast (a pool timeout well below Nginx's 60 s), so a busy copy answers 503 instead of leaking.
-   - Match the thread limit to the pool size.
-   - Re-run c, b and d before and after.
-2. **Restart a frozen copy automatically:** a health check that acts, like a Kubernetes liveness probe (T32).
-3. **Find what holds connections at ~30/s:** a pool-wait timer, and giving the connection back before talking to Redis and RabbitMQ.
-4. **The subscribe lock (D23):** subscribe in batches, or lock per channel. The storm showed waits of ~2 s.
-5. **Cap concurrent password checks** (`fix/password-check-cap`, next in the plan), with 8 and 10/s added to `logins.js`.
-6. **Spread reconnects out:** D21's random extra is 0-1 s, so ~500 lines came back within a second or two after a failover. A wider first wait would soften that.
-7. **D15's async question:** the limit is the thread-and-pool model, not CPU. Async SQLAlchemy would remove the thread pool, but fixing the leak and sizing the pool come first. Then measure again.
-8. **More copies don't help yet.** Each one freezes the same way, and each adds 15 connections toward PostgreSQL's limit of 100.
+1. **A restart for a truly stuck copy** (T32's liveness probe) is still worth having, as a safety net. `/api/health` stays a `def` route on purpose: it needs a free thread, so a copy whose threads are really stuck fails it.
+2. **More capacity now means more CPU.** A third copy should finally help, because the limit is per copy and PostgreSQL has room. A faster HTTP layer (`uvicorn[standard]`: uvloop and httptools) might help too. Neither is measured.
+3. **The subscribe lock (D23):** subscribe in batches, or lock per channel. Open → hello is still p50 2.6 s in a storm.
+4. **Spread reconnects out:** D21's random extra is 0-1 s, so ~500 lines come back together after a failover. A wider first wait would soften that.
+5. **A longer wait after repeated 503s:** the app uses `Retry-After` each time. Backing off further would spend less CPU on refusals in a long overload.
+6. **D15's async question:** not needed. Nothing froze in the re-runs, and the limit is Python's one core per copy, which async SQLAlchemy wouldn't lift.
+7. **A small known gap:** a page reload during overload whose refresh gets a 503 shows the log-in screen, as for any 5xx today. A second reload fixes it.
 
 ## Honest limits
 
@@ -171,9 +305,12 @@ The T26 failover demo works with a few users. With ~500 lines moving at once, th
 - A thread dump every 40 s is a sample, not a full picture.
 - The 15-minute access token caps each run at ~13 minutes.
 - "Lost" in the k6 summaries is sent minus received. It goes negative when timed-out sends were still saved, so the database count (`*.db.txt`) is the one to read.
+- The November 6 runs had less free memory than T31 (see the top), and each thread count ran only once, so small differences between them are noise.
+- A first try at the old-code logins, right after a Docker restart with Windows paging ~4,000 pages/s, collapsed even at 2/s. It was thrown away and run again once things had settled. It shows how much the laptop's state matters.
+- These are laptop numbers. The server has 2 vCPUs and 2 GB, and it never gets a load test (D33).
 
 ## Files
 
 - Scripts: `loadtest/` (`run.sh`, `lib.js`, `seed.py`, `compose.loadtest.yml`, `trial.js`, `logins.js`, `a-baseline.js` … `e-failover.js`). `loadtest/sessions.json` (raw refresh tokens) is made by the seed and gitignored.
-- Results: `loadtest/results/` (one `.json` per run, plus a `.db.txt` with the database check and whether each copy still answered).
+- Results: `loadtest/results/` (one `.json` per run, plus a `.db.txt` with the database check, sessions left idle in transaction, and whether each copy still answered). The November 6 runs are `2026-11-06_*`: `-logins-before` is the old code, `-15-threads` and `tune-t*` are the thread-count comparison, and the rest are the final runs.
 - Screenshots: `docs/load-test/`, taken with a temporary read-only Grafana and headless Chrome.

@@ -1,0 +1,243 @@
+{
+  "run": "2026-11-06_1605-d",
+  "scenario": "d-limit",
+  "ended_at": "2026-11-06T10:50:55.594Z",
+  "duration_s": 840,
+  "users": 1000,
+  "sent": 12698,
+  "received": 12698,
+  "lost": 0,
+  "caught_up": 1774,
+  "over_1s": 6105,
+  "send_failed_rate": 0.6909259078960179,
+  "send_busy": 28385,
+  "send_gave_up": 8003,
+  "http_failed_rate": 0.6593040688957846,
+  "connect_failed": 113,
+  "connect_busy": 4722,
+  "line_drops": 896,
+  "busy_ms": {
+    "count": 28385,
+    "min": 3003.2,
+    "med": 4032.8,
+    "p(95)": 9489.8,
+    "p(99)": 22835.3,
+    "max": 32769.8
+  },
+  "e2e_ms": {
+    "min": 18,
+    "med": 548.5,
+    "p(95)": 165400.2,
+    "p(99)": 246317.1,
+    "max": 289434,
+    "count": 12698
+  },
+  "send_ms": {
+    "p(95)": 76487.6,
+    "p(99)": 131427.3,
+    "max": 236184,
+    "count": 12698,
+    "min": 21,
+    "med": 670
+  },
+  "connect_ms": {
+    "min": 14,
+    "med": 59,
+    "p(95)": 12698.3,
+    "p(99)": 16522.1,
+    "max": 24467,
+    "count": 1756
+  },
+  "hello_wait_ms": {
+    "p(99)": 8558.3,
+    "max": 9852,
+    "count": 1756,
+    "min": 0,
+    "med": 19,
+    "p(95)": 5195
+  },
+  "reconnect_ms": {
+    "max": 245408,
+    "count": 756,
+    "min": 5910,
+    "med": 102392.5,
+    "p(95)": 233855,
+    "p(99)": 239377.7
+  },
+  "stages": {
+    "busy_time{stage:60}": {
+      "min": 3003.2,
+      "med": 3982.9,
+      "p(95)": 5112.1,
+      "p(99)": 6024.7,
+      "max": 6467.4,
+      "count": 12124
+    },
+    "e2e_latency{stage:30}": {
+      "p(99)": 327.2,
+      "max": 523,
+      "count": 2842,
+      "min": 19,
+      "med": 43,
+      "p(95)": 169
+    },
+    "send_failed{stage:50}": {
+      "passes": 11790,
+      "fails": 1589,
+      "rate": 0.9
+    },
+    "busy_time{stage:40}": {
+      "max": 32769.8,
+      "count": 4472,
+      "min": 3005.4,
+      "med": 4020.4,
+      "p(95)": 17116.1,
+      "p(99)": 29173.9
+    },
+    "send_busy{stage:30}": {
+      "rate": 0,
+      "count": 0
+    },
+    "send_failed{stage:40}": {
+      "rate": 0.5,
+      "passes": 4472,
+      "fails": 3686
+    },
+    "send_busy{stage:60}": {
+      "count": 12124,
+      "rate": 14.4
+    },
+    "send_failed{stage:30}": {
+      "rate": 0,
+      "passes": 0,
+      "fails": 2842
+    },
+    "msgs_sent{stage:30}": {
+      "count": 2842,
+      "rate": 3.4
+    },
+    "e2e_latency{stage:50}": {
+      "p(99)": 251077.1,
+      "max": 259452,
+      "count": 1589,
+      "min": 3735,
+      "med": 110384,
+      "p(95)": 234929.6
+    },
+    "msgs_sent{stage:40}": {
+      "count": 3686,
+      "rate": 4.4
+    },
+    "busy_time{stage:10}": {
+      "min": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "count": 0
+    },
+    "send_failed{stage:60}": {
+      "rate": 0.9,
+      "passes": 12124,
+      "fails": 1580
+    },
+    "send_failed{stage:20}": {
+      "rate": 0,
+      "passes": 0,
+      "fails": 2002
+    },
+    "send_failed{stage:10}": {
+      "passes": 0,
+      "fails": 999,
+      "rate": 0
+    },
+    "send_busy{stage:20}": {
+      "count": 0,
+      "rate": 0
+    },
+    "e2e_latency{stage:10}": {
+      "p(99)": 628.1,
+      "max": 1066,
+      "count": 999,
+      "min": 18,
+      "med": 28,
+      "p(95)": 434.2
+    },
+    "send_busy{stage:10}": {
+      "count": 0,
+      "rate": 0
+    },
+    "busy_time{stage:30}": {
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "count": 0,
+      "min": 0,
+      "med": 0
+    },
+    "e2e_latency{stage:20}": {
+      "min": 18,
+      "med": 40,
+      "p(95)": 576.8,
+      "p(99)": 1360,
+      "max": 2251,
+      "count": 2002
+    },
+    "msgs_sent{stage:60}": {
+      "rate": 1.9,
+      "count": 1580
+    },
+    "send_busy{stage:40}": {
+      "count": 4472,
+      "rate": 5.3
+    },
+    "msgs_sent{stage:10}": {
+      "count": 999,
+      "rate": 1.2
+    },
+    "send_busy{stage:50}": {
+      "count": 11789,
+      "rate": 14
+    },
+    "busy_time{stage:50}": {
+      "min": 3003.9,
+      "med": 4088.7,
+      "p(95)": 10974.5,
+      "p(99)": 23484.9,
+      "max": 32662.1,
+      "count": 11789
+    },
+    "msgs_sent{stage:20}": {
+      "rate": 2.4,
+      "count": 2002
+    },
+    "busy_time{stage:20}": {
+      "min": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "count": 0
+    },
+    "e2e_latency{stage:40}": {
+      "med": 3824.5,
+      "p(95)": 153569,
+      "p(99)": 262304.9,
+      "max": 289434,
+      "count": 3686,
+      "min": 19
+    },
+    "e2e_latency{stage:60}": {
+      "min": 3729,
+      "med": 46954,
+      "p(95)": 139495.6,
+      "p(99)": 150845.2,
+      "max": 157405,
+      "count": 1580
+    },
+    "msgs_sent{stage:50}": {
+      "count": 1589,
+      "rate": 1.9
+    }
+  }
+}

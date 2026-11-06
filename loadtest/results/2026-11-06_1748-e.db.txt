@@ -1,0 +1,5 @@
+backend_a stopped at 2026-11-06T12:24:02Z
+parley_load has 3533 messages. k6: "sent":3533,"received":3533,"lost":0,
+Idle in transaction after the run: 0
+backend_a after the run: no answer
+backend_b after the run: {"status":"ok","copy":"B","version":"dev"}
