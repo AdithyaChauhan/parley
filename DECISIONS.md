@@ -5,40 +5,40 @@ To change a decision: discuss it in the planning chat, then add a new entry that
 
 ---
 
-**D1. Name: Parley**
+### D1. Name: Parley
 An old word for a talk between two sides.
 
-**D2. A web app**
+### D2. A web app
 It runs in the browser (desktop first) and works on phone browsers. No mobile app.
 
-**D3. How messages travel**
+### D3. How messages travel
 - Sending a message: a normal HTTP request (easy to test, clear success and error codes).
 - Everything live (new messages, ticks, typing, online): one WebSocket connection.
 - This is the same split Discord and Slack apps use.
 
-**D4. Plain WebSockets, no Socket.IO**
+### D4. Plain WebSockets, no Socket.IO
 We build reconnecting, "got it" replies and rooms ourselves, because that's what interviewers ask about.
 
-**D5. One app first (a monolith)**
+### D5. One app first (a monolith)
 One backend split into clean folders by feature: auth, chats, messages, live.
 Later we may move one piece (notifications) into its own service. Each new piece must connect to something that already works.
 
-**D6. Backend: Python + FastAPI**
+### D6. Backend: Python + FastAPI
 - Database: PostgreSQL, through SQLAlchemy.
 - Database changes: Alembic migrations.
 - Tests: pytest.
 - Packages: pip with a virtual environment.
 
-**D7. Frontend: React + TypeScript + Vite + Tailwind CSS + shadcn/ui**
+### D7. Frontend: React + TypeScript + Vite + Tailwind CSS + shadcn/ui
 Screens are built first with fake data. Then each backend feature plugs into a screen that already exists.
 The small packages shadcn/ui installs for itself (for example cn, clsx, tailwind-merge, class-variance-authority, lucide-react icons, tw-animate-css, radix-ui) count as part of shadcn/ui. No dark mode for now. The only font is Outfit from Google Fonts; preset fonts (like Geist) are removed.
 ESLint (from Vite's template) checks the code for mistakes. It's a dev-only tool and never ships with the app.
 react-router handles page addresses (/login, /signup, /). Added in T12.
 
-**D8. Look (updated)**
+### D8. Look (updated)
 Parley matches the reference screenshots closely: layout, colors, spacing, shapes and font style.
 The blue-grey frame around the app in the screenshots is only a showcase background. The real app fills the whole browser window, with no outer frame, and resizes with it. Profile areas are kept compact so lists get the most space.
-Not copied: the logo, names and photos. Parley has its own logo, made-up names and its own avatars. The README credits the reference design.
+Not copied: the logo, names and photos. Parley has its own logo, made-up names and its own avatars. The README credits the reference design: "KeyVue chat" by Karol Kos for widelab, on Dribbble.
 Group chats, the side panel and uploads are built as screens first. They work for real in v2.
 Window sizes (T27):
 - From 1280 px, all four columns show: rail, list, chat and side panel. The panel can fold to a thin strip that shows only the open button and the avatar.
@@ -56,13 +56,13 @@ A hidden button comes back only in the task that makes it work: attach and drop 
 Phone keyboard (PR #29): like WhatsApp, the chat header stays at the top and the message box sits just above the keyboard (or at the bottom when it's closed). The page is locked while the chat screen shows (no scroll, no bounce), and only the lists scroll. Text boxes are at least 16 px on phones (iOS zooms smaller ones). Sending jumps to the newest message, and a new message doesn't pull you down if you've scrolled up. There's no pull-to-refresh (live chat doesn't need it). No installable app (PWA) for now, since people open the link in a browser.
 The fake file numbers are removed (T27). Every chat's side panel shows "No files yet" until v2. In a 1:1 chat, the side panel shows "online" or "last seen", not "2 members".
 
-**D9. Message rules**
+### D9. Message rules
 - Save to the database before sending anywhere.
 - Each message carries an ID made by the sender's app, so a retried send is never saved twice.
 - Each chat numbers its messages #1, #2, #3. Apps sort by this number, not by time.
 - Ticks come from two bookmarks per chat member: "delivered up to #" and "read up to #".
 
-**D10. Supporting tools (added in this order)**
+### D10. Supporting tools (added in this order)
 - Redis: online status and passing messages between backend copies.
 - RabbitMQ: notification jobs with retries.
 - Docker Compose, then Nginx.
@@ -70,61 +70,61 @@ The fake file numbers are removed (T27). Every chat's side panel shows "No files
 - Kubernetes on the laptop.
 Kafka is not used: RabbitMQ fits our jobs and is lighter.
 
-**D11. AWS later**
+### D11. AWS later
 Kubernetes runs on the laptop. A short EKS run happens only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out).
 
-**D12. Encryption is a later phase**
+### D12. Encryption is a later phase
 - 1:1 text only, one device per user, Web Crypto (ECDH + AES-GCM), safety-number check.
 - From day one, the server only passes message text along and never reads it: no message text in notifications, no server-side search.
 
-**D13. Git workflow**
+### D13. Git workflow
 - `main` always works.
 - One branch per task (`feature/`, `fix/`, `docs/`, `chore/`), merged by pull request.
 - Adithya makes every commit. From build mode (D14), Claude Code drafts the message. Commits never have a "Co-Authored-By: Claude" line.
 - PR descriptions never mention Claude or Claude Code (no "Generated with" line). Credit for how the project was built lives once, in the README's "How I built this" section (T34).
 - Private repo; goes public once live chat works.
 
-**D14. Who does what**
+### D14. Who does what
 - Adithya: final say. Nothing starts or merges without his OK.
 - Planning chat (Claude on claude.ai): writes the plan, task briefs and decisions.
 - Claude Code (build mode from Nov 4, 2026): builds, checks and writes up each task end to end, including a draft "In my words". It decides small clashes itself and lists them in its report. It stops only for money, AWS changes, deleting data, security trade-offs, going against a D-entry, or anything that can't be undone. It never commits, pushes or merges. Adithya can write a file himself whenever he wants.
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
 
-**D15. Database access style**
+### D15. Database access style
 - SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T31) show a need. Revisited after T31 (D34): not needed, since the limit is CPU (about one core per copy), which async wouldn't lift.
 - Ids for users and sessions are UUIDs: safe to make anywhere, and not guessable from the URL.
 - Config comes from `.env` through pydantic-settings. No secrets in committed files.
 
-**D16. How log-in works**
+### D16. How log-in works
 - Passwords: hashed with argon2 (argon2-cffi). Never stored or logged in plain text.
 - Access token: a JWT (PyJWT) that lasts 15 minutes, sent as "Authorization: Bearer".
 - Refresh token: random, lasts 7 days, sent in an httpOnly cookie. Only its SHA-256 fingerprint is stored, in `sessions`. Each refresh swaps it for a new one (rotation) in the same `sessions` row and moves the expiry to 7 days from now, so you stay logged in while you keep using the app.
 - Emails are checked with pydantic's EmailStr (email-validator), then trimmed and lowercased before saving or looking up.
 - Log-in errors never reveal whether an email exists.
 
-**D17. One address for the whole app**
+### D17. One address for the whole app
 - Every backend route lives under `/api` (for example `/api/auth/login`).
 - In development, Vite passes `/api` on to FastAPI (a proxy). Later, Nginx does the same job (T26).
 - So the browser sees one site, and the refresh cookie (path `/api/auth`) works without extra cross-site settings.
 - Rule for every proof step (like the red-cross test): put the run link or a screenshot in the report.
 
-**D18. How message numbers are kept safe**
+### D18. How message numbers are kept safe
 - Each chat row holds a counter, `last_seq`. Taking the next number is one `UPDATE ... RETURNING` on that row, which locks it, so two senders never get the same number.
 - The database also refuses a second #N in the same chat (unique `chat_id` + `seq`).
 - A send carries the sender app's `client_msg_id`; the database refuses a second copy (unique `sender_id` + `client_msg_id`), and the server returns the first one instead.
 - A direct chat between two people has a unique `direct_key`, so they can't end up with two direct chats.
 
-**D19. The live connection**
+### D19. The live connection
 - One WebSocket per open tab, at `/api/live`. The server uses it to push events; sending messages still goes over HTTP (D3).
 - Getting on: `POST /api/live/ticket` (with the access token) gives a ticket that works once and dies after 30 seconds. The app opens `/api/live?ticket=...`. A bad ticket closes the line with code 4401.
 - Every event is JSON shaped `{"type": "...", "data": {...}}`.
 - Tickets live in the server's memory for now and move to Redis in T21. The open lines can't move: each backend copy keeps its own switchboard for the lines it accepted, and Redis pub/sub carries "push this to Ben" between copies (T21).
 - New package: `websockets` (gives uvicorn WebSocket support).
 
-**D20. Live events and ticks**
+### D20. Live events and ticks
 - Server to app: `message.new` (a saved message) and `receipt` (someone's bookmark moved).
 - App to server: `delivered`, `read` and `typing`. `delivered` and `read` carry the chat id and the highest number the app has (for `read`: has shown on screen in an open, focused chat). `read` also lifts `delivered`.
-- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`) and goes to everyone in the chat, including the reader's own other tabs. Unread is always (newest number in the chat) − (my read_up_to). The app uses the higher of the server's read_up_to and what it has already shown, so a badge never comes back while a read is on its way.
+- `receipt` carries both bookmarks (`delivered_up_to`, `read_up_to`) and goes to everyone in the chat, including the reader's own other tabs. Unread is always (newest number in the chat) − (my read_up_to). (From T37, unread counts only real messages: D39.) The app uses the higher of the server's read_up_to and what it has already shown, so a badge never comes back while a read is on its way.
 - Sending counts as reading: when someone's message is saved as #N, the server moves their own bookmarks to #N without a receipt. So a message from someone at #N also means their bookmarks are at least #N, and the app applies this to pushed messages. History and catch-up pages already carry the real bookmarks.
 - Known simplification: in an offline race (both people's waiting messages go out together), this can show "read" a few seconds before the sender actually sees the other message. Accepted.
 - `typing` is passed on to the other members and never saved.
@@ -135,7 +135,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
 - A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).
 
-**D21. Reconnect and catch-up**
+### D21. Reconnect and catch-up
 - The app sends `ping` every 25 s; the server answers `pong`. No `pong` within 10 s means the line is dead.
 - Reconnect waits 1, 2, 4 ... up to 30 s, plus a little random extra, and gets a new ticket each time.
 - Catch-up uses message numbers, never times: the app asks for `after=<highest number it has with no hole below it>`. A pushed message, or my own send's reply, that skips numbers also triggers a catch-up.
@@ -144,7 +144,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Messages sent while offline wait in order and are sent one at a time when the line is back, each with its original `client_msg_id` (no doubles, D18).
 - The open chat also catches up when the chat list (re-checked every 60 s) shows a higher message number than it has. So during an outage, Ben sees Ana's message within about a minute with no reload.
 
-**D22. Redis and online status**
+### D22. Redis and online status
 - Redis (official image, pinned version) runs in Docker Compose. Python talks to it with the `redis` package: the normal client in normal routes, the async client on the live line.
 - Redis holds fast, temporary facts (online status, and later tickets and pub/sub). PostgreSQL stays the only home for anything that must never be lost.
 - Online status is per tab: `presence:<user>` is a sorted set of tab id → "alive until" (now + 60 s), refreshed by every ping. Online means at least one tab is still alive. A crashed tab goes offline by itself when its time passes.
@@ -156,7 +156,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - The async client opens and closes with the app (startup/shutdown in `main.py`).
 - A tab whose time runs out pushes nothing; other apps notice at their next 60 s check, so offline can take up to about 2 minutes after a silent crash.
 
-**D23. Several backend copies (Redis pub/sub)**
+### D23. Several backend copies (Redis pub/sub)
 - Every push goes through Redis pub/sub: the sender's copy publishes the event on `user:<id>` for each person who should get it, and every copy delivers what it hears to its own open lines.
 - A copy listens on `user:<id>` only while that person has a line on it (subscribe on the first line, unsubscribe on the last).
 - Pub/sub keeps nothing. A lost event is fine because the message is saved first (D9) and the app catches up by number (D21).
@@ -165,7 +165,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Pub/sub ignores Redis database numbers, so dev (db 0) and tests (db 15) share channel names. That's harmless because user ids are random UUIDs.
 - Subscribe and unsubscribe on a copy go through one lock. Check it under load in T31.
 
-**D24. Limits, and when Redis is down**
+### D24. Limits, and when Redis is down
 - Limits use a sliding window in Redis (a sorted set of times, one transaction per check). Too many gives 429 with `Retry-After`.
 - Sends: 20 per 10 s per user. Wrong passwords: 5 per 15 min per email (cleared by a good log-in; locked emails refuse even the right password until the time passes). Any log-in: 30 per 15 min per IP. Sign-ups: 5 per hour per IP. Start-chat: 20 per minute per user. Tickets: 10 per minute per user.
 - Redis is a helper, PostgreSQL is the truth. When Redis is down: sends and history keep working (live pushes are lost and caught up later), online shows as unknown, tickets answer 503, and limits let requests through with a logged warning.
@@ -174,7 +174,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - When Redis drops, open live lines close cleanly (code 1011) and the app reconnects with its backoff (D21).
 - During a Redis outage, bookmarks still save (HTTP door, D20). While the live line is down, the open chat also asks for `messages?after=<gap-free seq>` every 60 s, in step with the chat list's re-check. That reply carries both bookmarks, so the other person's ticks update within about a minute, and instantly again once the line is back.
 
-**D25. Notifications (RabbitMQ)**
+### D25. Notifications (RabbitMQ)
 - RabbitMQ carries notification jobs to a separate worker. Python uses `pika`. Jobs carry ids and numbers only, never message text (D12).
 - Each job waits 5 s first (`notify.wait`), then is skipped if the recipient has already read it.
 - Retries wait 10 s, 1 min, then 5 min, using queues with their own timers that fall back into `notify`. After try 4 the job goes to `notify.failed`. A broken job goes straight there. `replay` sends failed jobs back.
@@ -188,7 +188,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - If the "notified" note can't be written after a successful send, the worker logs a warning and doesn't retry (a retry would notify twice). Replay moves only the jobs parked when it starts, so a broken job can't loop.
 - The send never waits on RabbitMQ: if publishing fails, the message is still saved and returned, and that notification is lost. Accepted for now. The full fix (an outbox table written in the same transaction as the message) is a known next step.
 
-**D26. Browser notifications (Web Push)**
+### D26. Browser notifications (Web Push)
 - Web Push with VAPID keys (`pywebpush`). The private key lives only in `.env`. The app gets the public key from `GET /api/push/key`.
 - `push_subscriptions`: one row per browser per user, `endpoint` unique. Subscribing again from the same browser moves the row to the current user. Logging out unsubscribes and deletes the row first.
 - The payload is the title ("New message from <name>") and `chat_id` only, never message text (D12), with a TTL of 1 hour. The service worker uses `tag = chat_id`, so one chat shows one notification.
@@ -208,7 +208,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - Endpoints must start with `https://` (max 2048), because the worker POSTs to an address a user gave us. Allowing only known push-service hosts is a later hardening step.
   - Microsoft's push service answers 401 for a wrong VAPID key. It's covered by "other 4xx retries, then parks".
 
-**D27. Containers**
+### D27. Containers
 - One backend image runs three ways: `backend` (uvicorn), `worker` and `migrate` (a one-shot `alembic upgrade head` that the others wait for, so two copies never migrate at once).
 - The app is built by Node and served by Nginx (`web`). Nginx passes `/api` and the live line to the backend. From T25, the address is http://localhost:8080.
 - `docker compose up` starts only the helpers (dev). `docker compose --profile app up` starts all of Parley.
@@ -221,7 +221,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Worker and web have no health check, since nothing waits on them. The CI containers job builds, starts and checks the whole stack.
 - Health checks that start a heavy program (an Erlang VM for RabbitMQ, Python for the backends) run every 30 s once a container is up, and faster (`start_interval`) while it's starting. At 5 s they took ~19% of the server's CPU (T29 follow-up). Light checks (`pg_isready`, `redis-cli ping`) may stay at 5 s.
 
-**D28. Several copies behind Nginx**
+### D28. Several copies behind Nginx
 - Two backend copies (`backend_a`, `backend_b`) run the same image, and differ only in `COPY_NAME`. `migrate` still runs once, first.
 - Nginx: `upstream` with `least_conn`, and a dead copy is skipped for 10 s (`max_fails=1 fail_timeout=10s`). Upstream servers use `resolve` with a shared `zone` (free Nginx since 1.27.3), so names are re-checked and Nginx starts even if a copy is missing. This replaces T25's `set $backend` trick. A short connect timeout is used. A POST that never reached a copy (connect failed) is tried on the other one.
 - The refresh cookie is set and deleted with the same settings, including `Secure`.
@@ -234,14 +234,14 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - After renaming a Compose service, use `up --remove-orphans` to remove the old container.
 - `up -d --build web` also recreates the backend copies (they're its dependencies). For a frontend-only change, use `up -d --no-deps --build web`, so live lines don't drop.
 
-**D29. AWS is optional, never required**
+### D29. AWS is optional, never required
 - Parley must always run with no AWS at all: `docker compose --profile app up` on any machine (a laptop or any Linux server) is the main way to run it, and it keeps working after the AWS free plan ends.
 - The app code has no AWS SDK and no AWS-only features. It reads plain settings (database, Redis and RabbitMQ addresses, secrets) from the environment, the same on a laptop and on AWS.
 - Everything AWS-specific lives in `deploy/aws/` (Terraform, deploy workflow, notes). Deleting that folder, or running `terraform destroy`, never breaks the project.
-- File storage (v2) uses the S3 protocol: MinIO in Docker Compose by default, and AWS S3 only when configured. It's the same code either way.
+- File storage (v2) uses the S3 protocol: a self-hosted store in Docker Compose by default, and AWS S3 only when configured. It's the same code either way. (MinIO was the first pick; D38 replaces it.)
 - When the free plan ends: `terraform destroy` the same day, keep the README's demo video and screenshots as proof, and the project still runs locally with one command.
 
-**D30. Going live (T28, T29)**
+### D30. Going live (T28, T29)
 - The account is on AWS's credit-based free plan: credits (about $141 as of Oct 28, 2026) and access until Feb 2, 2027. Running costs come out of those credits, so the brief's cost estimates are in credits used per month.
 - Region `ap-south-1` (Mumbai). One EC2 server (Ubuntu LTS, x86, sized from `docker stats`, plus 2 GB swap) with an Elastic IP, built by Terraform in `deploy/aws/terraform/`. Every resource is tagged `project=parley`.
 - No SSH: the security group opens only 80 and 443. Shell access is through AWS Session Manager (an instance role with `AmazonSSMManagedInstanceCore`).
@@ -266,7 +266,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Off switch: `terraform destroy` (11 resources), not "stop" (a stopped server still costs ~$5.50/month for the disk and IP). Afterwards, clear the IP on duckdns.org.
 - Known gaps: no backups (the database lives on the one disk), and images are built on the server (T29 moves builds to CI).
 
-**D31. Auto-deploy (T29)**
+### D31. Auto-deploy (T29)
 - GitHub Actions deploys `main` after CI passes: images are built in CI, tagged with the commit, pushed to ECR (keep the last 10), and the server is told to update through SSM (no SSH). It can also be run by hand with an older tag, which is the rollback.
 - GitHub reaches AWS through OIDC: a role that only `AdithyaChauhan/parley` on `main` can use, allowed only to push to the two ECR repositories and to send commands to this one server. GitHub stores no AWS keys, only variables.
 - Production secrets live in SSM Parameter Store (SecureString, `/parley/prod/*`). The server's role reads them and writes `.env` (600) on each deploy. Locally and on any other server, a plain `.env` still works (D29).
@@ -298,7 +298,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - The old delivery-delay roles stay on purpose (that project continues). They're narrow, limited to that repo's main.
   - T29 finished Nov 1, 2026 (PRs #30 to #33). Every merge to `main` deploys, rolling, with a green live check. The web stop is ~0.2 s with SIGTERM (it was 10.3 s).
 
-**D32. Metrics (T30)**
+### D32. Metrics (T30)
 - Prometheus scrapes every part every 15 s and keeps 7 days. Grafana draws one dashboard. Both live in Compose under the `monitoring` profile, with pinned images, and the data source and dashboard are files in the repo.
 - The backend uses the official `prometheus-client` with our own small middleware. Routes are labelled by template, never by real ids. `/metrics` is on the app port, and Nginx never passes it on (only `/api/`).
 - The worker serves its own metrics on port 9100. The helpers use exporters (Postgres, Redis), RabbitMQ's built-in metrics, and cAdvisor for CPU and memory per container.
@@ -312,7 +312,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - cAdvisor comes from `ghcr.io/google/cadvisor` and needs read-only access to the whole machine. That's fine on the laptop, and gets weighed in step 6.
 - Decided in T30 (measured): the server runs only the `/metrics` pages, reachable only inside its network. The monitoring stack (550 to 830 MB, mostly Grafana) doesn't fit next to Parley on the t3.small (about 1 GB free) without swapping, and a bigger server (~$16/month more) isn't worth it for a dashboard. The dashboard runs on the laptop, where the load test runs too (T31). T30 finished Nov 1, 2026 (PR #35).
 
-**D33. Load test (T31)**
+### D33. Load test (T31)
 - k6 in Docker (pinned), with scripts in `loadtest/`. It writes its numbers into Prometheus, so they show on the T30 dashboard. It runs on the laptop against the laptop stack, never against the live server.
 - The load test uses its own database (`parley_load`), seeded directly (500 pairs, one shared password hash). The seed script refuses any database whose name doesn't end in `_load`.
 - `RATE_LIMITS_ENABLED` (default on) may be switched off only for the load test. The app refuses to start with limits off when `COOKIE_SECURE` is true, so production always has its limits (D24).
@@ -342,7 +342,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - Claude Code took the screenshots (a read-only Grafana and headless Chrome).
   - `run.sh` waits 12 s after switching backends (D28's 10 s name re-check).
 
-**D34. Parley under load (fixes from T31)**
+### D34. Parley under load (fixes from T31)
 - What froze a copy was a deadlock: a request held a database connection while it waited for a thread, and the threads waited for a connection. It wasn't a leak: hanging up and cancelling both give the connection back (tests prove it).
 - A database session opens inside the work (`with SessionLocal() as db:`, in one thread) and closes before anything waits. There's no `get_db`. `get_current_user` has its own short session.
 - A send commits, reads what it needs and closes before publishing to Redis and RabbitMQ (D9's "save first" still holds). Receipts and the chat list's Redis read do the same.
@@ -360,7 +360,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Auto-restart of a stuck copy comes with T32's liveness probe. Async SQLAlchemy (D15) isn't needed.
 - Live since Nov 6, 2026 (PR #37). The deploy was green on both copies, and the live 429 check passed (401 five times, then 429). Overload behaviour isn't tested on the live site (D33); the laptop runs are the proof.
 
-**D35. Kubernetes on the laptop (T32)**
+### D35. Kubernetes on the laptop (T32)
 - kind (Kubernetes in Docker), one node, pinned by D27's version rule. It runs the same way on the laptop's Docker Desktop and in CI. It's free and uses nothing on AWS.
 - Plain manifests with Kustomize (built into `kubectl`), in `deploy/k8s/`, namespace `parley`. No Helm. T33 can add an EKS overlay.
 - The same images as Compose (D27), tagged with the commit and loaded into kind, with no registry.
@@ -386,3 +386,46 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - Lines don't move back after a pod is replaced. Only new lines go to the new pod.
   - A user with 5 tabs can hit the 10 tickets a minute limit (D24) while every tab reconnects. The app waits and retries.
   - RabbitMQ's memory alarm uses the machine's memory, not its 512 Mi limit. T33 should set it if RabbitMQ runs there.
+
+### D36. README (T34)
+- `README.md` is the front page, with the brief's 12 parts. Its numbers come only from `docs/load-test.md`, `docs/kubernetes.md`, DECISIONS.md and LEARNING.md. The diagrams are Mermaid, and it links to the long docs instead of copying them. Claude is mentioned only in "How I built this" (D13).
+- Screenshots and the demo GIF come from the local stack, on a throwaway database with made-up people (@example.com) that's deleted afterwards.
+- D-entries are headings (`### Dn. Title`), so the README can link to each one.
+- Clean re-runs (Nov 7, 2026): b 11,506 saved and 11,506 received, with 3 line drops. d reached the same 37.4/s peak with 0 undelivered. The README uses b from Nov 7 and d from Nov 6 (its lines split exactly 500/500), and both docs say why.
+- Learned: Nginx's `least_conn` counts open WebSockets, so a small uneven split of live lines (513/487) sent nearly all HTTP to the other copy until it was busy (a fix idea is in PLAN's Later list).
+
+### D37. Groups (T35)
+- A group is a chat with `kind = group`, a name (1-50 characters) and no `direct_key`. Direct chats don't change.
+- Up to 50 members, including the creator. That keeps the fan-out small for one-core copies (D34).
+- Roles are `admin` and `member`. The creator is an admin. Admins add and remove people, rename the group and make others admin. Anyone can leave. If the last admin leaves, the longest-standing member becomes admin.
+- People are added from your direct chats, or by exact email (like start-chat). There's no user search or directory.
+- Membership has a start and an end. A new member sees messages from when they joined, not the earlier history. A member who leaves or is removed keeps what they already had, gets nothing new and can't send. The chat stays in their list, read-only.
+- Group events (created, added, removed, left, renamed, made admin) are messages too, with `kind = system` and their own number in the chat. They're saved, pushed and caught up like any message (D9, D18, D21). They hold structured data (who did what to whom), and the app writes the words.
+- Fan-out: a message is published on `user:<id>` for each current member (D23), with no new channel type.
+- Ticks: two grey ticks once every other current member has it delivered, and teal once every other current member has read it (the lowest bookmark, D9). Who read what ("message info") comes later.
+- Receipts and typing go to all current members (D20). Typing shows the name ("Ana is typing...").
+- The header shows member names, not online or last seen. Online stays for direct chats (D22).
+- Notifications: one job per member (D25), titled "<sender> in <group>", with `chat_id` only (D12, D26).
+- Creating groups and changing members get D24-style limits. Every group route checks membership and role on the server.
+- Table changes follow expand-then-contract (D31).
+- The "..." menu comes back with "New group", and a group's members show in the side panel (D8).
+
+### D38. Files and voice notes (T36)
+- MinIO's free edition is out: it stopped publishing Docker images in Oct 2025 and its repository is archived. The store is Garage or SeaweedFS, chosen in T36 by measured memory and the S3 features needed. This replaces D29's MinIO line, and D29's rule stands: plain S3 in the code, AWS S3 only by settings.
+- The store runs in Compose everywhere, including the live server (a volume on its disk, a memory limit, no AWS change and no extra cost), and in the kind setup.
+- Uploads and downloads go straight between the browser and storage with short-lived presigned URLs, handed out only after a membership check (D37). Storage is reached through Nginx on the same site, so there's no cross-site setup.
+- A message is saved only after its upload finishes (D9). It holds the file's key, name, type and size, and for images the size and a small preview made by the browser. The server never opens files.
+- 10 MB per file. Images (JPEG, PNG, WebP, GIF), documents (PDF, TXT, DOCX, XLSX, PPTX, ZIP) and voice notes (up to 2 minutes). Uploads get D24-style limits. Uploaded but unsent files are removed after a day.
+- Known gap: no backups for files, the same as the database (D30).
+
+### D39. Reactions, edit and delete (T37)
+- Every change to a message is an event with its own number in the chat (`reaction`, `edit`, `delete`), so catch-up by number brings it (D21). History pages return messages with the latest state applied.
+- Reactions: one per person per message, from 👍 ❤️ 😂 😮 😢 🙏. Tap again to remove.
+- Edit: your own text messages, within 15 minutes, marked "edited".
+- Delete for everyone: your own messages, within 1 hour. The server erases the text and the file. "Delete for me" comes later.
+- Unread and notifications count only real messages (text, files, voice). Events and group notes (D37) don't. This replaces D20's "newest number − read_up_to" rule.
+
+### D40. Search (T38)
+- Search runs only in the browser (D12). The server has no text search.
+- The app keeps the messages it has seen in IndexedDB, per user, and clears them on log-out. Edits and deletes update the copy.
+- It searches what this device has loaded, and says so. An optional button loads older history.

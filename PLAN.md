@@ -21,54 +21,90 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### T34. README (build mode)
-- **Branch:** `docs/readme`
-- **Goal:** a README a recruiter can take in within 2 minutes, and an interviewer can dig into. Everything in it is true and measured: numbers come only from `docs/load-test.md`, `docs/kubernetes.md`, DECISIONS.md and LEARNING.md.
-- T33 (EKS) may still happen before Feb 2, 2027. If it does, it adds its own README section.
+### T35. Groups (build mode)
+- **Branch:** `feature/groups`
+- **Goal:** group chats that work like WhatsApp's basic groups. They're built on what already exists: the same message numbers, bookmarks, live line and catch-up. The rules are in D37.
 
-**First: clean load-test numbers**
-- Re-run load tests b and d with other apps closed (only Docker Desktop and VS Code open), because the Nov 6 runs had Windows paging (D34).
-- Update `docs/load-test.md` with the new "after" numbers, and say which run the README uses.
-- Check free memory before each run. If it's still low, run anyway and say so in the report.
+**Backend**
+- Tables and columns for groups, roles and membership start/end, using expand-then-contract (D31). The migration must be safe on the live database, with existing direct chats untouched.
+- Routes: create a group (name and members), add, remove, leave, rename, make admin, and list members. Every route checks membership and role on the server. Each change is saved together with its system message, in one transaction.
+- Sends, history, catch-up and the chat list work for groups and respect membership: nothing from before you joined, and nothing after you left.
+- Fan-out, receipts, typing and notifications follow D37.
+- Tests:
+  - a removed member can't read, send or get pushes
+  - two admins changing members at the same moment
+  - the last admin leaving
+  - system messages keep the numbers gap-free
+  - group ticks use the lowest bookmark
 
-**What goes in `README.md`, in this order**
-1. One line on what Parley is, the live link (https://parley-adithya.duckdns.org, "until Feb 2027", D29), and the CI badge.
-2. A short demo GIF (under ~5 MB): two windows chatting with sends, ticks, typing and online. If it fits, show a failover too (stop one copy, the chat carries on).
-3. Screenshots: desktop (from 1280 px), the middle size, and phone. Take them from the local stack with made-up accounts, never real emails or data. Put them in `docs/screenshots/`.
-4. What works today, and one line on what's not built yet (v2: groups, files, voice notes, reactions, edit/delete, search).
-5. An architecture diagram in Mermaid (GitHub draws it): browser → Nginx → 2 backend copies → PostgreSQL, Redis, RabbitMQ → worker → Web Push. Add a small second diagram for the deploy path: GitHub Actions → ECR → SSM → EC2.
-6. "How a message travels": a Mermaid sequence diagram showing send over HTTP, save first (D9), Redis pub/sub to the other copy (D23), live push, then the ticks (D20).
-7. Results:
-   - the load-test table (after the clean re-run)
-   - the deadlock story in 3-4 lines: the first guess was a leak, and tests found a deadlock (D34)
-   - the Kubernetes demos table from `docs/kubernetes.md`
-8. "Problems I solved": 5-6 short items, each written as problem → cause → fix → result. Use only numbers already recorded:
-   - the thread/connection deadlock (D34)
-   - the argon2 login flood (D34)
-   - the iPhone keyboard layout (D8, PR #29)
-   - idle CPU from health checks, 18.9% → 5.7% (D27)
-   - the 10.3 s web blip on deploy, now ~0.2 s (D31)
-   - ticks during a Redis outage (D20, D24)
-9. Key design decisions: 6-8 one-liners, each linking to its D-entry in DECISIONS.md. For example: HTTP to send, WebSocket for live (D3); per-chat numbers and `client_msg_id` (D18); save first (D9); Redis only for temporary facts (D22); at-least-once notifications (D25); the server never reads message text (D12); AWS optional (D29).
-10. Run it yourself: Compose with one command (D29), Kubernetes with `deploy/k8s/up.sh` (D35), and the tests.
-11. Tech stack (short).
-12. "How I built this": planned with Claude, coded with Claude Code. Adithya made the decisions and reviewed the work. Up to T31 he also tested every change himself; from the load fix on (build mode), Claude Code ran the checks. LEARNING.md shows what he learned. Also credit the reference design here (D8).
+**App (D8)**
+- The "..." menu comes back with "New group": a name, plus people picked from your direct chats or added by email.
+- The group header shows the name and member names. Tapping it opens the side panel with the members. Admins can add, remove and make admin there, and everyone gets "Leave group".
+- Messages from others show the sender's name above the bubble, in a steady color per person. System messages are small centered notes. The group avatar uses the name's initials.
+- A member who left or was removed sees the chat read-only, with a note and no message box.
+- Works at all three window sizes (D8). Screenshots of each go in the report.
+- Update the README's "what works" list and its v2 line.
 
-**Rules**
-- No demo passwords in the README. Visitors sign up with any email (D24's limits apply).
-- Claude is mentioned only in "How I built this" (D13). The PR description doesn't mention Claude.
-- Keep it scannable: short sections, diagrams over long text, and links to the docs for detail.
-- Check the Mermaid diagrams locally (Mermaid CLI). After Adithya pushes, check the branch's README on GitHub in a headless browser: diagrams draw, images load, links work.
-- Put text for GitHub's "About" box (a one-line description, the website link and topics) in the report. Only Adithya can set it.
-
-**Not in T34:** the EKS section (after T33) and a long video.
+**Measure (T31's tools, D33's rules)**
+- One 50-member group at 2 and 5 msg/s: end-to-end p50/p95 to every member, pushes per second, and CPU. Write it up in `docs/load-test.md`.
 
 - **Done when:**
-  - The README has all 12 parts, and every number in it matches the docs.
-  - The clean re-runs are in `docs/load-test.md`.
-  - The README draws correctly on GitHub (checked on the pushed branch).
+  - Everything above is built, and the new and old tests pass.
+  - A real-browser check through localhost:8080 with three users passes: create, add, remove, leave, rename, and the ticks.
+  - The measurement is in `docs/load-test.md`.
   - CI is green.
-  - LEARNING.md has a short section with a draft "In my words": how I'd present Parley in 2 minutes.
+  - LEARNING.md has the section with a draft "In my words".
+  - Adithya's iPhone check (a group with Ana and Ben on the live site) is batched with T36-T38's checks at the end.
+
+---
+
+## Next briefs (run in order after T35, no planning round in between)
+
+How to run them: each task starts in a new Claude Code chat, from an up-to-date `main`, after the previous PR is merged. Step 0 of every task is to check that the last deploy is green and the live site shows the new version. Adithya brings a report to the planning chat only when Claude Code stops for a decision, or at the end of the batch. Claude Code collects suggested PLAN and DECISIONS text in its report, and the planner folds it all in at the end. iPhone checks for T35-T38 are batched into one session at the end.
+
+### T36. Files and voice notes (build mode)
+- **Branch:** `feature/files`
+- **Goal:** send images, documents and voice notes in direct chats and groups, like WhatsApp. The rules are in D38.
+
+**Storage (D38)**
+- An S3-compatible store runs in Compose (dev, CI, and the live server's Compose) and in the kind setup. MinIO's free edition is out (D38), so pick Garage or SeaweedFS. Choose by measured memory on the 2 GB server and by the S3 features you need (presigned URLs). Pin the version (D27), and record the choice and the numbers.
+- The app code talks plain S3 (one small client, settings from the environment, D29), so AWS S3 would work by changing settings only.
+- On the live server the store runs in Compose with a volume on the server's disk. That's no AWS change and no extra cost. Set a memory limit, and measure the server's free memory after the deploy.
+
+**How files travel**
+- The browser uploads straight to storage with a short-lived presigned URL that the backend hands out after checking membership. Storage is reached through Nginx on the same site (for example `/storage/`), so there's no cross-site setup.
+- The message is saved only after the upload finishes (D9). It carries the file's key, name, type, size and, for images, width and height plus a small preview that the browser makes. The server never opens the file (D12's spirit).
+- Downloads use short-lived presigned URLs, given only to current members of the chat (D37's membership rules apply).
+- Limits: 10 MB per file. Images (JPEG, PNG, WebP, GIF), documents (PDF, TXT, DOCX, XLSX, PPTX, ZIP) and voice notes. Checked on the server and in storage. D24-style upload limits per user.
+- Files that were uploaded but never sent are removed after a day.
+
+**App (D8)**
+- The attach button and file drop come back. Images show inline with the preview first, then the full image. Tapping one opens it large. Documents show as a card with the name, type and size, plus a download button. The side panel's "No files yet" becomes a real list of the chat's files.
+- Voice notes: hold the mic button to record (the browser's MediaRecorder; iPhone Safari records a different format, so test both). Up to 2 minutes, with a player in the bubble (play/pause, length).
+- An upload shows progress and can be cancelled. A failed upload shows "Not sent" with retry, like a text.
+- Works at all three window sizes, and on iPhone Safari (the batched check).
+
+- **Done when:** sending and opening all three kinds works in a direct chat and a group (real browser, three users); a non-member can't get a file URL (test); the size and type limits hold (tests); the store's memory on the live server is measured after the deploy; CI is green; the README's lists are updated; LEARNING.md has the section with a draft "In my words".
+
+### T37. Reactions, edit and delete (build mode)
+- **Branch:** `feature/message-actions`
+- **Goal:** react to a message, edit your own text, and delete your own messages for everyone. The rules are in D39.
+- Each change is an event with its own number in the chat (`kind` = `reaction`, `edit` or `delete`, pointing at the target message). So catch-up by number brings it (D21), and live pushes carry it like any message. History pages return messages with the latest state already applied, so a new device doesn't replay events.
+- Reactions: one per person per message, from 6 emojis (👍 ❤️ 😂 😮 😢 🙏). Tap again to remove. Counts show under the bubble. The emoji button comes back (D8).
+- Edit: your own text messages, within 15 minutes. The bubble shows "edited".
+- Delete for everyone: your own messages, within 1 hour. The server erases the text and the file (from storage too). Everyone sees "This message was deleted". "Delete for me" comes later.
+- Unread and notifications count only real messages (text, files, voice). Events and group notes don't (this updates D20's unread rule, D39). The chat list's preview skips events.
+- Works in direct chats and groups, at all three window sizes. On phones, a long press opens the actions. On desktop, hovering does.
+- **Done when:** all three work live between two browsers and after a reconnect (catch-up); the time limits and "own messages only" hold (tests); unread counts ignore events (test); CI is green; LEARNING.md has the section with a draft "In my words".
+
+### T38. Search on your device (build mode)
+- **Branch:** `feature/search`
+- **Goal:** search your messages without the server ever searching them (D12). The rules are in D40.
+- The app keeps the messages it has seen in IndexedDB, per user, and clears them on log-out. Edits and deletes update the copy.
+- Search across chats from the top of the chat list, and inside a chat from its header. Results show the chat, the sender and the matching text, with the match highlighted. Tapping one jumps to the message, loading older pages if needed.
+- An honest note in the search box: it searches messages this device has loaded. An optional "Load all my history" button fetches older pages (D24-style pacing).
+- Works at all three window sizes.
+- **Done when:** search finds messages across chats and inside a chat, stays right after edits and deletes, is empty after log-out (tests or browser checks); no server route searches text; CI is green; the README's lists are updated; LEARNING.md has the section with a draft "In my words".
 
 ---
 
@@ -131,14 +167,19 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ### Phase 10: Kubernetes
 - [x] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34, D35)
-- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour). Decided Nov 7: after T34. Set RabbitMQ's memory alarm there (D35)
+- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour). It can slot in between v2 tasks, any time before Feb 2. Set RabbitMQ's memory alarm there (D35)
 
 ### Phase 11: Show it
-- [ ] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
+- [x] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
+
+### Phase 12: v2 (from Nov 7, 2026; target Nov 10, one PR per task)
+- [ ] T35. Groups: one message fans out to many people (D37). Brings back the "..." menu ("New group") and the members view
+- [ ] T36. Files and voice notes: images, documents and voice notes in S3-style storage (D38). Brings back attach and file drop
+- [ ] T37. Reactions, edit and delete (D39). Brings back the emoji button
+- [ ] T38. Search, only on your own device (D12, D40)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
-- v2, in this order: groups (one message fans out to many people), images and documents (S3-style storage: MinIO in Docker Compose by default, AWS S3 when configured, D29), voice notes, reactions (these bring back the emoji button), edit and delete, search (only for your own messages on your device, D12). Groups bring back the "..." menu ("New group") and the group members view.
 - Maybe later: Status (24-hour stories, which bring back the eye icon: a good topic for expiry and fan-out), voice and video calls (WebRTC, a big topic on its own, which bring back the calls icon).
 - Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service
@@ -149,3 +190,4 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 - Small: a hint near "Turn on notifications" (it lives only in the gear menu and is easy to confuse with the browser's own site toggle).
 - Small: a page reload during overload shows the log-in screen when its refresh gets a 503. Wait for `Retry-After` and try again instead.
 - More capacity, if ever needed (the limit is now about one core per copy): a third copy, autoscaling on Kubernetes (HPA), or `uvicorn[standard]`. A cheaper refusal (for example in Nginx) could also stop accepted messages falling past the limit. None of these is measured yet.
+- Small: balance HTTP and live lines separately. `least_conn` counts WebSockets, so a 513/487 split sent most HTTP to one copy (D36). Options: a separate upstream for `/api/live`, or round robin for plain HTTP. Not measured.

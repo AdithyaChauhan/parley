@@ -1584,3 +1584,29 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - How a pod goes away with nothing lost: it leaves the list first, but Nginx only re-checks names every 5 s, so requests keep arriving. I measured 27 to 29 of them after the delete. So it waits 6 s, then closes its live lines with 1012, and the apps reconnect to the other pod and catch up by number.
 - Something Kubernetes showed me that Compose didn't: while RabbitMQ restarted, its name stopped resolving, and that crashed the worker, because it only caught RabbitMQ's own errors. The cluster also taught me to check my demos: one passed while Redis had never actually stopped, because the part of Kubernetes that acts on it was restarting. Now the demo waits until Redis is really gone.
 - What still confuses me: exactly how many seconds each probe should wait. I set them from what I measured on one memory-starved laptop, so I don't know how far they'd change on a real server.
+
+---
+
+### Task 34: README
+**What was built**
+- `README.md`: the front page of the repo, in the brief's 12 parts: what Parley is, the live link and CI badge, a demo GIF, screenshots at three sizes, what works, two architecture diagrams, how a message travels, results, problems solved, key decisions, how to run it, the tech stack, and how it was built.
+  - Diagrams are Mermaid code blocks, so GitHub draws them and they stay editable as text.
+  - Every number comes from `docs/load-test.md`, `docs/kubernetes.md`, DECISIONS.md or this file.
+- `docs/screenshots/`: `desktop.png` (1440 px), `tablet.png` (1024 px), `phone.png` (390 px) and `demo.gif` (two browsers chatting, then a backend copy stopped mid-chat). They come from the local stack, on a throwaway `parley_demo` database with made-up people (`@example.com`), deleted afterwards. The dev data wasn't touched.
+- `docs/load-test.md`: the clean re-runs of b and d on November 7, and which run the README uses (b from November 7, d from November 6). Both re-runs had 0 undelivered messages and no frozen copy. A first try at b, on a Docker that had been up 16 hours, stalled the laptop and is kept but not used.
+- `loadtest/results/2026-11-07_*`: the k6 summaries and database checks of the re-runs.
+
+**New ideas**
+- Mermaid: diagrams written as text (`flowchart`, `sequenceDiagram`). GitHub draws them in the browser, so a diagram changes in the same pull request as the code it explains.
+- A sequence diagram: who talks to whom, in time order, top to bottom. Good for one message's trip, where a box diagram can't show order.
+- A CI badge: a small picture GitHub serves from the latest run on `main`, so the README always shows the current state.
+- Heading anchors: GitHub gives every heading an id made from its text (lowercase, no punctuation, spaces become `-`), so a link can jump straight to it. Bold text gets no id.
+- `least_conn` and WebSockets: Nginx's "fewest connections" counts open live lines too. In the November 7 run d, a stall left 513 lines on A and 487 on B, so new HTTP requests went to B until B had about 26 more in flight. One copy did most of the work at 30 messages/s, which made that step slower than on November 6.
+- A README for two readers: the top part is for someone with 2 minutes (what, live link, GIF, screenshots). The rest is for an interviewer who wants to dig, with links to the long docs instead of copying them.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- How I'd present Parley in 2 minutes: Parley is a WhatsApp-Web-style chat app I built to learn backend system design, and it's live on AWS. You send a message over plain HTTP, the server numbers it per chat and saves it to PostgreSQL first, and only then pushes it over a WebSocket. There are two backend copies behind Nginx, and Redis pub/sub carries a message from the copy that saved it to the copy holding the other person's live line. If a push is lost, nothing is lost: the app catches up by message number. Ticks are two bookmarks per person, "delivered up to" and "read up to". Notifications go through RabbitMQ to a worker with retries, and they never contain the message text. I load tested it with 1,000 fake users and found a deadlock between threads and database connections, not the leak I first suspected. After the fix nothing freezes, and the limit on my laptop is about 35 messages a second, set by CPU. Then I ran it on Kubernetes, where a frozen pod restarts by itself and a rolling update loses nothing. Every merge deploys itself, one copy at a time.
+- Why the README starts with the GIF and the live link: a recruiter decides in seconds, so the first screen has to show it working. The diagrams and results are for the interviewer who scrolls on.
+- Why only measured numbers: an interviewer can ask about any number, so each one has to come from a run I can point to. That's also why the README links to the load-test write-up instead of copying all of it.
+- What the re-run taught me: a slower step doesn't always mean slower code. I checked the requests per copy before believing the number, and found Nginx had sent most of them to one copy because the live lines were split 513 and 487.
+- What still confuses me: how far my laptop numbers would carry to a real server. The laptop shares its CPU and memory with k6 and the monitoring stack, so I can say where the limit came from, but not what it would be on a proper machine.
