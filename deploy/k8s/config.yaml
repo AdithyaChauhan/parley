@@ -1,0 +1,17 @@
+# Settings that aren't secret. The secrets (passwords, keys, and the two
+# addresses that contain a password) are in the parley-secrets Secret, which
+# make-secret.sh makes from .env. It's never in a file here (D35).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parley-config
+  labels:
+    stage: helpers
+data:
+  # Service names work like Compose names inside the namespace (D27).
+  REDIS_URL: redis://redis:6379/0
+  # Real browser notifications, like the Compose stack (D26). localhost counts
+  # as secure, so push works at http://localhost:8090.
+  NOTIFIER: webpush
+  # Plain http on the laptop, so the browser must be allowed to send the cookie.
+  COOKIE_SECURE: "false"

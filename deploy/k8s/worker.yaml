@@ -1,0 +1,50 @@
+# Sends notifications from RabbitMQ's queue (D25).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    stage: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      enableServiceLinks: false
+      # Room to hand the job in progress back to RabbitMQ (D25, D27).
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: worker
+          image: parley-backend:dev
+          imagePullPolicy: Never
+          command: ["python", "-m", "app.notify.worker"]
+          envFrom:
+            - configMapRef: { name: parley-config }
+            - secretRef: { name: parley-secrets }
+          ports:
+            - containerPort: 9100
+          # The worker's only door is its /metrics page (D32). It stays up
+          # while RabbitMQ is down, so a helper's outage never restarts the worker.
+          startupProbe:
+            httpGet: { path: /metrics, port: 9100 }
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /metrics, port: 9100 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Patient, like the backend's: a slow laptop shouldn't restart it.
+          livenessProbe:
+            httpGet: { path: /metrics, port: 9100 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }

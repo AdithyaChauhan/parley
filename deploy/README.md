@@ -18,6 +18,7 @@ deploy/
     store-secrets.sh        copies .env into Parameter Store (run once)
     deploy-from-ecr.sh      puts one version live from ECR (GitHub runs it)
     docker-compose.ecr.yml  images from ECR, logs to CloudWatch
+  k8s/             local Kubernetes, for learning and demos (see docs/kubernetes.md)
 ```
 
 ## 1. Any Linux server

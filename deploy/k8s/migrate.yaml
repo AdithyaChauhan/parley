@@ -1,0 +1,31 @@
+# Brings the tables up to date once, then finishes (D27). up.sh waits for it
+# before it starts or rolls the backends, so two copies never migrate at once.
+# A Job can't be changed after it's made, so up.sh deletes the old one first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  labels:
+    stage: migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: migrate
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          # up.sh swaps :dev for the commit's tag. No registry: the image is
+          # loaded into kind, so never try to download it (D35).
+          image: parley-backend:dev
+          imagePullPolicy: Never
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: parley-config }
+            - secretRef: { name: parley-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 256Mi }

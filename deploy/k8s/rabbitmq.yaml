@@ -1,0 +1,78 @@
+# The post office for notification jobs (D25). The pod's fixed name (rabbitmq-0)
+# does the job of Compose's fixed hostname: RabbitMQ files its data under its
+# own name, so it finds its parked jobs after a restart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels:
+    stage: helpers
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  labels:
+    stage: helpers
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4.3.7-management
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: RABBITMQ_USER } }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: RABBITMQ_PASSWORD } }
+          ports:
+            - containerPort: 5672
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+          # Each check starts a whole Erlang program, so it's a heavy one: fast
+          # only while starting, then every 30 s (D27).
+          startupProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            periodSeconds: 5
+            timeoutSeconds: 20
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            periodSeconds: 30
+            timeoutSeconds: 20
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: "1", memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 512Mi

@@ -21,46 +21,54 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### T32. Run Parley on local Kubernetes (build mode)
-- **Branch:** `feature/local-kubernetes`
-- **Goal:** all of Parley runs on a Kubernetes cluster on the laptop, with one command to start it and one to remove it. Then show what Kubernetes adds: it restarts a stuck copy by itself (D34), replaces a deleted pod, rolls out a new version with nothing lost, and keeps the data when a pod restarts.
-- Local only: nothing on AWS, no cost. Production stays on Docker Compose (D30, D31). The setup choices are in D35.
+### T34. README (build mode)
+- **Branch:** `docs/readme`
+- **Goal:** a README a recruiter can take in within 2 minutes, and an interviewer can dig into. Everything in it is true and measured: numbers come only from `docs/load-test.md`, `docs/kubernetes.md`, DECISIONS.md and LEARNING.md.
+- T33 (EKS) may still happen before Feb 2, 2027. If it does, it adds its own README section.
 
-**What runs (namespace `parley`)**
-- `backend`: a Deployment with 2 replicas (D28). `COPY_NAME` is the pod name, so `/api/health` and `hello` show which pod answered.
-- `worker` and `web`: Deployments with 1 replica each.
-- PostgreSQL, Redis and RabbitMQ: StatefulSets with one replica and a volume each, using the same pinned images as Compose.
-- `migrate`: a Job that finishes before the backends start or roll.
-- The front door is `web`'s Nginx on `http://localhost:8090` (not 8080, so it's never mixed up with Compose). Live lines must still spread over both backend pods, and a stopped pod's lines must move to the other within seconds (D28). For example, use a headless Service with D28's `upstream ... resolve` and `least_conn`, or a normal Service. Pick by measuring the spread.
-- Settings go in a ConfigMap. Secrets go in a Secret that a script makes from `.env`, never committed. Resource requests and limits come from measured use.
+**First: clean load-test numbers**
+- Re-run load tests b and d with other apps closed (only Docker Desktop and VS Code open), because the Nov 6 runs had Windows paging (D34).
+- Update `docs/load-test.md` with the new "after" numbers, and say which run the README uses.
+- Check free memory before each run. If it's still low, run anyway and say so in the report.
 
-**Health and updates**
-- Every part has readiness and liveness probes. The backend's liveness probe uses `/api/health` (a `def` route, D34) and must not depend on Redis or RabbitMQ (D24). Heavy checks run every 30 s (D27).
-- A new backend version rolls one pod at a time with no gap (`maxUnavailable: 0`). If requests reach a stopping pod, add a short pause before it stops.
+**What goes in `README.md`, in this order**
+1. One line on what Parley is, the live link (https://parley-adithya.duckdns.org, "until Feb 2027", D29), and the CI badge.
+2. A short demo GIF (under ~5 MB): two windows chatting with sends, ticks, typing and online. If it fits, show a failover too (stop one copy, the chat carries on).
+3. Screenshots: desktop (from 1280 px), the middle size, and phone. Take them from the local stack with made-up accounts, never real emails or data. Put them in `docs/screenshots/`.
+4. What works today, and one line on what's not built yet (v2: groups, files, voice notes, reactions, edit/delete, search).
+5. An architecture diagram in Mermaid (GitHub draws it): browser → Nginx → 2 backend copies → PostgreSQL, Redis, RabbitMQ → worker → Web Push. Add a small second diagram for the deploy path: GitHub Actions → ECR → SSM → EC2.
+6. "How a message travels": a Mermaid sequence diagram showing send over HTTP, save first (D9), Redis pub/sub to the other copy (D23), live push, then the ticks (D20).
+7. Results:
+   - the load-test table (after the clean re-run)
+   - the deadlock story in 3-4 lines: the first guess was a leak, and tests found a deadlock (D34)
+   - the Kubernetes demos table from `docs/kubernetes.md`
+8. "Problems I solved": 5-6 short items, each written as problem → cause → fix → result. Use only numbers already recorded:
+   - the thread/connection deadlock (D34)
+   - the argon2 login flood (D34)
+   - the iPhone keyboard layout (D8, PR #29)
+   - idle CPU from health checks, 18.9% → 5.7% (D27)
+   - the 10.3 s web blip on deploy, now ~0.2 s (D31)
+   - ticks during a Redis outage (D20, D24)
+9. Key design decisions: 6-8 one-liners, each linking to its D-entry in DECISIONS.md. For example: HTTP to send, WebSocket for live (D3); per-chat numbers and `client_msg_id` (D18); save first (D9); Redis only for temporary facts (D22); at-least-once notifications (D25); the server never reads message text (D12); AWS optional (D29).
+10. Run it yourself: Compose with one command (D29), Kubernetes with `deploy/k8s/up.sh` (D35), and the tests.
+11. Tech stack (short).
+12. "How I built this": planned with Claude, coded with Claude Code. Adithya made the decisions and reviewed the work. Up to T31 he also tested every change himself; from the load fix on (build mode), Claude Code ran the checks. LEARNING.md shows what he learned. Also credit the reference design here (D8).
 
-**Scripts and CI**
-- `deploy/k8s/up.sh` creates the cluster if needed, builds and loads the images (tagged with the commit), applies the manifests and waits until everything is ready. `deploy/k8s/down.sh` deletes the cluster. Both run in Git Bash on Windows.
-- A new CI job, `k8s`, builds the images, starts kind, applies the manifests, waits until ready, then checks health and one send end to end. Don't make it a required check yet.
+**Rules**
+- No demo passwords in the README. Visitors sign up with any email (D24's limits apply).
+- Claude is mentioned only in "How I built this" (D13). The PR description doesn't mention Claude.
+- Keep it scannable: short sections, diagrams over long text, and links to the docs for detail.
+- Check the Mermaid diagrams locally (Mermaid CLI). After Adithya pushes, check the branch's README on GitHub in a headless browser: diagrams draw, images load, links work.
+- Put text for GitHub's "About" box (a one-line description, the website link and topics) in the report. Only Adithya can set it.
 
-**Demos (Claude Code runs them; results go in `docs/kubernetes.md`)**
-1. Two users chat through `localhost:8090`: send, ticks, live push, online.
-2. At least 20 live lines (a few test users with several lines each, within D24's limits) split over both backend pods.
-3. Delete a backend pod mid-chat. Its lines move to the other pod within seconds, nothing is lost, and a new pod starts.
-4. A stuck copy restarts by itself. Freeze one backend pod's process (for example with SIGSTOP from the kind node). The liveness probe fails, Kubernetes restarts the pod, and its lines move to the other pod. Record how long that took.
-5. A rolling update under light load (~5 msg/s): 0 lost, and afterwards every answer shows the new version.
-6. Stop Redis for a minute (scale it to 0). The backends stay up and aren't restarted (D24), and the lines come back afterwards.
-7. Delete the PostgreSQL pod. It comes back with the same data.
-
-**Memory:** WSL has ~3.4 GB. Stop the Compose stack while the cluster runs (dev data stays in its own volume), and put it back afterwards (CLAUDE.md).
-
-**Not in T32:** EKS (T33), monitoring inside the cluster, and autoscaling (Later list).
+**Not in T34:** the EKS section (after T33) and a long video.
 
 - **Done when:**
-  - `up.sh` brings Parley up from nothing, and `down.sh` removes it all.
-  - The 7 demos pass and are written up in `docs/kubernetes.md`, with a table mapping each Compose service to its Kubernetes object.
-  - CI is green, including the new `k8s` job.
-  - The dev stack is back as it was.
-  - LEARNING.md has the section with a draft "In my words".
+  - The README has all 12 parts, and every number in it matches the docs.
+  - The clean re-runs are in `docs/load-test.md`.
+  - The README draws correctly on GitHub (checked on the pushed branch).
+  - CI is green.
+  - LEARNING.md has a short section with a draft "In my words": how I'd present Parley in 2 minutes.
 
 ---
 
@@ -119,11 +127,11 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 ### Phase 9: Measure it
 - [x] T30. Prometheus metrics and a Grafana dashboard
 - [x] T31. Load test with 1,000 fake users; write up the results with the laptop's specs (with least_conn, judge the spread of open live lines, not request counts) (include 1,000 users connecting at once, to check the per-copy subscribe lock from D23)
-- [x] Fix: Parley under load: a thread/connection deadlock, and the password-check cap (D34)
+- [x] Fix: Parley under load: a thread/connection deadlock, and the password-check cap (D34, PR #37)
 
 ### Phase 10: Kubernetes
-- [ ] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34, D35)
-- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour)
+- [x] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34, D35)
+- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour). Decided Nov 7: after T34. Set RabbitMQ's memory alarm there (D35)
 
 ### Phase 11: Show it
 - [ ] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)

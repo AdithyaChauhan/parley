@@ -358,6 +358,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - A page reload during overload can show the log-in screen if its refresh gets a 503 (a small fix in PLAN's Later list).
   - D23's subscribe lock is still a queue in a storm (open → hello p50 2.6 s), but nothing freezes.
 - Auto-restart of a stuck copy comes with T32's liveness probe. Async SQLAlchemy (D15) isn't needed.
+- Live since Nov 6, 2026 (PR #37). The deploy was green on both copies, and the live 429 check passed (401 five times, then 429). Overload behaviour isn't tested on the live site (D33); the laptop runs are the proof.
 
 **D35. Kubernetes on the laptop (T32)**
 - kind (Kubernetes in Docker), one node, pinned by D27's version rule. It runs the same way on the laptop's Docker Desktop and in CI. It's free and uses nothing on AWS.
@@ -369,3 +370,19 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Settings in a ConfigMap. Secrets in a Kubernetes Secret made from the local `.env` by a script, never committed (D15).
 - Probes: liveness never depends on a helper, so a Redis outage never restarts the backends (D24). Heavy checks run every 30 s (D27).
 - Production stays on Docker Compose on EC2 (D30, D31). Kubernetes is for learning and the demo, and T33 is the optional cloud run.
+- Agreed and learned in T32 (finished Nov 7, 2026):
+  - kind v0.33.0 with Kubernetes 1.36.4, pinned by digest. Leader election is off: one node doesn't need it, and on the memory-starved laptop it kept restarting the cluster's managers.
+  - The backend uses a headless Service with Nginx's `upstream ... resolve` and `least_conn`. That split 13/12 every round, while a normal Service gave up to 17/8. The helpers use normal Services, so a missing pod fails in about 1 s, not after a 2 s name lookup.
+  - Liveness is patient: about 60 s, and 2 minutes for PostgreSQL. At 30 s, Windows memory stalls restarted healthy pods. Readiness moves traffic away in about 15 s. The backend uses `/api/health` for both, which touches no helper (D24, D34).
+  - Rolling: `maxSurge` 1, `maxUnavailable` 0, `minReadySeconds` 10. A pause before a pod stops: 6 s for the backend (Nginx re-checks names every 5 s in the cluster) and 3 s for web. Measured: 0 of 839 requests failed.
+  - A name that won't resolve counts as "can't reach RabbitMQ" in `queues.connect()`. Before this, the worker crashed while RabbitMQ restarted. It's a real fix for every setup, with a test.
+  - The `k8s` CI job isn't required and uses `continue-on-error`, so it can't block a deploy (`deploy.yml` waits for the whole CI run). Claude Code's after-merge check reports whether it passed.
+  - `.claude/settings.local.json` is gitignored.
+  - Results: all 7 demos passed. A deleted pod's lines moved within 8.8 s, a frozen pod restarted by itself in 69-74 s, and a rolling update lost 0 messages. Details are in `docs/kubernetes.md`.
+- Known and accepted:
+  - The laptop is the real limit (200-550 MB free with other apps open), and image loads stall everything for tens of seconds. `up.sh` takes about 9 minutes from nothing.
+  - During a Redis outage, sends take 1-2 s each, because each Redis call waits out its 1 s limit (D24).
+  - The worker's probes check its metrics thread. They catch a stuck pod, but not a stuck job loop inside a live process.
+  - Lines don't move back after a pod is replaced. Only new lines go to the new pod.
+  - A user with 5 tabs can hit the 10 tickets a minute limit (D24) while every tab reconnects. The app waits and retries.
+  - RabbitMQ's memory alarm uses the machine's memory, not its 512 Mi limit. T33 should set it if RabbitMQ runs there.
