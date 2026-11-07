@@ -1,7 +1,7 @@
 # Parley load test (T31, and the fix after it)
 
 1,000 fake users on one laptop, measured end to end and read from the Grafana dashboard (T30).
-Runs: T31 on November 1-4, 2026 (the old code), and the re-runs after the fix (D34) on November 6. Times are the laptop's (IST, UTC+5:30), like the screenshots.
+Runs: T31 on November 1-4, 2026 (the old code), the re-runs after the fix (D34) on November 6, and clean re-runs of b and d on November 7 (see "Clean re-runs"). Times are the laptop's (IST, UTC+5:30), like the screenshots.
 
 ## The short version
 
@@ -11,6 +11,7 @@ Runs: T31 on November 1-4, 2026 (the old code), and the re-runs after the fix (D
 - **What froze a copy was a deadlock, not a leak.** T31 blamed requests that were given up and never handed their connection back. Tests on the old code disproved that: a request held a connection while it waited for a thread, and the threads waited for a connection (see "The bottleneck").
 - **Real logins no longer collapse.** At 10 a second, all 301 went through and each backend stayed at or under ~206 MB. On the old code in the same session: 10 finished, p95 53 s, 945 MB. At 30 a second the extra logins get a 503 within ~2.5 s.
 - The first request after a quiet minute is not slow (the T30 question), whether the monitoring stack is on or off.
+- **The November 7 re-runs agree:** 0 undelivered in b and d, no frozen copy, the same peak in d (37.4 accepted a second), and only 3 line drops in b. They also showed that an uneven split of live lines (513 and 487) sends most HTTP to one copy, because `least_conn` counts WebSockets (see "Clean re-runs").
 
 ## Before and after the fix (D34)
 
@@ -100,6 +101,46 @@ A flood on the new code (a one-off, not in `logins.js`):
 | 30 | 301 | 537 | 0 | 2.5 s |
 
 Each backend stayed at or under 287 MB (about 85 MB, plus 3 x 64 MB), and swap under 28 MB. So a copy takes about 10-15 real logins a second on this laptop, and the rest are told "busy" within ~2.5 s. k6 itself couldn't start 90 of the arrivals while it was adding more fake users.
+
+## Clean re-runs (November 7)
+
+b and d again on the fixed code, because the November 6 runs had Windows paging. Before them: a fresh Docker start (b, then d right after it), and only Docker Desktop, VS Code, Claude Code and one browser window (the planning chat) open.
+
+**The laptop was still short of memory.** Free memory was 858 MB before b and 674 MB before d (576-619 MB after), and Windows paged up to ~4,100 pages/s. That's a little more room than November 6 (~0.6 GB), not a clean machine.
+
+A first try at b, on a Docker that had been up for 16 hours, stalled the whole laptop: k6's own metrics took 4 minutes to reach Prometheus, 1,003 lines dropped, and 173 messages were saved but hadn't reached their partner when the test ended. It's kept as `2026-11-07_1556-b` and not used. Docker was then restarted, and the runs below came after.
+
+### b. Steady chat, ~50 messages/s
+
+| | November 6 | November 7 (clean re-run) |
+|---|---|---|
+| Saved / received | 14,624 / 14,624: 0 undelivered | **11,506 / 11,506: 0 undelivered** |
+| Accepted | 20-25 messages/s | ~19 messages/s (11,506 in 10 minutes), both copies at ~1.1 cores |
+| 503 "busy" p50 / p95 / max | 3.6 s / 4.1 s / 28 s | 3.8 s / 4.9 s / 8.9 s |
+| Line drops | 890 (the final catch-up burst) | **3** |
+| Failed connects | 15 | **0** (13 ticket 503s, tried again) |
+| Lines per copy | 500 and 500 | 498 and 502 |
+| Idle in transaction after the run, copies answering | 0, both | 0, both |
+
+### d. Find the limit
+
+End to end is p50 / p95 / p99. "Refused" is the share of send tries that got a 503:
+
+| target | Nov 6 reached | Nov 6 end to end | Nov 7 reached | Nov 7 end to end | Nov 7 refused | Nov 7 503 p95 |
+|---|---|---|---|---|---|---|
+| 10/s | 10.2/s | 26 / 146 / 360 ms | 10.5/s | 26 / 3,699 / 5,828 ms (a laptop stall) | 0% | |
+| 20/s | 19.9/s | 53 / 2,190 / 3,037 ms (a laptop stall) | 19.9/s | 71 / 484 / 653 ms | 0% | |
+| 30/s | **30.3/s** | **50 / 407 / 624 ms** | 28.6/s | 903 / 1,817 / 2,127 ms | 0% | |
+| 40/s | **37.4/s** | 3.5 s / 35 s / 80 s | **37.4/s** | 3.5 s / 28 s / 63 s | ~50% | 3.6 s |
+| 50/s | 29.3/s | 20 s / 96 s / 142 s | 30.0/s | 19 s / 98 s / 142 s | ~80% | 3.9 s |
+| 60/s | 21.3/s | 16 s / 70 s / 97 s | 20.6/s | 16 s / 69 s / 94 s | ~90% | 3.9 s |
+
+- Saved 14,698, received 14,698 (0 undelivered), 0 failed connects, 0 idle in transaction afterwards, and both copies answered.
+- The peak is the same (37.4 accepted a second at 40 offered), and past the limit the two runs match closely.
+- **The 30/s step was worse on November 7 because one copy did most of the work.** A laptop stall in the 10/s step dropped 54 lines. They came back 513 on A and 487 on B. Nginx's `least_conn` counts open WebSockets as connections, so it sent new HTTP requests to B until B had about 26 more in flight than A. From 16:43 to 16:47, A answered 0-8 requests a second and B 9-21, and B sat at ~1.2 cores while A had room. Once the load was high enough, both got an even share again. On November 6 the lines were exactly 500 and 500, and the requests split evenly.
+- So the November 6 run is the better measure of the limit with two copies. The November 7 run shows a real effect: a small uneven split of live lines can push nearly all HTTP onto one copy (see "What to change next").
+
+**Which runs the README uses:** b from November 7 (0 undelivered, 3 line drops) and d from November 6 (lines split exactly, so it measures two copies).
 
 **The sections a to e below are T31's runs on the old code, kept as the "before".** Their numbers stand. T31's explanation of the freeze was wrong, and "The bottleneck" has the corrected one.
 
@@ -296,7 +337,8 @@ CPU: 1.1-1.2 cores per copy at the limit, with PostgreSQL at ≤0.4, ~17 connect
 4. **Spread reconnects out:** D21's random extra is 0-1 s, so ~500 lines come back together after a failover. A wider first wait would soften that.
 5. **A longer wait after repeated 503s:** the app uses `Retry-After` each time. Backing off further would spend less CPU on refusals in a long overload.
 6. **D15's async question:** not needed. Nothing froze in the re-runs, and the limit is Python's one core per copy, which async SQLAlchemy wouldn't lift.
-7. **A small known gap:** a page reload during overload whose refresh gets a 503 shows the log-in screen, as for any 5xx today. A second reload fixes it.
+7. **Balance HTTP and live lines separately:** `least_conn` counts open WebSockets, so 26 extra lines on one copy sent nearly all HTTP to the other (November 7). A separate upstream for `/api/live`, or round robin for plain HTTP, would fix that. Not measured.
+8. **A small known gap:** a page reload during overload whose refresh gets a 503 shows the log-in screen, as for any 5xx today. A second reload fixes it.
 
 ## Honest limits
 
@@ -312,5 +354,5 @@ CPU: 1.1-1.2 cores per copy at the limit, with PostgreSQL at ≤0.4, ~17 connect
 ## Files
 
 - Scripts: `loadtest/` (`run.sh`, `lib.js`, `seed.py`, `compose.loadtest.yml`, `trial.js`, `logins.js`, `a-baseline.js` … `e-failover.js`). `loadtest/sessions.json` (raw refresh tokens) is made by the seed and gitignored.
-- Results: `loadtest/results/` (one `.json` per run, plus a `.db.txt` with the database check, sessions left idle in transaction, and whether each copy still answered). The November 6 runs are `2026-11-06_*`: `-logins-before` is the old code, `-15-threads` and `tune-t*` are the thread-count comparison, and the rest are the final runs.
+- Results: `loadtest/results/` (one `.json` per run, plus a `.db.txt` with the database check, sessions left idle in transaction, and whether each copy still answered). The November 7 re-runs are `2026-11-07_1623-b` and `2026-11-07_1638-d` (`2026-11-07_1556-b` is the stalled first try). The November 6 runs are `2026-11-06_*`: `-logins-before` is the old code, `-15-threads` and `tune-t*` are the thread-count comparison, and the rest are the final runs.
 - Screenshots: `docs/load-test/`, taken with a temporary read-only Grafana and headless Chrome.

@@ -1,0 +1,68 @@
+{
+  "run": "2026-11-07_1623-b",
+  "scenario": "b-steady",
+  "ended_at": "2026-11-07T11:07:53.478Z",
+  "duration_s": 765,
+  "users": 1000,
+  "sent": 11506,
+  "received": 11506,
+  "lost": 0,
+  "caught_up": 1,
+  "over_1s": 11485,
+  "send_failed_rate": 0.8856239686673691,
+  "send_busy": 89092,
+  "send_gave_up": 18527,
+  "http_failed_rate": 0.8453506882666917,
+  "connect_failed": 0,
+  "connect_busy": 13,
+  "line_drops": 3,
+  "busy_ms": {
+    "p(99)": 6067.7,
+    "max": 8884.3,
+    "count": 89092,
+    "min": 3115.9,
+    "med": 3829.9,
+    "p(95)": 4931.2
+  },
+  "e2e_ms": {
+    "med": 28964.5,
+    "p(95)": 153830,
+    "p(99)": 246611.6,
+    "max": 533349,
+    "count": 11506,
+    "min": 531
+  },
+  "send_ms": {
+    "p(95)": 154021,
+    "p(99)": 246840.6,
+    "max": 533712,
+    "count": 11506,
+    "min": 921,
+    "med": 29356
+  },
+  "connect_ms": {
+    "max": 6693,
+    "count": 1003,
+    "min": 14,
+    "med": 20,
+    "p(95)": 55.9,
+    "p(99)": 201
+  },
+  "hello_wait_ms": {
+    "count": 1003,
+    "min": 4,
+    "med": 7,
+    "p(95)": 21,
+    "p(99)": 81.9,
+    "max": 1599
+  },
+  "reconnect_ms": {
+    "count": 3,
+    "min": 20743,
+    "med": 88884,
+    "p(95)": 119862,
+    "p(99)": 122615.6,
+    "max": 123304
+  },
+  "stages": {}
+}
