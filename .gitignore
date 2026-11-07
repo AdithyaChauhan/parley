@@ -21,3 +21,6 @@ loadtest/sessions.json
 # Your own values for Terraform's variables, like the alarm email (D31). The
 # repo is public, so they stay on the laptop.
 *.tfvars
+
+# Local tool permissions, for this laptop only.
+.claude/settings.local.json

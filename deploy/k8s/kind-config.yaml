@@ -1,0 +1,30 @@
+# One small cluster on the laptop: a single Docker container that acts as a
+# whole Kubernetes machine (D35).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: parley
+# Leader election picks one of several copies of the cluster's own managers. There's
+# only one copy of each here, and on a laptop short of memory they kept losing the
+# election during a stall and restarting (8 times in an hour), so changes
+# like "scale Redis to 0" went unnoticed for a minute. Off.
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    controllerManager:
+      extraArgs:
+        - name: leader-elect
+          value: "false"
+    scheduler:
+      extraArgs:
+        - name: leader-elect
+          value: "false"
+nodes:
+  - role: control-plane
+    # Pinned, with the digest kind's release notes ask for (kind v0.33.0, D27).
+    image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+    extraPortMappings:
+      # The front door: http://localhost:8090 reaches the web Service's
+      # nodePort. 127.0.0.1: only this laptop can open it, not the Wi-Fi.
+      - containerPort: 30090
+        hostPort: 8090
+        listenAddress: "127.0.0.1"

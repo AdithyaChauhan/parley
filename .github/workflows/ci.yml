@@ -175,3 +175,61 @@ jobs:
       - name: Shut it all down
         if: always()
         run: docker compose --profile app down --volumes
+
+  # All of Parley on a small Kubernetes cluster, the same way as on the laptop
+  # (D35). Not a required check yet: continue-on-error shows a failure here on the
+  # PR, but CI still counts as passed, so it can't stop a deploy (deploy.yml waits for CI).
+  k8s:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: true
+
+    env:
+      # Pinned, and the download is checked against this (D27, kind's release page).
+      KIND_VERSION: v0.33.0
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install kind
+        run: |
+          curl --fail --silent --show-error --location --output kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64"
+          echo "$KIND_SHA256  kind" | sha256sum --check
+          sudo install kind /usr/local/bin/kind
+
+      # The runner has no .env, and the example's dummy values are fine for a
+      # throwaway cluster. kubectl comes with the runner.
+      - run: cp .env.example .env
+
+      # Creates the cluster, builds and loads the images, applies everything, and
+      # waits until it's all ready.
+      - run: bash deploy/k8s/up.sh
+
+      # Nginx finds a new pod within 5 s, so give it up to 30 s to hear from both.
+      - name: Health through Nginx answers from both backend pods
+        run: |
+          for i in $(seq 1 60); do
+            curl --fail --silent --show-error http://localhost:8090/api/health >> answers.txt
+            echo >> answers.txt
+            [ "$(jq -r .copy answers.txt | sort -u | wc -l)" = 2 ] && break
+            sleep 0.5
+          done
+          tail -n 5 answers.txt
+          [ "$(jq -r .copy answers.txt | sort -u | wc -l)" = 2 ]
+
+      # Demo 1: two users send, get the live push and the ticks, and see each
+      # other online. It runs in the backend image, which already has its packages.
+      - name: One send, end to end
+        run: docker run --rm -i --network host "parley-backend:$(git rev-parse --short HEAD)" python - 1 < deploy/k8s/demo.py
+
+      - name: Show what happened if something failed
+        if: failure()
+        run: |
+          kubectl --context kind-parley -n parley get pods
+          kubectl --context kind-parley -n parley get events --sort-by=.lastTimestamp
+          kubectl --context kind-parley -n parley logs --selector 'app in (backend,worker,web)' --tail=50 --prefix
+
+      - name: Shut it all down
+        if: always()
+        run: bash deploy/k8s/down.sh

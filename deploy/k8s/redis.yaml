@@ -1,0 +1,72 @@
+# The whiteboard: online status, tickets, limits and pub/sub (D22, D23).
+# Everything here can be lost, but the volume keeps Redis's snapshot across a
+# restart, so spam limits don't reset whenever the pod moves.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    stage: helpers
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  labels:
+    stage: helpers
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: redis
+          image: redis:8.10.2
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # redis-cli ping is a light check (D27).
+          startupProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 256Mi

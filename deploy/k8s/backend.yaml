@@ -1,0 +1,102 @@
+# The FastAPI app: two copies (D28), any of which can take any request or live
+# line, since what they share lives in PostgreSQL and Redis.
+#
+# Headless (clusterIP None): the name `backend` answers with every ready pod's
+# own address, so web's Nginx sees both pods and can use least_conn (D28).
+# A normal Service hides them behind one address and picks at random.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    stage: app
+spec:
+  clusterIP: None
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    stage: app
+spec:
+  replicas: 2
+  # A new version: one new pod at a time, and no old pod stops until a new one
+  # is ready, so there's never less than 2 ready.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # A new pod counts as ready only after this long. It gives Nginx time to find
+  # it (name re-check every 5 s) before the next old pod goes.
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: backend
+          image: parley-backend:dev
+          imagePullPolicy: Never
+          # The image's own command: uvicorn on port 8000 (D27).
+          envFrom:
+            - configMapRef: { name: parley-config }
+            - secretRef: { name: parley-secrets }
+          env:
+            # The pod's own name, so /api/health and hello show who answered.
+            - name: COPY_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8000
+          # All three ask /api/health: a plain `def` route with no database or
+          # Redis behind it (D24, D34). So a helper's outage never restarts a
+          # backend, but a copy whose threads or process are stuck can't answer.
+          # An HTTP ask starts no program, so it can run often (unlike D27's heavy checks).
+          startupProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 1
+            timeoutSeconds: 2
+            failureThreshold: 60
+          # Stop sending new work here after about 15 s of no answers.
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Restart it after about 60 s of no answers. Patient on purpose: a laptop
+          # short of memory stalled healthy pods for 30 s while images loaded, and
+          # 30 s here restarted them. Readiness has already moved the work away.
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+            # A stuck process can't act on a polite stop, so don't wait the full
+            # time (below) before killing it.
+            terminationGracePeriodSeconds: 5
+          # A stopping pod leaves the Service's list at once, but Nginx re-checks
+          # names only every 5 s, so requests keep coming for a moment (27-29 asks,
+          # up to 4 s after a delete, measured). Keep working through that, then stop.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 6
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+      # A normal stop, after the pause above: uvicorn closes live lines at once
+      # with 1012 (D28), and finishes the requests it's working on.
+      terminationGracePeriodSeconds: 30

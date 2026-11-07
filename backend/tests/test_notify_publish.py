@@ -1,6 +1,10 @@
 import json
 import logging
+import socket
 import uuid
+
+import pika.exceptions
+import pytest
 
 from app.config import settings
 from app.notify import publisher, queues
@@ -74,6 +78,18 @@ def test_with_rabbitmq_down_a_send_still_gives_201_and_is_saved(client, sign_up,
     # Saved in PostgreSQL: only the notification is lost (D25).
     history = client.get(f"/api/chats/{chat_id}/messages", headers=ana).json()
     assert [message["seq"] for message in history["messages"]] == [1]
+
+
+def test_a_name_with_no_address_counts_as_rabbitmq_being_down(monkeypatch):
+    # On Kubernetes, the name of a restarting RabbitMQ has no address for a
+    # moment (T32). That used to crash the worker instead of making it retry.
+    def no_address(*args, **kwargs):
+        raise socket.gaierror(-3, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(socket, "getaddrinfo", no_address)
+
+    with pytest.raises(pika.exceptions.AMQPConnectionError):
+        queues.connect("amqp://parley:x@rabbitmq:5672/parley_test")
 
 
 def test_after_a_failed_connect_the_next_send_skips_without_waiting(client, sign_up, monkeypatch, caplog):

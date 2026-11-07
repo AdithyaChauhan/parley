@@ -1,7 +1,9 @@
+import socket
 import uuid
 from dataclasses import dataclass
 
 import pika
+import pika.exceptions
 from pika.adapters.blocking_connection import BlockingChannel
 
 from app.config import settings
@@ -40,7 +42,12 @@ def connect(url: str | None = None) -> pika.BlockingConnection:
     params.connection_attempts = 1
     params.socket_timeout = CONNECT_SECONDS
     params.stack_timeout = SETUP_SECONDS
-    return pika.BlockingConnection(params)
+    try:
+        return pika.BlockingConnection(params)
+    except socket.gaierror as error:
+        # The name has no address right now: on Kubernetes, that's what a
+        # restarting RabbitMQ looks like. It means the same as "can't reach it".
+        raise pika.exceptions.AMQPConnectionError(str(error)) from error
 
 
 def send_job(channel: BlockingChannel, box: str, body: str | bytes, headers: dict) -> None:

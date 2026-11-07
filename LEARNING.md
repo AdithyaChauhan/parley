@@ -1543,3 +1543,44 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why threads, connections and slots are one number: if a request at work always finds a thread, and a thread always finds a connection, nothing waits on anything else. I tried 5, 8 and 15. Throughput was the same, because Python runs one thread at a time, and 8 was the only one with no dropped lines. So the limit is now CPU per copy, and more copies are the next step.
 - What I'd check first if it broke: the dashboard's 503s by route, then each copy's CPU, then `pg_stat_activity` for sessions idle in transaction. Many 503s with high CPU means real overload. Sessions stuck idle in transaction mean a new bug.
 - What still confuses me: why accepted messages per second fall so far past the limit. Refused requests clearly cost CPU, but I haven't measured exactly where it goes.
+
+---
+
+### Task 32: Parley on local Kubernetes
+**What was built**
+- `deploy/k8s/`:
+  - `kind-config.yaml`: one small cluster, pinned to Kubernetes 1.36.4, with `localhost:8090` as the way in and leader election off.
+  - `kustomization.yaml`: the list of everything. Each object has a `stage` label (helpers, migrate, app), so `up.sh` can apply them in order.
+  - `postgres.yaml`, `redis.yaml`, `rabbitmq.yaml`: StatefulSets, each with its own volume and a normal Service.
+  - `backend.yaml`: a Deployment with 2 replicas and a headless Service. New versions roll one pod at a time, and each pod pauses 6 s before it stops.
+  - `worker.yaml`, `web.yaml`, `migrate.yaml`, `config.yaml`, `namespace.yaml`, and `nginx.conf` (the front door, finding pods through the cluster's name service).
+  - `make-secret.sh`: builds the Secret from `.env`, with no file written and no secret on a command line.
+  - `up.sh` and `down.sh`: one command up, one command down, in Git Bash.
+  - `demo.py`: the seven demos, measured from outside, acting like the real app.
+- `backend/app/notify/queues.py`: a name that doesn't resolve now counts as "can't reach RabbitMQ", with a new test in `test_notify_publish.py`.
+- `.github/workflows/ci.yml`: a new `k8s` job that builds, starts kind, waits for everything, and checks health and one send. It isn't required yet (`continue-on-error`).
+- `docs/kubernetes.md`: the results, with a table mapping Compose to Kubernetes.
+- Results: a deleted pod's lines moved in 8.8 s, a frozen pod restarted itself at about 70 s, a rolling update lost nothing, and PostgreSQL came back in 4.8 s with the same data.
+
+**New ideas**
+- Cluster, node, pod: a cluster is the whole system, a node is a machine in it, and a pod is one running copy of a program with its own address. Pods get replaced, and their addresses change.
+- kind: Kubernetes running inside one Docker container, so a laptop can have a real cluster.
+- Deployment: "keep 2 copies of this running". Any copy can be replaced.
+- StatefulSet: the same, for programs with data. The pod keeps its name and its own volume.
+- Service: a stable name for a changing set of pods. A normal one has one fixed address and picks a pod itself. A headless one answers with each pod's own address.
+- Probes: startup ("has it finished starting?"), readiness ("should it get traffic?") and liveness ("should it be restarted?"). Failing readiness only moves traffic away, while failing liveness restarts the container.
+- Rolling update: replace pods a few at a time. `maxSurge: 1` adds a new pod first, and `maxUnavailable: 0` means none goes away until a new one is ready.
+- preStop: a step that runs before a pod is told to stop. Here, a short sleep, because the rest of the system takes a moment to stop sending work.
+- Job: a program that runs until it finishes, instead of one kept running.
+- ConfigMap and Secret: settings and secrets kept outside the image. A Secret is only base64, which is an encoding, not encryption.
+- Requests and limits: what a container is promised, and what it may never go past. Over the memory limit, it gets killed.
+- Kustomize: combines plain YAML files into one list, without a template language.
+- Leader election: when there are several copies of a manager, one is chosen to act. With only one copy, it's just another thing that can fail.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- What Kubernetes adds over Compose: Compose starts my containers. Kubernetes keeps them the way I asked. If a pod is deleted, it makes a new one. If a process freezes, it notices and restarts it. A new version goes out one pod at a time, with no gap. In Compose, I'd do each of those by hand or with a script.
+- Readiness versus liveness, and why they differ: readiness asks "should this pod get traffic right now?", and failing only moves traffic away, so it's quick (about 15 s here). Liveness asks "is this broken enough to restart?", and restarting is drastic, so it's patient (about 60 s). When I froze a pod, traffic left at 18 s, and it restarted at about 70 s.
+- Why liveness must not depend on Redis: if it did, a Redis outage would restart every backend, turning one problem into two. So it calls `/api/health`, which touches no helper. I stopped Redis for a minute and no backend restarted.
+- How a pod goes away with nothing lost: it leaves the list first, but Nginx only re-checks names every 5 s, so requests keep arriving. I measured 27 to 29 of them after the delete. So it waits 6 s, then closes its live lines with 1012, and the apps reconnect to the other pod and catch up by number.
+- Something Kubernetes showed me that Compose didn't: while RabbitMQ restarted, its name stopped resolving, and that crashed the worker, because it only caught RabbitMQ's own errors. The cluster also taught me to check my demos: one passed while Redis had never actually stopped, because the part of Kubernetes that acts on it was restarting. Now the demo waits until Redis is really gone.
+- What still confuses me: exactly how many seconds each probe should wait. I set them from what I measured on one memory-starved laptop, so I don't know how far they'd change on a real server.

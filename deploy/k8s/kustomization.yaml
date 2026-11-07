@@ -1,0 +1,27 @@
+# Everything Parley needs on Kubernetes, in one list (D35). up.sh renders this
+# and applies it in three stages, using the `stage` label on each object:
+# helpers (and wait), migrate (and wait), then app.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: parley
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - postgres.yaml
+  - redis.yaml
+  - rabbitmq.yaml
+  - migrate.yaml
+  - backend.yaml
+  - worker.yaml
+  - web.yaml
+
+# nginx.conf becomes a ConfigMap whose name ends in a hash of the file. A changed
+# file means a new name, so the web pod rolls by itself and picks it up.
+configMapGenerator:
+  - name: web-nginx
+    files:
+      - nginx.conf
+    options:
+      labels:
+        stage: app

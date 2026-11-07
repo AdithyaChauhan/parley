@@ -1,0 +1,91 @@
+# The database. A StatefulSet, not a Deployment: the pod keeps its name
+# (postgres-0) and its own volume, so a new pod finds the same data.
+# A normal Service, not headless: its address stays while the pod is away, so
+# callers get "refused" at once. With a headless one, the name lookup itself took
+# 2 s each time, on top of D24's 1 s limit. The same goes for Redis and RabbitMQ.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    stage: helpers
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    stage: helpers
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      # Otherwise every pod gets extra settings for each Service, like
+      # REDIS_PORT=tcp://..., which programs can mistake for their own.
+      enableServiceLinks: false
+      containers:
+        - name: postgres
+          # The same exact patch as Compose (D27).
+          image: postgres:17.11
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: POSTGRES_DB } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: POSTGRES_PASSWORD } }
+            # A folder inside the volume: a new cloud disk has a lost+found
+            # folder at its top, and Postgres refuses a folder that isn't empty.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # pg_isready is a light check (D27). Crash recovery after a restart
+          # can take a while, so startup gets up to 2 minutes before the others begin.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Patient: killing a database that's only slow makes everything worse.
+          # On a busy laptop, a restart here did just that. 2 minutes of no answers.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
