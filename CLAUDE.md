@@ -46,6 +46,7 @@ A separate planning chat writes the briefs and DECISIONS.md. Adithya carries you
 - Create, change or delete anything on AWS (or anything else that costs money) without showing the plan in plain words, including the cost, and getting Adithya's OK.
 - Show secrets on screen, in files that get committed, or in reports.
 - Write code for a later task.
+- Create accounts, chats, messages or any other data on the live site. Live checks only read (health, the version, the home page) or use a made-up email that creates nothing (the 429 check). Anything more goes to Adithya as an iPhone or laptop check.
 - Remove or loosen the permission rules in `.claude/settings.local.json` that block git commit, push and merge, or that make aws and terraform ask first.
 
 ## If Adithya writes a file himself

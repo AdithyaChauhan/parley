@@ -470,6 +470,54 @@ def test_a_send_or_a_removal_can_lift_the_group_lowest(client, sign_up):
         assert anas_line.receive_json() == _group_receipt(chat_id, 3, 3)
 
 
+def _ben_goes(client, ana, ben, chat_id, how):
+    """Ben stops being a member: removed by Ana, or he leaves."""
+    if how == "removed":
+        response = _remove(client, ana, chat_id, _my_id(client, ben))
+    else:
+        response = client.post(f"/api/chats/{chat_id}/leave", headers=ben)
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("how", ["removed", "left"])
+def test_ben_going_turns_the_ticks_teal_when_everyone_left_has_read(client, sign_up, how):
+    ana, ben, cara = sign_up("Ana"), sign_up("Ben"), sign_up("Cara")
+    chat_id = _group(client, ana, "Ben", "Cara")  # #1
+    _send(client, ana, chat_id, "hi")  # #2
+    # Cara has read #2. Ben hasn't even got it.
+    client.post(f"/api/chats/{chat_id}/read", json={"seq": 2}, headers=cara)
+
+    with _open_line(client, ana) as anas_line, _open_line(client, cara) as caras_line:
+        _ben_goes(client, ana, ben, chat_id, how)  # the note is #3
+        # Nobody read anything, but only Ana and Cara count now, and both have
+        # read #2: everyone still in the group hears it, and Ana's ticks turn teal.
+        for line in (anas_line, caras_line):
+            assert line.receive_json()["data"]["data"]["event"] == how
+            assert line.receive_json() == _group_receipt(chat_id, 2, 2)
+
+
+@pytest.mark.parametrize("how", ["removed", "left"])
+def test_ben_going_keeps_the_ticks_grey_until_the_rest_have_read(client, sign_up, how):
+    ana, ben, cara = sign_up("Ana"), sign_up("Ben"), sign_up("Cara")
+    chat_id = _group(client, ana, "Ben", "Cara")  # #1
+    _send(client, ana, chat_id, "hi")  # #2
+    # Cara's device has #2, but she hasn't opened the chat.
+    client.post(f"/api/chats/{chat_id}/delivered", json={"seq": 2}, headers=cara)
+
+    with _open_line(client, ana) as anas_line:
+        _ben_goes(client, ana, ben, chat_id, how)
+        assert anas_line.receive_json()["data"]["data"]["event"] == how
+        # Grey: delivered to everyone left, but Cara hasn't read #2.
+        receipt = anas_line.receive_json()
+        assert receipt["type"] == "group_receipt"
+        assert receipt["data"]["delivered_up_to"] >= 2
+        assert receipt["data"]["read_up_to"] < 2
+
+        # Cara reads it: now it's teal.
+        client.post(f"/api/chats/{chat_id}/read", json={"seq": 2}, headers=cara)
+        assert anas_line.receive_json() == _group_receipt(chat_id, 2, 2)
+
+
 def test_system_messages_keep_the_numbers_gap_free(client, sign_up):
     ana, ben = sign_up("Ana"), sign_up("Ben")
     ben_id = _my_id(client, ben)
