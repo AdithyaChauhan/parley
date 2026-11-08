@@ -18,6 +18,7 @@ A real-time chat web app, like WhatsApp Web, built to learn and show backend sys
 - One-to-one chats, started by email
 - Groups of up to 50: add, remove, leave, rename and admins. New members see messages from when they joined, and people who left keep what they had, read-only
 - Messages arrive live, with ticks: sent, delivered (grey ✓✓) and read (teal ✓✓)
+- Photos, documents and voice notes, up to 10 MB, with progress and cancel. Files go straight between the browser and storage on short-lived signed links, and the server never opens them
 - "typing...", online and "last seen"
 - Offline sends wait in order and go out when the line is back, never twice. Missed messages are caught up by number
 - Browser notifications (Web Push) that never contain the message text
@@ -26,7 +27,7 @@ A real-time chat web app, like WhatsApp Web, built to learn and show backend sys
 - Two backend copies: stop one mid-chat and the chat carries on
 - Every merge to `main` deploys itself to AWS, one copy at a time
 
-**Not built yet (v2):** files, voice notes, reactions, edit and delete, search.
+**Not built yet (v2):** reactions, edit and delete, search.
 
 ## Architecture
 
@@ -44,11 +45,14 @@ flowchart LR
     mq --> worker["Worker<br/>retries, failed-jobs queue"]
     worker --> push["Web Push services"]
     push -.->|notification| browser
+    browser -->|"signed links, through Nginx"| store[("Garage<br/>files, plain S3")]
+    a -.->|"signs links, checks uploads"| store
 ```
 
 - **PostgreSQL is the truth.** Redis only holds facts that may be lost: who is online, one-time tickets, rate limits, and pub/sub between the copies.
 - **No sticky sessions.** Nothing about a user lives in one copy's memory, so any request or live line can go to either copy.
 - **Notifications are a side job.** A send never waits for RabbitMQ, and jobs carry ids, never message text.
+- **Files skip the backend.** The backend checks membership and signs a short-lived link, and the bytes go straight between the browser and the store.
 
 How a merge reaches the server:
 
@@ -155,6 +159,7 @@ Details: [docs/kubernetes.md](docs/kubernetes.md).
 - **At-least-once notifications**: the worker acks only when done, and a Redis note stops a double notification ([D25](DECISIONS.md#d25-notifications-rabbitmq)).
 - **The server never reads message text**: no text in notifications and no server-side search, ready for end-to-end encryption later ([D12](DECISIONS.md#d12-encryption-is-a-later-phase)).
 - **Plain WebSockets, no Socket.IO**: reconnects, catch-up and "got it" replies are built by hand ([D4](DECISIONS.md#d4-plain-websockets-no-socketio)).
+- **Files on signed links, plain S3**: the size and type are part of the signature, so the store itself refuses anything else, and Garage was picked by measuring memory on a 2 GB server ([D38](DECISIONS.md#d38-files-and-voice-notes-t36)).
 - **AWS is optional**: the app has no AWS code, and everything AWS-only lives in `deploy/aws/` ([D29](DECISIONS.md#d29-aws-is-optional-never-required)).
 
 All 35 decisions, with the reasons: [DECISIONS.md](DECISIONS.md).
@@ -185,6 +190,8 @@ bash deploy/k8s/down.sh
 cd backend
 python -m venv .venv && source .venv/Scripts/activate   # .venv/bin/activate on Linux and macOS
 pip install -r requirements.txt
+# Once, to get the file store ready:
+STORAGE_ADMIN_TOKEN=dev-admin-token TEST_STORAGE_BUCKET=parley-files-test python -m app.files.garage_setup
 pytest
 
 cd ../frontend
@@ -195,7 +202,7 @@ npm ci && npm run lint && npm run build
 
 ## Tech stack
 
-- **Backend:** Python 3.13, FastAPI, SQLAlchemy 2 + Alembic, PostgreSQL 17, Redis 8, RabbitMQ 4 (pika), Web Push (pywebpush), pytest
+- **Backend:** Python 3.13, FastAPI, SQLAlchemy 2 + Alembic, PostgreSQL 17, Redis 8, RabbitMQ 4 (pika), Garage (S3 file storage), Web Push (pywebpush), pytest
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui
 - **Running it:** Docker Compose, Nginx, Kubernetes (kind, Kustomize)
 - **Cloud and CI:** AWS (EC2, ECR, SSM, CloudWatch) with Terraform, GitHub Actions, Let's Encrypt

@@ -238,6 +238,8 @@ export function ChatScreen({ user }: { user: User }) {
             unsent={outbox.unsent[openChat.id] ?? []}
             onSend={(body) => outbox.send(openChat.id, body)}
             onRetry={(message) => outbox.retry(openChat.id, message)}
+            onSendFile={(file) => outbox.sendFile(openChat.id, file)}
+            onCancel={(message) => outbox.cancel(openChat.id, message)}
             typing={typing[openChat.id]}
             members={group.members}
             onRead={() => markRead(openChat.id)}

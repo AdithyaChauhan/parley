@@ -43,7 +43,7 @@ kind load docker-image --name "$CLUSTER" "parley-backend:$TAG" "parley-web:$TAG"
 # they list every platform, and only one is here. Any image that isn't here, the
 # cluster downloads by itself.
 PLATFORM="linux/$(docker version --format '{{.Server.Arch}}' | tr -d '\r')"
-for image in postgres:17.11 redis:8.10.2 rabbitmq:4.3.7-management; do
+for image in postgres:17.11 redis:8.10.2 rabbitmq:4.3.7-management dxflrs/garage:v2.4.1; do
   if docker image inspect "$image" > /dev/null 2>&1 && ! docker exec "$CLUSTER-control-plane" crictl inspecti "$image" > /dev/null 2>&1; then
     echo "Loading $image"
     docker save --platform "$PLATFORM" "$image" \
@@ -51,6 +51,10 @@ for image in postgres:17.11 redis:8.10.2 rabbitmq:4.3.7-management; do
       || echo "(couldn't load $image: the cluster will download it)"
   fi
 done
+
+# Kustomize only reads files inside its own folder, so the store's settings are
+# copied in, to stay the same as Compose's (D38). The copy is git-ignored.
+cp deploy/storage/garage.toml deploy/k8s/garage.toml
 
 # Rendered once, with this version's tag in place of :dev.
 RENDERED=$("${KUBECTL[@]}" kustomize deploy/k8s | sed -e "s/parley-backend:dev/parley-backend:$TAG/" -e "s/parley-web:dev/parley-web:$TAG/")
@@ -63,19 +67,24 @@ step "Namespace and secrets"
 "${KUBECTL[@]}" apply -f deploy/k8s/namespace.yaml
 bash deploy/k8s/make-secret.sh .env | "${KUBECTL[@]}" apply -f -
 
-step "Helpers: PostgreSQL, Redis, RabbitMQ"
+step "Helpers: PostgreSQL, Redis, RabbitMQ, file store"
 apply_stage helpers
-for helper in postgres redis rabbitmq; do
+for helper in postgres redis rabbitmq storage; do
   "${KUBECTL[@]}" -n parley rollout status "statefulset/$helper" --timeout="$TIMEOUT"
 done
 
 # Before the backends start or roll, so two copies never migrate at once (D27).
-step "Migrating the database"
-"${KUBECTL[@]}" -n parley delete job migrate --ignore-not-found
+step "Migrating the database, and getting the file store ready"
+"${KUBECTL[@]}" -n parley delete job migrate storage-setup --ignore-not-found
 apply_stage migrate
 if ! "${KUBECTL[@]}" -n parley wait --for=condition=complete job/migrate --timeout="$TIMEOUT"; then
   "${KUBECTL[@]}" -n parley logs job/migrate --tail=50 || true
   echo "The migration didn't finish." >&2
+  exit 1
+fi
+if ! "${KUBECTL[@]}" -n parley wait --for=condition=complete job/storage-setup --timeout="$TIMEOUT"; then
+  "${KUBECTL[@]}" -n parley logs job/storage-setup --tail=50 || true
+  echo "The file store's setup didn't finish." >&2
   exit 1
 fi
 

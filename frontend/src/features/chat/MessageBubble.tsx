@@ -1,9 +1,10 @@
 import { Avatar } from "@/components/Avatar"
 import { Ticks } from "@/components/Ticks"
 import { cn } from "@/lib/utils"
+import { FileContent } from "./FileContent"
 import { noteText } from "./groupNotes"
 import { clockTime } from "./time"
-import type { Message, Tint } from "./types"
+import type { Message, SystemData, Tint } from "./types"
 
 // Shows "@Name" in teal (look.md: @mentions use the teal accent)
 function withMentions(text: string) {
@@ -32,7 +33,7 @@ export function SystemNote({ message, myId }: { message: Message; myId: string }
   if (!message.data) return null
   return (
     <p className="mx-auto max-w-[85%] rounded-lg bg-card/70 px-3 py-1.5 text-center text-label text-muted-foreground">
-      {noteText(message.data, myId)}
+      {noteText(message.data as SystemData, myId)}
     </p>
   )
 }
@@ -46,12 +47,30 @@ type MessageBubbleProps = {
   // How far my message got on the other side: on their device (grey ✓✓), read (teal ✓✓), or not yet
   receipt: "delivered" | "read" | null
   onRetry: () => void
+  chatId: string
+  onCancel: () => void // stops a file on its way
 }
 
 // One message: a "Name, time" label above a bubble.
 // Their bubble: sharp bottom-left corner, next to the avatar. My bubble: sharp bottom-right corner.
-export function MessageBubble({ message, senderName, senderTint, mine, group, receipt, onRetry }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  senderName,
+  senderTint,
+  mine,
+  group,
+  receipt,
+  onRetry,
+  chatId,
+  onCancel,
+}: MessageBubbleProps) {
   const time = clockTime(message.createdAt)
+  const isFile = message.kind === "file"
+  const content = isFile ? (
+    <FileContent chatId={chatId} message={message} onCancel={onCancel} />
+  ) : (
+    withMentions(message.body)
+  )
 
   if (mine) {
     const unsaved = message.status === "sending" || message.status === "waiting"
@@ -64,11 +83,13 @@ export function MessageBubble({ message, senderName, senderTint, mine, group, re
         </p>
         <div
           className={cn(
-            "max-w-[75%] rounded-panel rounded-br-none bg-bubble-mine px-4 py-3 wrap-break-word",
-            unsaved && "opacity-60",
+            "max-w-[75%] rounded-panel rounded-br-none bg-bubble-mine wrap-break-word",
+            isFile ? "p-2" : "px-4 py-3",
+            // A file shows its own progress, so it isn't faded too
+            unsaved && !isFile && "opacity-60",
           )}
         >
-          {withMentions(message.body)}
+          {content}
         </div>
         {/* Offline: it goes out by itself when the line is back (D21) */}
         {message.status === "waiting" && <p className="text-label">Waiting for connection</p>}
@@ -88,8 +109,13 @@ export function MessageBubble({ message, senderName, senderTint, mine, group, re
         <p className="text-label">
           <span className={cn(group && cn("font-medium", nameColors[senderTint]))}>{senderName}</span>, {time}
         </p>
-        <div className="rounded-panel rounded-bl-none bg-bubble-theirs px-4 py-3 shadow-sm shadow-foreground/5 wrap-break-word">
-          {withMentions(message.body)}
+        <div
+          className={cn(
+            "max-w-full rounded-panel rounded-bl-none bg-bubble-theirs shadow-sm shadow-foreground/5 wrap-break-word",
+            isFile ? "p-2" : "px-4 py-3",
+          )}
+        >
+          {content}
         </div>
       </div>
     </div>

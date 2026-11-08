@@ -164,6 +164,16 @@ only push to the two image stores, and may only run `parley-deploy` (which
 takes nothing but a commit id) on this one server. It can't read the secrets.
 The server can pull images, read `/parley/prod/*` and write its logs.
 
+**The file store (D38).** Garage runs in Compose, with its files in the
+`storage_data` volume on the server's disk, a 256 MB memory limit and a 5 GB
+bucket limit (so uploads can't fill the disk the database lives on). It needs
+four secrets: `STORAGE_RPC_SECRET`, `STORAGE_ADMIN_TOKEN`, `STORAGE_ACCESS_KEY`
+(`GK` + 24 hex digits) and `STORAGE_SECRET_KEY`. A deploy stops before changing
+anything if one is missing from Parameter Store. To use AWS S3 instead, set
+`STORAGE_ENDPOINT` and `STORAGE_PUBLIC_URL` to the S3 address, set
+`STORAGE_REGION`, `STORAGE_BUCKET` and the keys, and allow the site in the
+bucket's CORS rules. The app code doesn't change.
+
 **Change a secret.** In the AWS console: Systems Manager > Parameter Store,
 edit the value, then run the Deploy workflow again (the server rewrites `.env`
 from it on every deploy).

@@ -56,12 +56,27 @@ class Settings(BaseSettings):
     # Who the push services can contact about our pushes: a mailto: address.
     vapid_subject: str = ""
 
+    # File storage, plain S3 (D29, D38). Only settings change for another store.
+    # Where the backend reaches it. Its host:port is what gets signed.
+    storage_endpoint: str = "http://127.0.0.1:3900"
+    # What browser URLs start with: the same site through Nginx (D38). On AWS S3,
+    # the store's own address.
+    storage_public_url: str = "/storage"
+    storage_bucket: str = "parley-files"
+    storage_region: str = "garage"
+    # Empty until set: the file routes then answer 503, like push without VAPID keys.
+    storage_access_key: str = ""
+    storage_secret_key: str = ""
+
     @model_validator(mode="after")
     def _limits_stay_on_in_production(self):
         # COOKIE_SECURE is on only behind HTTPS, so only on a real server.
         # There, limits off stops the app from starting at all (D33).
         if self.cookie_secure and not self.rate_limits_enabled:
             raise ValueError("RATE_LIMITS_ENABLED=false is only for the load test, never with COOKIE_SECURE=true")
+        # A real server without store keys would hand out URLs that never work.
+        if self.cookie_secure and not (self.storage_access_key and self.storage_secret_key):
+            raise ValueError("STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY must be set with COOKIE_SECURE=true")
         return self
 
 

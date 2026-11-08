@@ -1,0 +1,82 @@
+# The file store (D38): the same Garage as Compose, one pod and a volume. The
+# bucket and key are made by the storage-setup Job (storage-setup.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: storage
+  labels:
+    stage: helpers
+spec:
+  selector:
+    app: storage
+  ports:
+    - name: s3
+      port: 3900
+    - name: admin
+      port: 3903
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: storage
+  labels:
+    stage: helpers
+spec:
+  serviceName: storage
+  replicas: 1
+  selector:
+    matchLabels:
+      app: storage
+  template:
+    metadata:
+      labels:
+        app: storage
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: storage
+          image: dxflrs/garage:v2.4.1
+          ports:
+            - containerPort: 3900
+            - containerPort: 3903
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: STORAGE_RPC_SECRET } }
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: parley-secrets, key: STORAGE_ADMIN_TOKEN } }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+            - name: data
+              mountPath: /var/lib/garage
+          # Readiness only needs the port. Liveness is patient (D35).
+          startupProbe:
+            tcpSocket: { port: 3900 }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: 3900 }
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/garage", "status"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: storage-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi

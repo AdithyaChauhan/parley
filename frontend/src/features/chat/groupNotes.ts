@@ -1,5 +1,5 @@
 import { ApiError, isBusy, isUnreachable } from "@/lib/api"
-import type { ChatSummary, GroupMember, Person, SystemData } from "./types"
+import type { ChatSummary, FileData, GroupMember, Person, SystemData } from "./types"
 
 // The server keeps a group note's facts (who did what to whom), and the app
 // writes the words (D37), so "you" can be you on every screen.
@@ -43,10 +43,18 @@ export function noteText(data: SystemData, myId: string) {
 }
 
 // The grey line under a chat's name in the list: the note's words, "Ana: hi" in a group, or just the text
+// What the chat list says for a file (D38)
+function fileLine(chat: ChatSummary, data: FileData, sender: string | null) {
+  const line =
+    data.category === "image" ? "📷 Photo" : data.category === "voice" ? "🎤 Voice message" : `📄 ${data.name}`
+  return chat.kind === "group" && sender ? `${sender}: ${line}` : line
+}
+
 export function previewText(chat: ChatSummary, myId: string) {
   const last = chat.last_message
   if (!last) return "No messages yet"
-  if (last.kind === "system" && last.data) return noteText(last.data, myId)
+  if (last.kind === "system" && last.data) return noteText(last.data as SystemData, myId)
+  if (last.kind === "file" && last.data) return fileLine(chat, last.data as FileData, last.sender_name)
   if (chat.kind !== "group") return last.preview
   const sender = last.sender_id === myId ? "You" : last.sender_name
   return `${sender}: ${last.preview}`

@@ -14,6 +14,7 @@ from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
 from app.config import settings
 from app.db import CAPACITY, SessionLocal
+from app.files.routes import router as files_router
 from app.groups.routes import router as groups_router
 from app.live import bus
 from app.live.routes import router as live_router
@@ -93,6 +94,7 @@ api.include_router(auth_router)
 api.include_router(chats_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(groups_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(messages_router, dependencies=[busy.REQUEST_SLOT])
+api.include_router(files_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(live_router)
 api.include_router(push_router, dependencies=[busy.REQUEST_SLOT])
 # Last, after every route above is added to the /api router.

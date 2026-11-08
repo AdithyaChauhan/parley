@@ -25,6 +25,21 @@ export type SystemData = {
   new_admin?: Person // left: the last admin left, so this member became admin
 }
 
+// What a file message holds (D38). The server never opens the file; these
+// facts come from the sender's app and the store.
+export type FileCategory = "image" | "document" | "voice"
+export type FileData = {
+  file_id: string
+  name: string
+  type: string
+  size: number
+  category: FileCategory
+  width?: number | null
+  height?: number | null
+  preview?: string | null // a tiny copy of a picture, shown until the real one arrives
+  duration_ms?: number | null // voice notes
+}
+
 // One row of the chat list (GET /api/chats, and the reply to creating a chat or group)
 export type ChatSummary = {
   id: string
@@ -34,10 +49,10 @@ export type ChatSummary = {
     seq: number
     preview: string
     created_at: string
-    kind: "text" | "system"
+    kind: "text" | "system" | "file"
     sender_id: string
     sender_name: string | null
-    data: SystemData | null
+    data: SystemData | FileData | null
   } | null
   unread: number
   other_user_id: string | null // the other person in a direct chat, to match presence news
@@ -64,8 +79,8 @@ export type ServerMessage = {
   client_msg_id: string
   body: string
   created_at: string
-  kind: "text" | "system" // system = a group note, with data instead of text (D37)
-  data: SystemData | null
+  kind: "text" | "system" | "file" // system = a group note, with data instead of text (D37); file = D38
+  data: SystemData | FileData | null
 }
 
 // One person's tick bookmarks in a chat (D9)
@@ -106,8 +121,11 @@ export type Message = {
   body: string
   createdAt: string
   status: "sending" | "waiting" | "failed" | "sent"
-  kind: "text" | "system"
-  data: SystemData | null
+  kind: "text" | "system" | "file"
+  data: SystemData | FileData | null
+  // Only while my file is on its way
+  progress?: number // 0 to 1
+  localUrl?: string // the file from this device, shown until it's saved
 }
 
 export function fromServer(message: ServerMessage): Message {

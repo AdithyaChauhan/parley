@@ -19,6 +19,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': { target: `http://127.0.0.1:${process.env.PARLEY_API_PORT ?? '8000'}`, ws: true },
+      // Files, like Nginx does it (D38). changeOrigin: the store must see its own address.
+      '/storage': { target: 'http://127.0.0.1:3900', changeOrigin: true, rewrite: (path) => path.replace(/^\/storage/, '') },
     },
   },
 })

@@ -31,7 +31,8 @@ class MessageOut(BaseModel):
     client_msg_id: uuid.UUID
     body: str
     created_at: datetime
-    # "text", or "system" for a group note, whose words the app writes from data (D37).
+    # "text", "system" for a group note, whose words the app writes from data
+    # (D37), or "file", with the file's details in data (D38).
     kind: str
     data: dict | None
 

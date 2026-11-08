@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,7 +17,9 @@ class Message(Base):
         UniqueConstraint("chat_id", "seq", name="messages_chat_seq_unique"),
         # A retried send is never saved twice (D18).
         UniqueConstraint("sender_id", "client_msg_id", name="messages_sender_client_msg_unique"),
-        CheckConstraint("kind IN ('text', 'system')", name="messages_kind_valid"),
+        CheckConstraint("kind IN ('text', 'system', 'file')", name="messages_kind_valid"),
+        # The side panel's file list reads only these rows (T36).
+        Index("messages_chat_file_seq", "chat_id", "seq", postgresql_where=text("kind = 'file'")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -34,6 +36,7 @@ class Message(Base):
     # "text": a normal message. "system": a group note (created, added, removed,
     # left, renamed, made admin), numbered like any message (D37). Its body is
     # empty, and data says who did what to whom; the app writes the words.
+    # "file": a file or voice note (D38). Empty body, and data has its details.
     kind: Mapped[str] = mapped_column(server_default="text")
     data: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(

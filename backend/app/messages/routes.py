@@ -14,7 +14,7 @@ from app.limits import service as limits
 from app.live import bus
 from app.messages.models import Message
 from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
-from app.messages.service import NotAMember, add_message
+from app.messages.service import NotAMember, UploadTaken, add_message
 from app.notify import publisher as notify
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
@@ -39,16 +39,32 @@ def send_message(
 ):
     # First, so a flood of sends is turned away before it touches the database (D24).
     limits.enforce(limits.SEND, me.id)
+    return save_and_push(chat_id, me, response, body.client_msg_id, body.body)
+
+
+def save_and_push(
+    chat_id: uuid.UUID,
+    me: User,
+    response: Response,
+    client_msg_id: uuid.UUID,
+    body: str,
+    kind: str = "text",
+    data: dict | None = None,
+    upload_id: uuid.UUID | None = None,
+) -> MessageOut:
+    """Save one message, then tell everyone. Texts and files both end up here."""
     with SessionLocal() as db:
         mine = _member(db, chat_id, me)
         # My bookmarks before this send moves them to its number (D20)
         before = Bookmarks(mine.delivered_up_to, mine.read_up_to)
 
         try:
-            saved, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
+            saved, created = add_message(db, chat_id, me.id, client_msg_id, body, kind, data, upload_id)
         except NotAMember:
             # Left or removed: the chat is read-only for them now (D37).
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You're no longer a member of this group")
+        except UploadTaken:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This file was already sent")
         # Everything the reply and the pushes need, read now. After the commit,
         # reading the row loads it again in a new transaction (expire_on_commit),
         # and that holds the connection until the session closes.

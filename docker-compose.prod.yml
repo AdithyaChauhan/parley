@@ -14,6 +14,11 @@ x-prod: &prod
       max-size: "10m"
       max-file: "3"
 
+# A server must have its own store keys: the laptop's fake ones never reach it (D38).
+x-store-keys: &store-keys
+  STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?Set STORAGE_ACCESS_KEY in .env}
+  STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?Set STORAGE_SECRET_KEY in .env}
+
 services:
   # The helpers: no ports on the server at all. Only containers on Parley's
   # network can reach them, so the internet can't even try (D30).
@@ -29,6 +34,20 @@ services:
     <<: *prod
     ports: !reset []
 
+  storage:
+    <<: *prod
+    ports: !reset []
+    environment:
+      GARAGE_RPC_SECRET: ${STORAGE_RPC_SECRET:?Set STORAGE_RPC_SECRET in .env}
+      GARAGE_ADMIN_TOKEN: ${STORAGE_ADMIN_TOKEN:?Set STORAGE_ADMIN_TOKEN in .env}
+
+  # A one-shot, like migrate.
+  storage_setup:
+    logging: *logs
+    environment:
+      <<: *store-keys
+      STORAGE_ADMIN_TOKEN: ${STORAGE_ADMIN_TOKEN:?Set STORAGE_ADMIN_TOKEN in .env}
+
   # A one-shot job: it must stop once done, so no restart rule. Only the log limit.
   migrate:
     logging: *logs
@@ -37,15 +56,18 @@ services:
   backend_a:
     <<: *prod
     environment:
+      <<: *store-keys
       COOKIE_SECURE: "true"
 
   backend_b:
     <<: *prod
     environment:
+      <<: *store-keys
       COOKIE_SECURE: "true"
 
   worker:
     <<: *prod
+    environment: *store-keys
 
   web:
     <<: *prod
