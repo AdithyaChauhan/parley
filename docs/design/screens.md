@@ -54,8 +54,8 @@ No dead buttons (D8): anything that doesn't work yet is hidden, not shown as "co
 
 ## 3. Upload view
 
-Hidden until v2 (D8): attach and file drop come back with real files. Dropping a file on the conversation does nothing for now.
-The v2 screen matches screenshot 2: a dashed border over the conversation, a big teal upload circle, and the words "Upload your file".
+Attach and file drop came back with real files (T36, D38).
+It matches screenshot 2: a dashed border over the conversation, a big teal upload circle, and the words "Upload your file". It shows while files are dragged over the conversation.
 
 ## 4. Sign-up screen
 

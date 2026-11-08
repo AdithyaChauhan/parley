@@ -19,6 +19,12 @@ x-parley-backend: &parley-backend
     DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     REDIS_URL: redis://redis:6379/0
     RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+    # File storage (D38). The fake keys are for the laptop and CI only: the
+    # store's ports are only open on this machine. docker-compose.prod.yml
+    # refuses to start a server without real ones.
+    STORAGE_ENDPOINT: http://storage:3900
+    STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-GK000000000000000000000000}
+    STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
 
 # Shared by the two backend copies (D28): the same image, waits and health
 # check. They differ only in COPY_NAME.
@@ -110,6 +116,43 @@ services:
       start_period: 60s
       start_interval: 2s
 
+  # The file store (D38): plain S3, picked by measured memory (77 MB at peak
+  # against SeaweedFS's 685 MB). Files live in the volume, on this machine's disk.
+  storage:
+    image: dxflrs/garage:v2.4.1
+    environment:
+      GARAGE_RPC_SECRET: ${STORAGE_RPC_SECRET:-0000000000000000000000000000000000000000000000000000000000000000}
+      GARAGE_ADMIN_TOKEN: ${STORAGE_ADMIN_TOKEN:-dev-admin-token}
+    # 127.0.0.1: for the tests and Vite on this machine only.
+    ports:
+      - "127.0.0.1:3900:3900"
+      - "127.0.0.1:3903:3903"
+    volumes:
+      - ./deploy/storage/garage.toml:/etc/garage.toml:ro
+      - storage_meta:/var/lib/garage/meta
+      - storage_data:/var/lib/garage/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+
+  # Gets a fresh store ready (bucket, key, size limit), then exits. Safe to run again.
+  storage_setup:
+    <<: *parley-backend
+    command: ["python", "-m", "app.files.garage_setup"]
+    environment:
+      <<: *parley-env
+      STORAGE_ADMIN_URL: http://storage:3903
+      STORAGE_ADMIN_TOKEN: ${STORAGE_ADMIN_TOKEN:-dev-admin-token}
+      TEST_STORAGE_BUCKET: ${TEST_STORAGE_BUCKET:-}
+    depends_on:
+      storage:
+        condition: service_healthy
+
   # Brings the database tables up to date once, then exits. The others wait
   # for it, so the two copies never migrate at the same time (D27).
   migrate:
@@ -142,6 +185,10 @@ services:
     command: ["python", "-m", "app.notify.worker"]
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      # The worker removes files that were never sent, so it needs a ready store.
+      # The backends don't wait: chat keeps working without files (D24).
+      storage_setup:
         condition: service_completed_successfully
       db:
         condition: service_healthy
@@ -256,3 +303,5 @@ volumes:
   db_data:
   rabbitmq_data:
   prometheus_data:
+  storage_meta:
+  storage_data:

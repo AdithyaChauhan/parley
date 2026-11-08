@@ -28,6 +28,7 @@ x-backend-image: &backend-image
 
 services:
   migrate: *backend-image
+  storage_setup: *backend-image
   backend_a: *backend-image
   backend_b: *backend-image
   worker: *backend-image

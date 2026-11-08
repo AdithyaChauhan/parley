@@ -20,6 +20,7 @@ loadtest/sessions.json
 *.tfplan
 # Your own values for Terraform's variables, like the alarm email (D31). The
 # repo is public, so they stay on the laptop.
+deploy/k8s/garage.toml
 *.tfvars
 
 # Local tool permissions, for this laptop only.

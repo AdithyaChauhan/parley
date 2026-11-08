@@ -5,11 +5,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.chats.models import Chat, ChatMember
+from app.files.models import Upload
 from app.messages.models import Message
 
 
 class NotAMember(Exception):
     """The sender left or was removed: they can't send here any more (D37)."""
+
+
+class UploadTaken(Exception):
+    """This upload already belongs to a different message (D38)."""
 
 
 def _find_sent(db: Session, sender_id: uuid.UUID, client_msg_id: uuid.UUID) -> Message | None:
@@ -48,11 +53,17 @@ def add_message(
     sender_id: uuid.UUID,
     client_msg_id: uuid.UUID,
     body: str,
+    kind: str = "text",
+    data: dict | None = None,
+    upload_id: uuid.UUID | None = None,
 ) -> tuple[Message, bool]:
     """Save a message with its chat's next number (#1, #2, #3...).
     Returns (message, created). Sending the same client_msg_id again returns
     (the first copy, False), not a new row (D18).
-    Raises NotAMember if the sender has left the chat or was removed."""
+    A file's message also claims its upload in the same transaction, so a saved
+    message's file can never be swept up as "never sent" (D38).
+    Raises NotAMember if the sender has left the chat or was removed, and
+    UploadTaken if another message already has this upload."""
     already_sent = _find_sent(db, sender_id, client_msg_id)
     if already_sent is not None:
         return already_sent, False
@@ -72,10 +83,20 @@ def add_message(
 
     mark_sent(db, chat_id, sender_id, seq)
     message = Message(
-        chat_id=chat_id, seq=seq, sender_id=sender_id, client_msg_id=client_msg_id, body=body
+        chat_id=chat_id, seq=seq, sender_id=sender_id, client_msg_id=client_msg_id, body=body, kind=kind, data=data
     )
     db.add(message)
     try:
+        if upload_id is not None:
+            db.flush()  # sends the row now, so it has its id, and a double send shows up here
+            claimed = db.execute(
+                update(Upload)
+                .where(Upload.id == upload_id, Upload.message_id.is_(None))
+                .values(message_id=message.id)
+            )
+            if claimed.rowcount == 0:
+                db.rollback()
+                raise UploadTaken
         # The +1, the bookmark and the new row are saved together, or not at all.
         db.commit()
     except IntegrityError:

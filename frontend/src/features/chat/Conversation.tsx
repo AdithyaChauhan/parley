@@ -1,6 +1,7 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef } from "react"
-import { ArrowLeft } from "lucide-react"
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
+import { ArrowLeft, FolderUp } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
+import { prepareFile, type PreparedFile } from "@/lib/files"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
@@ -25,6 +26,8 @@ type ConversationProps = {
   unsent: Message[] // my messages in this chat that aren't saved yet (the outbox)
   onSend: (body: string) => void // into the outbox
   onRetry: (message: Message) => void // "Not sent, tap to retry"
+  onSendFile: (file: PreparedFile) => void // into the outbox
+  onCancel: (message: Message) => void // stops a file on its way
   typing: Typist | undefined // someone is typing here
   members: GroupMember[] | null // a group's current members (null for a direct chat, or while loading)
   onRead: () => void // I've seen everything here: the chat list sets unread to 0
@@ -42,6 +45,8 @@ export function Conversation({
   unsent,
   onSend,
   onRetry,
+  onSendFile,
+  onCancel,
   typing,
   members,
   onRead,
@@ -62,6 +67,31 @@ export function Conversation({
   const fromBottom = useRef<number | null>(null)
   // You're at the newest message, so the list keeps the bottom in view
   const atBottom = useRef(true)
+
+  // A short note above the message box: a file that can't be sent, or a recording tip
+  const [hint, setHint] = useState("")
+  const hintTimer = useRef<number | undefined>(undefined)
+  // Files are being dragged over the conversation. Counted, because moving over
+  // each child fires its own enter and leave.
+  const dragDepth = useRef(0)
+  const [dragging, setDragging] = useState(false)
+
+  function showHint(text: string) {
+    setHint(text)
+    window.clearTimeout(hintTimer.current)
+    hintTimer.current = window.setTimeout(() => setHint(""), 5000)
+  }
+
+  // Picked or dropped: each one is checked, then goes in the outbox, in order
+  async function takeFiles(files: File[]) {
+    for (const file of files) {
+      const ready = await prepareFile(file)
+      if (typeof ready === "string") showHint(ready)
+      else onSendFile(ready)
+    }
+  }
+
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files")
 
   const group = chat.kind === "group"
   const firstKey = messages[0]?.clientMsgId
@@ -157,15 +187,30 @@ export function Conversation({
 
   return (
     <section
-      // No file drops until v2 (D8). Without this, a file dropped here would open in the tab and leave Parley.
+      // Always stopped, or a file dropped here would open in the tab and leave Parley.
+      onDragEnter={(e) => {
+        if (!hasFiles(e) || chat.left) return
+        dragDepth.current += 1
+        setDragging(true)
+      }}
+      onDragLeave={(e) => {
+        if (!hasFiles(e) || chat.left) return
+        dragDepth.current -= 1
+        if (dragDepth.current === 0) setDragging(false)
+      }}
       onDragOver={(e) => {
         e.preventDefault()
-        e.dataTransfer.dropEffect = "none" // the "not allowed" cursor
+        if (chat.left) e.dataTransfer.dropEffect = "none" // the "not allowed" cursor
       }}
-      onDrop={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault()
+        dragDepth.current = 0
+        setDragging(false)
+        if (!chat.left) takeFiles([...e.dataTransfer.files])
+      }}
       className={cn(
         // Never squeezed below 360px from 768px up. From 1280px the gap on its right comes from the side panel.
-        "min-h-0 min-w-0 flex-1 flex-col bg-conversation md:my-4 md:mr-4 md:min-w-90 md:rounded-panel xl:mr-0",
+        "relative min-h-0 min-w-0 flex-1 flex-col bg-conversation md:my-4 md:mr-4 md:min-w-90 md:rounded-panel xl:mr-0",
         // Phone: only when it's the chat's turn. 768-1279px: unless the side panel took its place.
         view === "chat" ? "flex" : "hidden",
         view === "panel" ? "md:hidden xl:flex" : "md:flex",
@@ -231,6 +276,8 @@ export function Conversation({
               group={group}
               receipt={receiptFor(message.seq)}
               onRetry={() => onRetry(message)}
+              chatId={chat.id}
+              onCancel={() => onCancel(message)}
             />
           ),
         )}
@@ -256,9 +303,38 @@ export function Conversation({
             You can't send messages to this group because you're no longer a member.
           </p>
         ) : (
-          <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
+          <>
+            {hint && (
+              <p role="status" className="mb-2 truncate text-center text-label text-destructive">
+                {hint}
+              </p>
+            )}
+            <MessageBox
+              onSend={onSend}
+              onTyping={() => sendTyping(chat.id)}
+              onFiles={takeFiles}
+              onVoice={onSendFile}
+              onHint={showHint}
+            />
+          </>
         )}
       </div>
+
+      {/* Dropping files: the screen from the reference design (D8) */}
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-conversation/90 p-4 backdrop-blur-sm md:rounded-panel">
+          <div className="flex size-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/50 p-6 text-center">
+            <span className="mb-4 flex size-24 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 ring-[16px] ring-primary/15">
+              <FolderUp className="size-9" />
+            </span>
+            <p className="text-2xl font-medium">Upload your file</p>
+            <p className="text-muted-foreground">
+              to <span className="text-primary">{chat.name}</span>
+              {group ? " group" : ""}
+            </p>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

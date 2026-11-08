@@ -1,0 +1,31 @@
+# Gets a fresh store ready: bucket, key and size limit (D38). Safe to run again.
+# A Job can't be changed after it's made, so up.sh deletes the old one first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: storage-setup
+  labels:
+    stage: migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: storage-setup
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      containers:
+        - name: storage-setup
+          image: parley-backend:dev
+          imagePullPolicy: Never
+          command: ["python", "-m", "app.files.garage_setup"]
+          env:
+            - name: STORAGE_ADMIN_URL
+              value: http://storage:3903
+          envFrom:
+            - configMapRef: { name: parley-config }
+            - secretRef: { name: parley-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 192Mi }

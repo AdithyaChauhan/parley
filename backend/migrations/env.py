@@ -5,6 +5,7 @@ from alembic import context
 # Load every models file, so Base.metadata knows all the tables.
 import app.auth.models  # noqa: F401
 import app.chats.models  # noqa: F401
+import app.files.models  # noqa: F401
 import app.messages.models  # noqa: F401
 import app.push.models  # noqa: F401
 from app.config import settings

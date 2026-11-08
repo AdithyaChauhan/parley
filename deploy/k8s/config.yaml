@@ -15,3 +15,5 @@ data:
   NOTIFIER: webpush
   # Plain http on the laptop, so the browser must be allowed to send the cookie.
   COOKIE_SECURE: "false"
+  # The file store, by its Service name (D38).
+  STORAGE_ENDPOINT: http://storage:3900

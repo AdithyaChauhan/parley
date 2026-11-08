@@ -267,7 +267,8 @@ def _last_message(message: Message | None, sender_name: str | None) -> LastMessa
         kind=message.kind,
         sender_id=message.sender_id,
         sender_name=sender_name,
-        data=message.data,
+        # The chat list only needs a file's name and category, not its picture.
+        data={k: v for k, v in message.data.items() if k != "preview"} if message.data else None,
     )
 
 

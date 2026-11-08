@@ -1,7 +1,8 @@
-import { ArrowLeft, ChevronLeft, ChevronRight, Folder } from "lucide-react"
+import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { cn } from "@/lib/utils"
 import { GroupMembers, GroupName } from "./GroupPanel"
+import { SharedFiles } from "./SharedFiles"
 import { lastSeenText } from "./time"
 import { tintFor, type ChatSummary, type GroupMember } from "./types"
 
@@ -96,13 +97,8 @@ export function SidePanel({
           />
         )}
 
-        {/* No real files until v2 (D8) */}
-        <div className="flex flex-col items-center gap-3 rounded-lg bg-row-selected px-4 py-10 text-center">
-          <span className="flex size-12 items-center justify-center rounded-lg bg-accent text-primary">
-            <Folder className="size-5" />
-          </span>
-          <p className="text-muted-foreground">No files yet</p>
-        </div>
+        {/* Everything shared in this chat (D38) */}
+        <SharedFiles key={chat.id} chatId={chat.id} />
       </aside>
 
       {/* Folded, 1280px and up: just the open button and the avatar (D8) */}

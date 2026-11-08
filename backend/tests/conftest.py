@@ -55,6 +55,12 @@ os.environ["NOTIFY_FAKE_FAIL_TIMES"] = "0"
 # The log line, even if .env has webpush on: no test ever pushes for real.
 # The web push tests make their own notifier with a fake push service (D26).
 os.environ["NOTIFIER"] = "log"
+# The real store, with the fake keys from docker-compose.yml, in its own bucket.
+# Tests only ever touch the files they make (D38).
+os.environ["STORAGE_BUCKET"] = "parley-files-test"
+os.environ.setdefault("STORAGE_ENDPOINT", "http://127.0.0.1:3900")
+os.environ.setdefault("STORAGE_ACCESS_KEY", "GK000000000000000000000000")
+os.environ.setdefault("STORAGE_SECRET_KEY", "0" * 64)
 
 from fastapi.testclient import TestClient  # noqa: E402  (must come after the line above)
 
@@ -67,7 +73,7 @@ from app.presence import service as presence  # noqa: E402
 def _empty_all_tables():
     """Empties every sheet and wipes Redis, so the next test starts clean."""
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE users, sessions, chats, chat_members, messages, push_subscriptions"))
+        connection.execute(text("TRUNCATE users, sessions, chats, chat_members, messages, push_subscriptions, uploads"))
     # And the whiteboard: every presence and last seen note (Redis database 15).
     presence.client.flushdb()
     # And the post office: every box in the parley_test vhost, and the

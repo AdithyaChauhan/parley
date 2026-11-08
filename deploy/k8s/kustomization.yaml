@@ -11,7 +11,9 @@ resources:
   - postgres.yaml
   - redis.yaml
   - rabbitmq.yaml
+  - storage.yaml
   - migrate.yaml
+  - storage-setup.yaml
   - backend.yaml
   - worker.yaml
   - web.yaml
@@ -19,6 +21,14 @@ resources:
 # nginx.conf becomes a ConfigMap whose name ends in a hash of the file. A changed
 # file means a new name, so the web pod rolls by itself and picks it up.
 configMapGenerator:
+  # The same file Compose mounts (D38), copied here by up.sh's rule: kustomize
+  # only reads files inside this folder.
+  - name: storage-config
+    files:
+      - garage.toml
+    options:
+      labels:
+        stage: helpers
   - name: web-nginx
     files:
       - nginx.conf

@@ -40,6 +40,14 @@ if ! grep -q '^JWT_SECRET=' "$NEW_ENV"; then
   echo "Parameter Store gave no JWT_SECRET: keeping the old .env and stopping." >&2
   exit 1
 fi
+# The store's four secrets (D38). Checked before anything changes, so a missing
+# one stops here with the old version still running.
+for key in STORAGE_RPC_SECRET STORAGE_ADMIN_TOKEN STORAGE_ACCESS_KEY STORAGE_SECRET_KEY; do
+  if ! grep -q "^$key=" "$NEW_ENV"; then
+    echo "Parameter Store has no $key: keeping the old .env and stopping." >&2
+    exit 1
+  fi
+done
 mv "$NEW_ENV" .env
 echo "$(grep -c . .env) settings written to .env (600)"
 
@@ -58,12 +66,14 @@ if [[ "$RUNNING_WEB" == "$ECR_REGISTRY/parley-web:"* ]] \
 else
   WEB=yes
 fi
-SERVICES=(migrate backend_a backend_b worker)
+SERVICES=(migrate storage_setup backend_a backend_b worker)
 [ "$WEB" = yes ] && SERVICES+=(web)
 compose pull --quiet "${SERVICES[@]}"
 
 echo "== 3/6 Helpers: restarted only if their settings changed"
-compose up -d --wait db redis rabbitmq certbot
+compose up -d --wait db redis rabbitmq storage certbot
+# Bucket, key and size limit. It only changes something on a fresh store (D38).
+compose run --rm --no-deps storage_setup
 
 echo "== 4/6 Tables: migrate"
 # Changes must work for the old copy too, which runs on the new tables for a
@@ -94,4 +104,7 @@ docker image prune -af >/dev/null
 docker builder prune -af >/dev/null
 
 compose ps
+# What every container uses now, for the deploy's log (D38).
+docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}'
+free -m
 echo "Done: $TAG is live."

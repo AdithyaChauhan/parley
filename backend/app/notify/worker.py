@@ -5,6 +5,7 @@ It reads jobs from notify and notifies people who haven't read their message."""
 import json
 import logging
 import signal
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from app.auth.models import User
 from app.chats.models import Chat, ChatMember
 from app.config import settings
 from app.db import SessionLocal
+from app.files import cleanup
 from app.messages.models import Message
 from app.notify import queues
 from app.notify.notifier import fake_fail, make_notifier
@@ -218,6 +220,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     # The /metrics page runs in a small background thread, beside the job loop.
     start_http_server(METRICS_PORT)
+    # So does the hourly removal of files that were never sent (D38).
+    cleanup.start(threading.Event())
     try:
         serve()
     except KeyboardInterrupt:

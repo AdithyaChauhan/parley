@@ -46,6 +46,17 @@ entry JWT_SECRET "$JWT_SECRET"
 entry VAPID_PRIVATE_KEY "$(value VAPID_PRIVATE_KEY)"
 entry VAPID_PUBLIC_KEY "$(value VAPID_PUBLIC_KEY)"
 entry VAPID_SUBJECT "$(value VAPID_SUBJECT)"
+# The file store (D38). This cluster is laptop-only, so the same fake values as
+# Compose when .env has none.
+ZEROS=0000000000000000000000000000000000000000000000000000000000000000
+RPC=$(value STORAGE_RPC_SECRET)
+TOKEN=$(value STORAGE_ADMIN_TOKEN)
+ACCESS=$(value STORAGE_ACCESS_KEY)
+SECRET=$(value STORAGE_SECRET_KEY)
+entry STORAGE_RPC_SECRET "${RPC:-$ZEROS}"
+entry STORAGE_ADMIN_TOKEN "${TOKEN:-dev-admin-token}"
+entry STORAGE_ACCESS_KEY "${ACCESS:-GK000000000000000000000000}"
+entry STORAGE_SECRET_KEY "${SECRET:-$ZEROS}"
 # The two addresses with a password inside. Built here with the cluster's own
 # names, not copied from .env, which points at the laptop. Those passwords use
 # only letters and numbers, so they're safe in an address (D27).

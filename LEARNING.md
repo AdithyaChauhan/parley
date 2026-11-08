@@ -1647,3 +1647,35 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - What the load test showed: first I sent every member's read to all 50 members. A 50-member group couldn't even keep 2 messages a second (p95 9 s), and both copies sat at one core. One message is 49 pushes, but its 49 reads were about 2,450 receipt pushes. I only knew it was the receipts because I ran it again with reads switched off (p95 84 ms at 5 a second).
 - How I fixed it: a read now goes only to the reader's own tabs, the group hears only when its lowest bookmark moves, and the app sends "read" at most once a second. Pushes fell from about 2,440 to 430 a second, the group keeps up with 5 messages a second, no line drops, and nothing is lost.
 - What still confuses me: it's still over my 500 ms target with reads on (p95 1.7 s at 5 a second). Now it's the reads themselves, 50 database writes a second, plus a laptop that's nearly full. I'd have to measure which of my ideas helps most: reading less often in big groups, or skipping reads that can't move the lowest.
+
+---
+
+### Task 36: Files and voice notes
+**What was built**
+- `backend/app/files/s3.py`: one small S3 client with no AWS SDK (D29). It builds AWS Signature V4 links by hand. A test checks it against AWS's own published example.
+- `backend/app/files/routes.py`: four routes. Ask to upload, send the file's message once it's uploaded, list a chat's files, and get a download link. Each one checks membership first.
+- `backend/app/files/models.py`: the `uploads` table. A row is made when someone asks to upload. Its `message_id` stays empty until the message is saved.
+- `backend/app/files/cleanup.py`: an hourly job inside the worker. It removes files whose upload is over a day old and never got a message.
+- `backend/app/files/garage_setup.py`: gets a fresh Garage ready (node role, key, bucket, 5 GB limit). It's safe to run again, and it's the only Garage-specific code.
+- `add_message` now takes a kind, data and an upload. The upload is claimed in the same transaction as the message.
+- Nginx has a `/storage/` door in all three configs: only GET and PUT, no buffering to disk, `nosniff`, and a sandbox header so a file can never act as a page on our site.
+- `docker-compose.yml`, `deploy/k8s/storage.yaml`: Garage v2.4.1 with a volume and a 256 MB limit. CI starts a real Garage for the tests.
+- The app: `lib/files.ts` (checks, upload with progress, cached links), the outbox's file queue, `FileContent.tsx` (picture, card, voice player, progress), `useVoiceRecorder.ts`, `SharedFiles.tsx` (the side panel's list), and the drop screen from the reference design.
+
+**New ideas**
+- Presigned URL: a link that carries its own permission. The server signs "PUT this one file, this big, of this type, for 5 minutes" with a secret key, and the store checks the signature. The backend never touches the bytes.
+- Signed headers: putting `Content-Length` and `Content-Type` in the signature makes the store itself refuse a bigger file or a different type. The check can't be skipped by a modified app.
+- Host in the signature: the signature covers the store's own address, so Nginx must send that exact `Host`. The browser only ever sees `/storage/...` on our own site.
+- Same-site files are dangerous: a file served from our own address could run scripts as us. So HTML and SVG aren't allowed, and Nginx adds `nosniff` and a sandbox header.
+- Claim in one transaction: the message and "this upload now has a message" are saved together. Otherwise a crash between the two would let the cleanup delete a file that a saved message points to.
+- Measuring before choosing: both stores passed the feature checks. Memory settled it (peak 77 MB for Garage, 685 MB for SeaweedFS).
+- MediaRecorder: the browser's recorder. Each browser makes its own format, so the app asks for mp4 first (it plays everywhere) and falls back to webm.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- How a file travels: my app asks the backend for permission, and the backend checks I'm a member and signs a link that lasts 5 minutes. The browser uploads straight to storage on that link, through Nginx. Only when the upload is done does the app send the message, so a message never points at a file that isn't there. The backend then checks with the store that the file really exists and has the right size and type.
+- Why the backend doesn't carry the bytes: each copy has only 8 threads (D34). Ten phones slowly uploading 10 MB through it would freeze the chat for everyone. A signed link costs the backend a few microseconds.
+- How the limits hold if someone edits the app: the size and type are part of the signature. If you send more bytes or another type, the signature doesn't match and the store answers 403. The server also checks the real size after the upload.
+- Who can get a link: only someone who's a current member, and only for files from when they joined. Someone who left keeps the small previews already on their screen but gets no new links.
+- Why Garage: I measured it next to SeaweedFS on uploads. Both did what I needed, but Garage peaked at 77 MB and SeaweedFS at 685 MB, and the server only has about 1 GB free.
+- What I'd check first if files broke: a 403 from storage usually means the signature doesn't match, so I'd look at the `Host` Nginx sends. A 503 from the file routes means the store is down or has no keys set.
+- What still confuses me: for 5 minutes after sending, the sender still holds a valid upload link and could swap in a different file of the same size and type. It's a small hole. The real fix is a store policy that refuses overwrites.
