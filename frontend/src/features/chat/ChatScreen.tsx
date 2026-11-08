@@ -7,6 +7,7 @@ import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
 import type { ChatSummary, NarrowView, ServerMessage } from "./types"
+import { useGroupMembers } from "./useGroupMembers"
 import { useOutbox } from "./useOutbox"
 import { useTyping } from "./useTyping"
 import { useVisibleArea } from "./useVisibleArea"
@@ -83,6 +84,13 @@ export function ChatScreen({ user }: { user: User }) {
   }
 
   const openChat = chats?.find((chat) => chat.id === openId) ?? null
+  // The open group's members, for its header and side panel (D37)
+  const group = useGroupMembers(openChat)
+
+  // My row changed after a group action (renamed, or I left): swap it in place
+  function chatChanged(changed: ChatSummary) {
+    setChats((all) => all && all.map((chat) => (chat.id === changed.id ? changed : chat)))
+  }
 
   // Opening a chat doesn't clear its unread count by itself: the Conversation
   // does that (markRead) once the messages are really on screen (D20).
@@ -149,7 +157,15 @@ export function ChatScreen({ user }: { user: User }) {
       if (!all || !chat) return all
       const isNew = message.seq > (chat.last_message?.seq ?? 0)
       const lastMessage = isNew
-        ? { seq: message.seq, preview: message.body, created_at: message.created_at }
+        ? {
+            seq: message.seq,
+            preview: message.body,
+            created_at: message.created_at,
+            kind: message.kind,
+            sender_id: message.sender_id,
+            sender_name: message.sender_name,
+            data: message.data,
+          }
         : chat.last_message
       // Sending counts as reading everything above it (T14), like on the server.
       // Their new message adds 1. If the chat is open and you're looking, the
@@ -185,6 +201,9 @@ export function ChatScreen({ user }: { user: User }) {
     if (!chats) return // the list is still loading, and will include it
     if (chats.some((chat) => chat.id === message.chat_id)) {
       messageArrived(message)
+      // A group note can change the row itself: its name, my role, or that I'm
+      // no longer in it (D37). The list has the truth, so ask it again.
+      if (message.kind === "system") reloadChats()
     } else {
       reloadChats()
     }
@@ -204,6 +223,7 @@ export function ChatScreen({ user }: { user: User }) {
         onChatStarted={chatStarted}
         typing={typing}
         phoneVisible={narrowView === "list"}
+        myId={user.id}
         myName={user.name}
         live={live}
         onLogout={logout}
@@ -218,7 +238,8 @@ export function ChatScreen({ user }: { user: User }) {
             unsent={outbox.unsent[openChat.id] ?? []}
             onSend={(body) => outbox.send(openChat.id, body)}
             onRetry={(message) => outbox.retry(openChat.id, message)}
-            typing={openChat.id in typing}
+            typing={typing[openChat.id]}
+            members={group.members}
             onRead={() => markRead(openChat.id)}
             onBack={() => setNarrowView("list")}
             onOpenPanel={() => setNarrowView("panel")}
@@ -232,6 +253,11 @@ export function ChatScreen({ user }: { user: User }) {
             onToggle={() => setPanelOpen((open) => !open)}
             onBack={() => setNarrowView("chat")}
             narrowVisible={narrowView === "panel"}
+            chats={chats ?? []}
+            myId={user.id}
+            members={group.members}
+            onMembersChanged={(list) => group.setMembers(openChat.id, list)}
+            onChatChanged={chatChanged}
           />
         </>
       ) : (

@@ -16,6 +16,7 @@ A real-time chat web app, like WhatsApp Web, built to learn and show backend sys
 
 - Sign up and log in (argon2 passwords, a 15-minute access token and a rotating 7-day refresh cookie)
 - One-to-one chats, started by email
+- Groups of up to 50: add, remove, leave, rename and admins. New members see messages from when they joined, and people who left keep what they had, read-only
 - Messages arrive live, with ticks: sent, delivered (grey ✓✓) and read (teal ✓✓)
 - "typing...", online and "last seen"
 - Offline sends wait in order and go out when the line is back, never twice. Missed messages are caught up by number
@@ -25,7 +26,7 @@ A real-time chat web app, like WhatsApp Web, built to learn and show backend sys
 - Two backend copies: stop one mid-chat and the chat carries on
 - Every merge to `main` deploys itself to AWS, one copy at a time
 
-**Not built yet (v2):** groups, files, voice notes, reactions, edit and delete, search.
+**Not built yet (v2):** files, voice notes, reactions, edit and delete, search.
 
 ## Architecture
 

@@ -37,6 +37,13 @@ class LastMessageOut(BaseModel):
     # Only the start of the text: the grey line under the chat's name.
     preview: str
     created_at: datetime
+    # "text", or "system" for a group note: then preview is empty and the app
+    # writes the words from data (D37).
+    kind: str
+    # Who sent it, for "Ana: hi" in a group's row.
+    sender_id: uuid.UUID
+    sender_name: str | None
+    data: dict | None
 
 
 class ChatOut(BaseModel):
@@ -56,3 +63,7 @@ class ChatOut(BaseModel):
     # last seen (D22). False and null for groups (v2); null if never seen.
     online: bool
     last_seen: datetime | None
+    # Groups: my role, "admin" or "member" (D37). Null for direct chats.
+    role: str | None
+    # I left this group or was removed: read-only, no message box (D37).
+    left: bool

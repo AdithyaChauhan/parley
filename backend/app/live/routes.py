@@ -9,6 +9,7 @@ import redis
 import sqlalchemy.exc
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import busy
@@ -94,7 +95,8 @@ def new_ticket(me: User = Depends(get_current_user)):
 
 
 def _others(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """The other people in this chat. [] if this person isn't in it."""
+    """The other current members of this chat. [] if this person isn't a
+    current member: someone who left can't type in a group (D37)."""
     members = member_ids(db, chat_id)
     if user_id not in members:
         return []
@@ -112,10 +114,13 @@ def _save_bookmark(user_id: uuid.UUID, kind: str, bookmark: LiveBookmarkIn) -> N
         save_bookmark(db, bookmark.chat_id, user_id, kind, bookmark.seq)
 
 
-def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> list[uuid.UUID]:
-    """Who gets this person's "typing": the others in the chat. [] for a non-member."""
+def _typing_to(user_id: uuid.UUID, chat_id: uuid.UUID) -> tuple[list[uuid.UUID], str]:
+    """Who gets this person's "typing" (the others in the chat, [] for a
+    non-member), and their name, for "Ana is typing..." in a group (D37)."""
     with SessionLocal() as db:
-        return _others(db, chat_id, user_id)
+        others = _others(db, chat_id, user_id)
+        name = db.scalar(select(User.name).where(User.id == user_id)) if others else ""
+    return others, name or ""
 
 
 def _presence_news(user_id: uuid.UUID) -> tuple[list[uuid.UUID], datetime | None]:
@@ -171,8 +176,8 @@ async def _on_typing(line: _Line, event: EventIn) -> None:
         return
     line.last_typing = now
 
-    others = await anyio.to_thread.run_sync(_typing_to, line.user_id, typing.chat_id)
-    pushed = {"type": "typing", "data": {"chat_id": str(typing.chat_id), "user_id": str(line.user_id)}}
+    others, name = await anyio.to_thread.run_sync(_typing_to, line.user_id, typing.chat_id)
+    pushed = {"type": "typing", "data": {"chat_id": str(typing.chat_id), "user_id": str(line.user_id), "name": name}}
     await bus.publish_async(others, pushed)
 
 

@@ -217,7 +217,10 @@ def test_typing_reaches_ana_but_not_ben(client, sign_up):
     with _open_line(client, ana) as anas_line, _open_line(client, ben) as bens_line:
         assert anas_line.receive_json()["type"] == "presence"  # Ben came online (T20)
         bens_line.send_json({"type": "typing", "data": {"chat_id": chat_id}})
-        assert anas_line.receive_json() == {"type": "typing", "data": {"chat_id": chat_id, "user_id": ben_id}}
+        assert anas_line.receive_json() == {
+            "type": "typing",
+            "data": {"chat_id": chat_id, "user_id": ben_id, "name": "Ben"},
+        }
 
         # Ben's own line doesn't get it back: the next thing it gets is Ana's message.
         _send(client, ana, chat_id, "hi")

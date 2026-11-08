@@ -79,9 +79,12 @@ export function useOutbox(myId: string) {
       clientMsgId: crypto.randomUUID(), // a fresh ID for each new message (D9)
       seq: null,
       senderId: myId,
+      senderName: "", // mine: shown as "You"
       body,
       createdAt: new Date().toISOString(),
       status: "sending",
+      kind: "text",
+      data: null,
     }
     update(chatId, (list) => [...list, message])
     sendQueue(chatId)

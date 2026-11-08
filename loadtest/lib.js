@@ -71,6 +71,8 @@ export function optionsFor(plan, extra = {}) {
 
 // plan: when things happen, in seconds after the start.
 //   users                how many (pairs: 1+2, 3+4, ...)
+//   group, fanout        scenario f: everyone talks in the one group seed.py made,
+//                        and each message should reach fanout people (D37)
 //   connectAt(i)         when user i opens its line (leave out: right after logging in)
 //   chatFrom, chatUntil  when users send
 //   gap(t)               seconds between one user's sends, on average, at time t
@@ -99,9 +101,14 @@ export async function fakeUser(plan) {
   );
   if (session.status !== 200) return; // counted in http_req_failed
   const auth = { headers: { Authorization: `Bearer ${session.json("access_token")}`, "Content-Type": "application/json" } };
-  const [myChat] = untilNotBusy(() => http.get(`${BASE}/api/chats`, { ...auth, tags: { name: "chats" } })).json();
+  const myChats = untilNotBusy(() => http.get(`${BASE}/api/chats`, { ...auth, tags: { name: "chats" } })).json();
+  // A pair talks in its direct chat. In a group, every other member's message
+  // counts, so I need my own id (D37).
+  const myChat = plan.group ? myChats.find((c) => c.kind === "group") : myChats[0];
   const chat = myChat.id;
   const partner = myChat.other_user_id;
+  const me = plan.group ? untilNotBusy(() => http.get(`${BASE}/api/auth/me`, { ...auth, tags: { name: "me" } })).json("id") : null;
+  const fromOthers = (m) => (plan.group ? m.sender_id !== me : m.sender_id === partner);
 
   let socket = null; // the working line, once it said hello
   let closing = false; // true at the end: no more reconnects
@@ -110,6 +117,8 @@ export async function fakeUser(plan) {
   let gapFree = 0; // the highest number with no hole below it (D21)
   const seen = new Set(); // every number I have, live or by catch-up
   let readSent = 0;
+  let readAt = 0; // when the last "read" went
+  let readBooked = null; // a "read" waiting out its second
   let catchingUp = false;
   let catchUpAgain = false;
 
@@ -196,7 +205,8 @@ export async function fakeUser(plan) {
     seen.add(m.seq);
     while (seen.has(gapFree + 1)) gapFree += 1;
 
-    if (m.sender_id === partner) {
+    // Group notes carry no timing (D37). None are made during a run anyway.
+    if (m.kind !== "system" && fromOthers(m)) {
       const { t, s } = JSON.parse(m.body);
       const took = Date.now() - t;
       const tags = s ? { via, stage: s } : { via };
@@ -205,13 +215,30 @@ export async function fakeUser(plan) {
       if (via === "catchup") caughtUp.add(1, tags);
       if (took > 1000) late.add(1, tags);
       // Both people have the chat open, so it's read at once (D33).
-      if (socket && gapFree > readSent) {
-        readSent = gapFree;
-        socket.send(JSON.stringify({ type: "read", data: { chat_id: chat, seq: gapFree } }));
-      }
+      // Scenario f can turn reads off, to measure the message fan-out alone.
+      if (plan.reads !== false) sendRead();
     }
     // A number was skipped (#41, then #43): something got lost on the way.
     if (via === "live" && m.seq > gapFree) catchUp();
+  }
+
+  // "read" up to my gap-free number, at most once a second, like the app (D20):
+  // a read inside the second is booked, and goes then with the highest number.
+  function sendRead() {
+    if (readBooked) return;
+    const waitMs = readAt + 1000 - Date.now();
+    if (waitMs > 0) {
+      readBooked = setTimeout(() => {
+        readBooked = null;
+        sendRead();
+      }, waitMs);
+      return;
+    }
+    if (socket && gapFree > readSent) {
+      readSent = gapFree;
+      readAt = Date.now();
+      socket.send(JSON.stringify({ type: "read", data: { chat_id: chat, seq: gapFree } }));
+    }
   }
 
   // Ask for everything after my gap-free number (D21), 100 at a time.
@@ -327,8 +354,10 @@ export function summaryFor(scenario, plan) {
       duration_s: Math.round(data.state.testRunDurationMs / 1000),
       users: plan.users,
       sent: count("msgs_sent"),
+      // In a group, each message should reach every other member (D37).
+      expected: count("msgs_sent") * (plan.fanout ?? 1),
       received: count("msgs_received"),
-      lost: count("msgs_sent") - count("msgs_received"),
+      lost: count("msgs_sent") * (plan.fanout ?? 1) - count("msgs_received"),
       caught_up: count("msgs_caught_up"),
       over_1s: count("msgs_late"),
       send_failed_rate: values("send_failed")?.rate ?? 0,
@@ -355,7 +384,7 @@ export function summaryFor(scenario, plan) {
     const line = (label, stats) =>
       stats ? `${label.padEnd(14)} p50 ${stats.med} · p95 ${stats["p(95)"]} · p99 ${stats["p(99)"]} · max ${stats.max} ms\n` : "";
     const text =
-      `\n${scenario}: ${results.sent} sent · ${results.received} received · lost ${results.lost}` +
+      `\n${scenario}: ${results.sent} sent · ${results.expected} expected · ${results.received} received · lost ${results.lost}` +
       ` (caught up ${results.caught_up}, over 1 s ${results.over_1s})\n` +
       `failed sends ${(results.send_failed_rate * 100).toFixed(2)}% (busy ${results.send_busy}, gave up ${results.send_gave_up})` +
       ` · failed connects ${results.connect_failed} (busy ${results.connect_busy}) · line drops ${results.line_drops}\n` +

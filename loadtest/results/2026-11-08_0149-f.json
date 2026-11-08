@@ -1,0 +1,112 @@
+{
+  "run": "2026-11-08_0149-f",
+  "scenario": "f-group-no-reads",
+  "ended_at": "2026-11-07T20:27:30.709Z",
+  "duration_s": 411,
+  "users": 50,
+  "sent": 1217,
+  "expected": 59633,
+  "received": 59633,
+  "lost": 0,
+  "caught_up": 0,
+  "over_1s": 146,
+  "send_failed_rate": 0,
+  "send_busy": 0,
+  "send_gave_up": 0,
+  "http_failed_rate": 0,
+  "connect_failed": 0,
+  "connect_busy": 0,
+  "line_drops": 0,
+  "e2e_ms": {
+    "p(99)": 125,
+    "max": 1280,
+    "count": 59633,
+    "min": 19,
+    "med": 39,
+    "p(95)": 80
+  },
+  "send_ms": {
+    "min": 85,
+    "med": 156,
+    "p(95)": 327.2,
+    "p(99)": 472.2,
+    "max": 1647,
+    "count": 1217
+  },
+  "connect_ms": {
+    "med": 50,
+    "p(95)": 200,
+    "p(99)": 210.1,
+    "max": 214,
+    "count": 50,
+    "min": 16
+  },
+  "hello_wait_ms": {
+    "min": 6,
+    "med": 20,
+    "p(95)": 70.2,
+    "p(99)": 85.6,
+    "max": 89,
+    "count": 50
+  },
+  "stages": {
+    "msgs_received{stage:2}": {
+      "count": 16513,
+      "rate": 40.1
+    },
+    "msgs_sent{stage:2}": {
+      "count": 337,
+      "rate": 0.8
+    },
+    "e2e_latency{stage:2}": {
+      "count": 16513,
+      "min": 19,
+      "med": 34,
+      "p(95)": 63,
+      "p(99)": 101,
+      "max": 137
+    },
+    "msgs_received{stage:5}": {
+      "count": 43120,
+      "rate": 104.8
+    },
+    "send_failed{stage:5}": {
+      "fails": 880,
+      "rate": 0,
+      "passes": 0
+    },
+    "send_time{stage:2}": {
+      "p(95)": 215.6,
+      "p(99)": 351.6,
+      "max": 473,
+      "count": 337,
+      "min": 85,
+      "med": 128
+    },
+    "e2e_latency{stage:5}": {
+      "max": 1280,
+      "count": 43120,
+      "min": 22,
+      "med": 42,
+      "p(95)": 84,
+      "p(99)": 148
+    },
+    "send_failed{stage:2}": {
+      "rate": 0,
+      "passes": 0,
+      "fails": 337
+    },
+    "send_time{stage:5}": {
+      "count": 880,
+      "min": 110,
+      "med": 169,
+      "p(95)": 351,
+      "p(99)": 496.7,
+      "max": 1647
+    },
+    "msgs_sent{stage:5}": {
+      "count": 880,
+      "rate": 2.1
+    }
+  }
+}

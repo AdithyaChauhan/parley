@@ -1,0 +1,4 @@
+parley_load has 1217 messages. k6: "sent":1217,"received":59633,"lost":0,
+Idle in transaction after the run: 1
+backend_a after the run: {"status":"ok","copy":"A","version":"dev"}
+backend_b after the run: {"status":"ok","copy":"B","version":"dev"}

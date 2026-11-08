@@ -2,9 +2,11 @@
 1,000 fake users, 500 direct chats (load0001 with load0002, load0003 with
 load0004, ...), and one saved session per user. It runs inside the backend
 image, before every run (bash loadtest/run.sh does it), so every run starts
-from empty chats."""
+from empty chats.
+With LOAD_GROUP=50 (scenario f), users 1-50 also share one group (D37)."""
 
 import json
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,6 +29,8 @@ PASSWORD = "load-test-password"
 # The raw refresh tokens, one per user, in order (load0001 first). k6 reads
 # them; git ignores the file, and the database only gets their fingerprints.
 SESSIONS_FILE = Path(__file__).with_name("sessions.json")
+# Scenario f: how many users share one group (0 = no group).
+GROUP_SIZE = int(os.environ.get("LOAD_GROUP", "0"))
 
 
 def email(n: int) -> str:
@@ -66,6 +70,16 @@ def main() -> None:
         chats.append({"id": chat_id, "kind": "direct", "direct_key": direct_key(a["id"], b["id"])})
         members += [{"chat_id": chat_id, "user_id": a["id"]}, {"chat_id": chat_id, "user_id": b["id"]}]
 
+    # Scenario f: one group of the first GROUP_SIZE users, load0001 its admin.
+    # Everyone sees it from #1 (D37). Kept apart: a bulk insert takes its
+    # columns from the first row, so these extra ones (title, role) need their own.
+    group_id = uuid.uuid4()
+    group = {"id": group_id, "kind": "group", "title": "Load group"}
+    group_members = [
+        {"chat_id": group_id, "user_id": user["id"], "role": "admin" if n == 0 else "member"}
+        for n, user in enumerate(users[:GROUP_SIZE])
+    ]
+
     # A saved session per user, like a browser that's already logged in (D33).
     # k6 trades each token at /api/auth/refresh, so no fake user needs the slow
     # password check. Only the fingerprint goes in the database (D16).
@@ -82,10 +96,14 @@ def main() -> None:
         connection.execute(insert(User), users)
         connection.execute(insert(Chat), chats)
         connection.execute(insert(ChatMember), members)
+        if GROUP_SIZE:
+            connection.execute(insert(Chat), [group])
+            connection.execute(insert(ChatMember), group_members)
         connection.execute(insert(UserSession), sessions)
     SESSIONS_FILE.write_text(json.dumps(tokens))
 
-    print(f"{url.database}: {len(users)} users, {len(chats)} chats, {len(sessions)} sessions")
+    extra = f", one group of {GROUP_SIZE}" if GROUP_SIZE else ""
+    print(f"{url.database}: {len(users)} users, {len(chats)} chats{extra}, {len(sessions)} sessions")
 
 
 if __name__ == "__main__":

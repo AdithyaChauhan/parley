@@ -1,8 +1,9 @@
 import { ArrowLeft, ChevronLeft, ChevronRight, Folder } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { cn } from "@/lib/utils"
+import { GroupMembers, GroupName } from "./GroupPanel"
 import { lastSeenText } from "./time"
-import { tintFor, type ChatSummary } from "./types"
+import { tintFor, type ChatSummary, type GroupMember } from "./types"
 
 type SidePanelProps = {
   chat: ChatSummary
@@ -10,14 +11,32 @@ type SidePanelProps = {
   onToggle: () => void
   onBack: () => void
   narrowVisible: boolean // below 1280px: it's the panel's turn instead of the conversation's
+  // Groups (D37): who's in it, and what changed
+  chats: ChatSummary[]
+  myId: string
+  members: GroupMember[] | null
+  onMembersChanged: (members: GroupMember[]) => void
+  onChatChanged: (chat: ChatSummary) => void
 }
 
-// The right panel: the open chat's name and member count, and its shared files.
+// The right panel: the open chat's name, a group's members (D37), and its shared files.
 // 1280px and up: a column of its own, which folds to a thin strip (reference-3).
 // Below 1280px there's no room for it, so it takes the conversation's place when you
 // tap the chat's name, with a back arrow to return (D8). On a phone that's a full screen.
-export function SidePanel({ chat, open, onToggle, onBack, narrowVisible }: SidePanelProps) {
+export function SidePanel({
+  chat,
+  open,
+  onToggle,
+  onBack,
+  narrowVisible,
+  chats,
+  myId,
+  members,
+  onMembersChanged,
+  onChatChanged,
+}: SidePanelProps) {
   const tint = tintFor(chat.id)
+  const group = chat.kind === "group"
 
   return (
     <>
@@ -47,12 +66,35 @@ export function SidePanel({ chat, open, onToggle, onBack, narrowVisible }: SideP
             <ChevronRight className="size-5" />
           </button>
           <Avatar name={chat.name} tint={tint} size="lg" />
-          <p className="mt-2 max-w-full truncate px-10 text-name">{chat.name}</p>
-          {/* A 1:1 chat: online or last seen, like the conversation header (D8). Groups come in v2. */}
+          {group ? (
+            <GroupName key={chat.name} chat={chat} onChatChanged={onChatChanged} />
+          ) : (
+            <p className="mt-2 max-w-full truncate px-10 text-name">{chat.name}</p>
+          )}
+          {/* A 1:1 chat: online or last seen, like the conversation header (D8). A group: how many are in it (D37). */}
           <p className="text-sm text-muted-foreground">
-            {chat.kind !== "direct" ? "Group" : chat.online ? "online" : lastSeenText(chat.last_seen)}
+            {group
+              ? chat.left
+                ? "You're no longer a member"
+                : members
+                  ? `Group · ${members.length} members`
+                  : "Group"
+              : chat.online
+                ? "online"
+                : lastSeenText(chat.last_seen)}
           </p>
         </div>
+
+        {group && (
+          <GroupMembers
+            chat={chat}
+            chats={chats}
+            myId={myId}
+            members={members}
+            onMembersChanged={onMembersChanged}
+            onChatChanged={onChatChanged}
+          />
+        )}
 
         {/* No real files until v2 (D8) */}
         <div className="flex flex-col items-center gap-3 rounded-lg bg-row-selected px-4 py-10 text-center">

@@ -4,10 +4,12 @@ import { Avatar } from "@/components/Avatar"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { MessageBox } from "./MessageBox"
-import { MessageBubble } from "./MessageBubble"
+import { memberNames } from "./groupNotes"
+import { MessageBubble, SystemNote } from "./MessageBubble"
 import { lastSeenText } from "./time"
-import { tintFor, type ChatSummary, type Message, type NarrowView } from "./types"
+import { tintFor, type ChatSummary, type GroupMember, type Message, type NarrowView } from "./types"
 import { useMessages } from "./useMessages"
+import type { Typist } from "./useTyping"
 
 // Scrolled up less than this counts as "at the bottom": the newest message is on screen
 const NEAR_BOTTOM_PX = 80
@@ -23,7 +25,8 @@ type ConversationProps = {
   unsent: Message[] // my messages in this chat that aren't saved yet (the outbox)
   onSend: (body: string) => void // into the outbox
   onRetry: (message: Message) => void // "Not sent, tap to retry"
-  typing: boolean // the other person is typing here
+  typing: Typist | undefined // someone is typing here
+  members: GroupMember[] | null // a group's current members (null for a direct chat, or while loading)
   onRead: () => void // I've seen everything here: the chat list sets unread to 0
   onBack: () => void
   onOpenPanel: () => void // below 1280px: the side panel takes this conversation's place
@@ -40,6 +43,7 @@ export function Conversation({
   onSend,
   onRetry,
   typing,
+  members,
   onRead,
   onBack,
   onOpenPanel,
@@ -59,6 +63,7 @@ export function Conversation({
   // You're at the newest message, so the list keeps the bottom in view
   const atBottom = useRef(true)
 
+  const group = chat.kind === "group"
   const firstKey = messages[0]?.clientMsgId
   const lastKey = messages.at(-1)?.clientMsgId
   const lastIsMine = messages.at(-1)?.senderId === myId
@@ -181,15 +186,20 @@ export function Conversation({
           onClick={onOpenPanel}
           className="flex min-w-0 cursor-pointer items-center gap-3 text-left xl:cursor-default"
         >
+          {/* A group's avatar is its name's initials (D37) */}
           <Avatar name={chat.name} tint={tintFor(chat.id)} status={chat.online ? "online" : undefined} />
           <span className="min-w-0">
             <span className="block truncate text-header leading-tight">{chat.name}</span>
-            {/* Online or last seen, for direct chats (D22) */}
-            {chat.kind === "direct" && (
-              <span className="block truncate text-label text-muted-foreground">
-                {chat.online ? "online" : lastSeenText(chat.last_seen)}
-              </span>
-            )}
+            {/* Direct chats: online or last seen (D22). Groups: who's in it, not who's online (D37) */}
+            <span className="block truncate text-label text-muted-foreground">
+              {group
+                ? chat.left
+                  ? "You're no longer a member"
+                  : memberNames(members, myId) || "\u00a0"
+                : chat.online
+                  ? "online"
+                  : lastSeenText(chat.last_seen)}
+            </span>
           </span>
         </button>
       </header>
@@ -206,17 +216,24 @@ export function Conversation({
         {!loading && !failed && messages.length === 0 && (
           <p className="m-auto text-sm text-muted-foreground">No messages yet. Say hi!</p>
         )}
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.clientMsgId}
-            message={message}
-            senderName={chat.name} // a direct chat: anyone who isn't me is the other person
-            senderTint={tintFor(chat.id)}
-            mine={message.senderId === myId}
-            receipt={receiptFor(message.seq)}
-            onRetry={() => onRetry(message)}
-          />
-        ))}
+        {messages.map((message) =>
+          message.kind === "system" ? (
+            <SystemNote key={message.clientMsgId} message={message} myId={myId} />
+          ) : (
+            <MessageBubble
+              key={message.clientMsgId}
+              message={message}
+              // A direct chat: anyone who isn't me is the other person. A group: whoever sent it,
+              // in a color that stays theirs (D37)
+              senderName={group ? message.senderName : chat.name}
+              senderTint={tintFor(group ? message.senderId : chat.id)}
+              mine={message.senderId === myId}
+              group={group}
+              receipt={receiptFor(message.seq)}
+              onRetry={() => onRetry(message)}
+            />
+          ),
+        )}
       </div>
 
       {/* The other person is typing (D20). The three dots bounce one after another. */}
@@ -227,13 +244,20 @@ export function Conversation({
             <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:150ms]" />
             <span className="size-1 animate-typing rounded-full bg-muted-foreground [animation-delay:300ms]" />
           </div>
-          <p className="text-label">{chat.name} is typing...</p>
+          <p className="text-label">{group ? typing.name : chat.name} is typing...</p>
         </div>
       )}
 
       {/* Clear of the iPhone's home bar when it overlaps the page; 16px otherwise (the browser's own tab already keeps clear) */}
       <div className="shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
+        {chat.left ? (
+          // Left or removed: read-only, with a note instead of the message box (D37)
+          <p className="flex min-h-16 items-center justify-center rounded-panel bg-card/60 px-4 text-center text-sm text-muted-foreground">
+            You can't send messages to this group because you're no longer a member.
+          </p>
+        ) : (
+          <MessageBox onSend={onSend} onTyping={() => sendTyping(chat.id)} />
+        )}
       </div>
     </section>
   )
