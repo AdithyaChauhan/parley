@@ -1610,3 +1610,40 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why only measured numbers: an interviewer can ask about any number, so each one has to come from a run I can point to. That's also why the README links to the load-test write-up instead of copying all of it.
 - What the re-run taught me: a slower step doesn't always mean slower code. I checked the requests per copy before believing the number, and found Nginx had sent most of them to one copy because the live lines were split 513 and 487.
 - What still confuses me: how far my laptop numbers would carry to a real server. The laptop shares its CPU and memory with k6 and the monitoring stack, so I can say where the limit came from, but not what it would be on a proper machine.
+
+---
+
+### Task 35: Groups
+**What was built**
+- A migration that only adds (expand, D31): `chat_members` gets `role`, `from_seq` and `until_seq`, and `messages` gets `kind` and `data`. Every new column has a default or may be empty, so existing direct chats are untouched and the old code still works on the new tables during a rolling deploy. Checked on a copy of the dev data: 5 chats, 10 member rows and 289 messages came through unchanged, and the old code could still send, list and read on the new tables.
+- `backend/app/groups/`: create, add, remove, leave, rename, make admin and list members. Every change takes the group's row lock, re-checks the person's role under that lock, and saves the change with its system message in one transaction.
+- Membership is stored as message numbers: a member sees `#from_seq` to `#until_seq`. History, catch-up, the chat list, unread, bookmarks and live pushes all follow it.
+- Sends check "still a member?" while holding the chat's lock, so nobody can slip a message in after the "removed" note.
+- Typing goes only to and from current members, and carries the name. Presence news goes only to direct-chat partners, so a 50-person group adds no presence pushes.
+- The worker titles group notifications "Ana in Trip" and skips anyone who has left by the time the job runs. Group notes don't notify.
+- Group receipts: in a group, a member's read goes only to their own tabs (for their unread badge). When the group's lowest "delivered" or "read" moves, every current member gets one `group_receipt` with both lowest numbers, and the ticks come from that. A read, a send or a member change can move it. Direct chats keep their receipts as before.
+- The app (and the load test's fake users) send "delivered" and "read" at most once a second per chat, always with the highest number.
+- The app: "..." → "New group", a members list in the side panel with admin actions and "Leave group", sender names in a steady color per person, centered group notes, ticks from the lowest bookmark, and a read-only view for ex-members.
+- 24 new tests in `test_groups.py`. Each guard was broken on purpose to check that its test fails.
+- `loadtest/f-group.js` and an optional 50-member group in `seed.py`, written up in `docs/load-test.md`.
+
+**New ideas**
+- Membership by message number, not by time: "Ben sees #12 to #40" fits catch-up (D21), which already works by numbers. A time would race with the numbers.
+- Locking a row to serialize changes: `SELECT ... FOR UPDATE` on the group's row makes two admins take turns. The second one re-reads everything after the first commits, so it decides on the truth.
+- Check-then-act races: checking "is she an admin?" before the lock, then acting after it, leaves a gap where the answer can change. The check has to happen under the lock.
+- Fan-out on write: one message becomes one push per member. Receipts fan out too: if each reader's receipt goes to every member, 50 members make about 50 × 50 pushes per message. Pushing only what the screen shows (the group's lowest bookmark) cuts that to a few.
+- Throttling: sending "read" at most once a second, with the highest number, turns ten reads in a burst into two, and loses nothing, because the bookmark only ever moves forward.
+- Racing checks without a lock: "did my move lift the lowest?" is answered after my commit, so when two members read at once, the later one always sees both moves. Both may push the same numbers, which is harmless.
+- Expand, then contract: add columns now and remove old ones in a later deploy, so two versions of the code can share one database for a moment.
+- Lowest bookmark: a group message is "delivered" only when the slowest current member has it. Starting a new member's bookmarks just before the "added" note means they never hold back older messages they can't see.
+- Facts in the database, words in the app: a note stores "Ana removed Ben", and each person's app writes "Ana removed you" or "You removed Ben".
+
+**In my words** (draft by Claude Code; Adithya to review)
+- How groups reuse what I had: a group is just a chat with more than two members. Messages still get the next number from the chat's counter, so group notes like "Ana added Ben" take numbers too and catch-up brings them like any message. A push is still one publish per person on Redis, so there's no new channel type.
+- Why membership is a range of message numbers: catch-up and history already ask "give me messages after #N". If Ben was added at #12 and removed at #40, I just add "and between 12 and 40" to the query. Times would have raced with the numbers.
+- How two admins can't step on each other: every change locks the group's row first, and checks the person's role only after it has the lock. When Ana and Ben try to remove each other at the same moment, one waits, then sees they were removed and gets a 403. I wrote a test that holds the lock on purpose so the second one really waits.
+- How a removed member can't send: a send already locks the chat row to take a number. I moved the "still a member?" check under that lock, so a removal saved first is always seen. Without it, a send already in progress could slip in after the "removed" note. Breaking that line on purpose makes two tests fail.
+- How group ticks work: my message is delivered when the slowest current member has it, and read when the slowest has read it. Someone who leaves stops counting, and a new member's bookmarks start just before they were added. The server works out that lowest number and pushes it to the group only when it moves, so the app doesn't need everyone's bookmarks.
+- What the load test showed: first I sent every member's read to all 50 members. A 50-member group couldn't even keep 2 messages a second (p95 9 s), and both copies sat at one core. One message is 49 pushes, but its 49 reads were about 2,450 receipt pushes. I only knew it was the receipts because I ran it again with reads switched off (p95 84 ms at 5 a second).
+- How I fixed it: a read now goes only to the reader's own tabs, the group hears only when its lowest bookmark moves, and the app sends "read" at most once a second. Pushes fell from about 2,440 to 430 a second, the group keeps up with 5 messages a second, no line drops, and nothing is lost.
+- What still confuses me: it's still over my 500 ms target with reads on (p95 1.7 s at 5 a second). Now it's the reads themselves, 50 database writes a second, plus a laptop that's nearly full. I'd have to measure which of my ideas helps most: reading less often in big groups, or skipping reads that can't move the lowest.

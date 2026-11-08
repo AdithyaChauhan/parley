@@ -132,6 +132,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - One shared function, `save_bookmark`, serves both doors: it saves the bookmark, then pushes the receipt with the normal Redis client (also when called from the live line's worker thread).
 - The app uses the HTTP door only once the line is known to be down (it dropped, or a connect failed, such as a ticket 503). It doesn't use it while the line is first connecting. It sends only what the server hasn't confirmed yet.
 - A bookmark that doesn't move pushes no receipt.
+- From T35, the app sends `delivered` and `read` at most once a second per chat, always with the highest number, so a busy chat doesn't write a bookmark for every message.
 - Bookmarks (`delivered_up_to`, `read_up_to`) only move forward and never past the chat's `last_seq`.
 - A push that fails never undoes or fails a send; the message is already saved (D9). Missed pushes are made up later (T19 catch-up).
 
@@ -403,12 +404,22 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Group events (created, added, removed, left, renamed, made admin) are messages too, with `kind = system` and their own number in the chat. They're saved, pushed and caught up like any message (D9, D18, D21). They hold structured data (who did what to whom), and the app writes the words.
 - Fan-out: a message is published on `user:<id>` for each current member (D23), with no new channel type.
 - Ticks: two grey ticks once every other current member has it delivered, and teal once every other current member has read it (the lowest bookmark, D9). Who read what ("message info") comes later.
-- Receipts and typing go to all current members (D20). Typing shows the name ("Ana is typing...").
+- Receipts in groups (changed during T35, after measuring): a member's own bookmark move goes only to their own tabs. When the group's lowest `delivered` or `read` bookmark (over current members) moves, one group receipt with both lowest numbers goes to all current members, and the app draws the ticks from it. That's all the ticks show, and it means ~100 pushes per message instead of ~2,450 in a 50-member group. Direct chats keep D20's receipts.
+- Typing goes to current members and shows the name ("Ana is typing...").
 - The header shows member names, not online or last seen. Online stays for direct chats (D22).
 - Notifications: one job per member (D25), titled "<sender> in <group>", with `chat_id` only (D12, D26).
 - Creating groups and changing members get D24-style limits. Every group route checks membership and role on the server.
 - Table changes follow expand-then-contract (D31).
 - The "..." menu comes back with "New group", and a group's members show in the side panel (D8).
+- Agreed and learned in T35 (Nov 8, 2026):
+  - Membership is stored as message numbers: `from_seq` (the "added" note) to `until_seq` (the "left" or "removed" note). History, catch-up and pushes reuse D21's "after #N" rule.
+  - Every group change locks the group's chat row, checks the person's role under that lock, and saves the change with its system note in one transaction. A send checks "still a member" under the same lock.
+  - A new member's bookmarks start just before the "added" note, so they never hold back older ticks. Ticks count only current members.
+  - Online status goes only to direct-chat partners. This narrows D22, since groups don't show online.
+  - People are added from your direct chats (by user id) or by exact email. Each email lookup counts against start-chat's limit. New limits: 10 new groups an hour, and 30 member changes a minute, per user.
+  - Group notes don't notify. "Added you" arrives live and counts as unread until T37's rule (D39). Every message carries `sender_name`, so names still show for people who have left.
+  - Re-adding someone starts their view at the new "added" note. Their earlier stretch isn't shown again. Ex-members get 403 on the members list.
+  - Measured before the receipt change: a 50-member group handled 5 msg/s easily without reads (p95 84 ms). With reads, receipts capped it below 2 msg/s (~2,400 pushes a second, 1.1 cores per copy). Nothing was lost from the database and no copy froze. The re-run after the change is in `docs/load-test.md` ("Groups").
 
 ### D38. Files and voice notes (T36)
 - MinIO's free edition is out: it stopped publishing Docker images in Oct 2025 and its repository is archived. The store is Garage or SeaweedFS, chosen in T36 by measured memory and the S3 features needed. This replaces D29's MinIO line, and D29's rule stands: plain S3 in the code, AWS S3 only by settings.

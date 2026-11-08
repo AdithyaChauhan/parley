@@ -32,11 +32,36 @@ type ListCheck = {
   lineDown: boolean // the live line dropped or failed
 }
 
+// Each other current member's two bookmarks: user id → how far they got (D9)
+type Bookmarks = Record<string, { delivered: number; read: number }>
+
+// The lowest of everyone's bookmarks: a group message is delivered (or read)
+// only once every other current member has it (D37). A direct chat has one
+// other person, so it's just theirs. With nobody else, nothing gets ticks.
+function lowest(bookmarks: Bookmarks, kind: "delivered" | "read") {
+  const all = Object.values(bookmarks).map((member) => member[kind])
+  return all.length ? Math.min(...all) : 0
+}
+
+// One person's bookmarks, moved forward only, and only for a current member:
+// someone who left doesn't hold the ticks back, or come back through a late receipt
+function raise(bookmarks: Bookmarks, userId: string, delivered: number, read: number): Bookmarks {
+  const now = bookmarks[userId]
+  if (!now || (delivered <= now.delivered && read <= now.read)) return bookmarks
+  return { ...bookmarks, [userId]: { delivered: Math.max(now.delivered, delivered), read: Math.max(now.read, read) } }
+}
+
 export function useMessages(chatId: string, myId: string, unsent: Message[], list: ListCheck) {
   const [saved, setSaved] = useState<Message[]>([])
-  // The other person's bookmarks: my messages up to "delivered" get grey ✓✓, up to "read" teal ✓✓
-  const [theirDelivered, setTheirDelivered] = useState(0)
-  const [theirRead, setTheirRead] = useState(0)
+  // The others' bookmarks: my messages up to the lowest "delivered" get grey ✓✓, up to the lowest "read" teal ✓✓
+  const [bookmarks, setBookmarks] = useState<Bookmarks>({})
+  // A group's lowest bookmarks, pushed by the server whenever they move (D37).
+  // In a group, the others' own receipts don't come here any more (only their
+  // own tabs get them), so this is what moves the ticks. Stays 0 in a direct chat.
+  const [groupLow, setGroupLow] = useState({ delivered: 0, read: 0 })
+  // Both are true "at least" numbers, so the higher one wins
+  const theirDelivered = Math.max(lowest(bookmarks, "delivered"), groupLow.delivered)
+  const theirRead = Math.max(lowest(bookmarks, "read"), groupLow.read)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -56,13 +81,24 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
   }
 
   // A page of saved messages in, from any direction. Merged, not replaced: a
-  // message pushed while it loads must not be lost. Also takes the other
-  // person's bookmarks, and tells the server the newest one is on this device.
+  // message pushed while it loads must not be lost. Also takes the others'
+  // bookmarks, and tells the server the newest one is on this device.
+  // Every page lists the current members, so it also says who counts for the
+  // ticks now: someone added or removed is picked up here (D37).
   function takePage(page: MessagePage) {
     setSaved((current) => merge(page.messages.map(fromServer), current))
-    const them = page.members.find((member) => member.user_id !== myId)
-    setTheirDelivered((current) => Math.max(current, them?.delivered_up_to ?? 0))
-    setTheirRead((current) => Math.max(current, them?.read_up_to ?? 0))
+    setBookmarks((current) => {
+      const next: Bookmarks = {}
+      for (const member of page.members) {
+        if (member.user_id === myId) continue
+        const before = current[member.user_id]
+        next[member.user_id] = {
+          delivered: Math.max(before?.delivered ?? 0, member.delivered_up_to),
+          read: Math.max(before?.read ?? 0, member.read_up_to),
+        }
+      }
+      return next
+    })
     const newest = Math.max(0, ...page.messages.map((message) => message.seq))
     if (newest > 0) reportDelivered(chatId, newest)
   }
@@ -132,19 +168,22 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
       // Their message #N means their bookmarks are at #N too: sending counts as
       // reading, and the server moves them with no receipt (D20). Only for pushes;
       // history and catch-up pages carry the real bookmarks.
-      if (event.data.sender_id !== myId) {
-        const { seq } = event.data
-        setTheirDelivered((current) => Math.max(current, seq))
-        setTheirRead((current) => Math.max(current, seq))
-      }
-      // A hole: I have up to #20 and this is #23, so #21 and #22 went missing (D21)
-      if (!loading && event.data.seq > gapFreeSeq + 1) catchUp(gapFreeSeq)
+      const { seq, sender_id: senderId } = event.data
+      if (senderId !== myId) setBookmarks((current) => raise(current, senderId, seq, seq))
+      // A hole: I have up to #20 and this is #23, so #21 and #22 went missing (D21).
+      // A group note: someone joined or left, and the next page brings the new
+      // member list for the ticks (D37). Either way, one small catch-up.
+      if (!loading && (seq > gapFreeSeq + 1 || event.data.kind === "system")) catchUp(gapFreeSeq)
     }
-    // The other person got or read more of my messages: redraw the ticks
+    // Someone got or read more of my messages: redraw the ticks
     if (event.type === "receipt" && event.data.chat_id === chatId && event.data.user_id !== myId) {
-      const { delivered_up_to: deliveredUpTo, read_up_to: readUpTo } = event.data
-      setTheirDelivered((current) => Math.max(current, deliveredUpTo))
-      setTheirRead((current) => Math.max(current, readUpTo))
+      const { user_id: userId, delivered_up_to: deliveredUpTo, read_up_to: readUpTo } = event.data
+      setBookmarks((current) => raise(current, userId, deliveredUpTo, readUpTo))
+    }
+    // In a group: everyone has got (or read) more. Forward only.
+    if (event.type === "group_receipt" && event.data.chat_id === chatId) {
+      const { delivered_up_to: delivered, read_up_to: read } = event.data
+      setGroupLow((current) => ({ delivered: Math.max(current.delivered, delivered), read: Math.max(current.read, read) }))
     }
   })
 

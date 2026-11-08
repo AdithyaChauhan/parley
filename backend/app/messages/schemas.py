@@ -4,6 +4,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.messages.models import Message
+
 
 # --- What comes in ---
 
@@ -19,16 +21,34 @@ class SendMessageRequest(BaseModel):
 
 
 class MessageOut(BaseModel):
-    # from_attributes: lets pydantic read straight from a Message row.
-    model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
     chat_id: uuid.UUID
     seq: int
     sender_id: uuid.UUID
+    # Shown above the bubble in a group (D37). Sent with each message, so a
+    # message from someone who has since left still has a name.
+    sender_name: str
     client_msg_id: uuid.UUID
     body: str
     created_at: datetime
+    # "text", or "system" for a group note, whose words the app writes from data (D37).
+    kind: str
+    data: dict | None
+
+    @classmethod
+    def of(cls, message: Message, sender_name: str) -> "MessageOut":
+        return cls(
+            id=message.id,
+            chat_id=message.chat_id,
+            seq=message.seq,
+            sender_id=message.sender_id,
+            sender_name=sender_name,
+            client_msg_id=message.client_msg_id,
+            body=message.body,
+            created_at=message.created_at,
+            kind=message.kind,
+            data=message.data,
+        )
 
 
 class MemberOut(BaseModel):
@@ -49,4 +69,5 @@ class MessagePage(BaseModel):
     # before=<smallest seq>. With after=, newer ones: ask again with after=<biggest seq>.
     has_more: bool
     # Everyone's bookmarks, so the app can draw the right ticks after a reload too.
+    # In a group, only the current members: ticks wait for them alone (D37).
     members: list[MemberOut]

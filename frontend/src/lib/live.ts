@@ -24,9 +24,17 @@ const confirmed = { delivered: new Map<string, number>(), read: new Map<string, 
 let lineDown = false
 // When this tab last sent "typing", per chat (milliseconds)
 const lastTyping = new Map<string, number>()
+// When this tab last sent each bookmark, per chat, and the one booked for
+// later while it waits out its second (D20)
+const lastBookmark = { delivered: new Map<string, number>(), read: new Map<string, number>() }
+const bookedBookmark = { delivered: new Map<string, number>(), read: new Map<string, number>() }
 
 // The other side shows "typing..." for 5 s, so one every 3 s keeps it on while you type
 const TYPING_EVERY_MS = 3000
+// "delivered" and "read" go at most once a second per chat, always with the
+// highest number. In a busy group, that's one save per person per second,
+// not one per message (D20).
+const BOOKMARK_EVERY_MS = 1000
 // Heartbeat (D21): a ping every 25 s. No pong within 10 s means the line is dead.
 const PING_EVERY_MS = 25_000
 const PONG_WITHIN_MS = 10_000
@@ -48,10 +56,23 @@ function send(type: string, data: object) {
 function sendBookmark(kind: "delivered" | "read", chatId: string) {
   const seq = wanted[kind].get(chatId) ?? 0
   if (seq <= (confirmed[kind].get(chatId) ?? 0)) return // the server has it already
+  // One is booked already: it sends the highest number when its time comes
+  if (bookedBookmark[kind].has(chatId)) return
+  const wait = (lastBookmark[kind].get(chatId) ?? 0) + BOOKMARK_EVERY_MS - Date.now()
+  if (wait > 0) {
+    const timer = window.setTimeout(() => {
+      bookedBookmark[kind].delete(chatId)
+      sendBookmark(kind, chatId)
+    }, wait)
+    bookedBookmark[kind].set(chatId, timer)
+    return
+  }
   if (socket?.readyState === WebSocket.OPEN) {
     send(kind, { chat_id: chatId, seq })
     confirmed[kind].set(chatId, seq)
+    lastBookmark[kind].set(chatId, Date.now())
   } else if (lineDown) {
+    lastBookmark[kind].set(chatId, Date.now())
     // The HTTP door. If that fails too (offline), it stays unconfirmed and goes
     // again after the next drop, when the browser is back online, or on reconnect.
     api(`/chats/${chatId}/${kind}`, { method: "POST", body: { seq } })
@@ -262,6 +283,11 @@ export function useLiveConnection() {
       confirmed.read.clear()
       lineDown = false
       lastTyping.clear()
+      for (const kind of ["delivered", "read"] as const) {
+        for (const timer of bookedBookmark[kind].values()) clearTimeout(timer)
+        bookedBookmark[kind].clear()
+        lastBookmark[kind].clear()
+      }
     }
   }, [])
 

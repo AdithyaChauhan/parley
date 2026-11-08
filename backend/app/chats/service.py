@@ -1,7 +1,7 @@
 import uuid
 from typing import Literal, NamedTuple
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -60,15 +60,31 @@ def get_member(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID) -> ChatMembe
     return db.get(ChatMember, (chat_id, user_id))
 
 
-def member_ids(db: Session, chat_id: uuid.UUID) -> list[uuid.UUID]:
-    """Everyone in this chat: the people its live events go to."""
-    return list(db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)))
+def member_ids(db: Session, chat_id: uuid.UUID, seq: int | None = None) -> list[uuid.UUID]:
+    """Who a chat's live events go to (D37).
+    No seq: the current members (receipts, typing).
+    With seq: everyone who can see message #seq, so the "removed" note still
+    reaches the person removed, and a new member never gets older messages."""
+    query = select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
+    if seq is None:
+        query = query.where(ChatMember.until_seq.is_(None))
+    else:
+        query = query.where(
+            ChatMember.from_seq <= seq,
+            or_(ChatMember.until_seq.is_(None), ChatMember.until_seq >= seq),
+        )
+    return list(db.scalars(query))
 
 
 def partner_ids(db: Session, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """Everyone who shares at least one chat with this person: the people who
-    see them in their chat list, so they get their "online" news (D22)."""
-    my_chats = select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
+    """Everyone who has a direct chat with this person: the people who see
+    their online status, so they get their "online" news (D22). Groups show
+    member names, not online (D37), so a 50-person group adds no presence pushes."""
+    my_chats = (
+        select(ChatMember.chat_id)
+        .join(Chat, Chat.id == ChatMember.chat_id)
+        .where(ChatMember.user_id == user_id, Chat.kind == "direct")
+    )
     return list(
         db.scalars(
             select(ChatMember.user_id)
@@ -85,20 +101,26 @@ class Bookmarks(NamedTuple):
     read_up_to: int
 
 
-def _capped(db: Session, chat_id: uuid.UUID, seq: int) -> int | None:
-    """seq, but never past the chat's last message: nobody can have #99 in a
-    chat that ends at #12. None if there's no such chat."""
-    last_seq = db.scalar(select(Chat.last_seq).where(Chat.id == chat_id))
-    if last_seq is None:
+def _capped(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> int | None:
+    """seq, but never past the last message this person can see: nobody can
+    have #99 in a chat that ends at #12, and someone who left at #12 can't
+    have #13 (D37). None if they aren't in the chat, or there's no such chat."""
+    row = db.execute(
+        select(Chat.last_seq, ChatMember.until_seq)
+        .join(ChatMember, ChatMember.chat_id == Chat.id)
+        .where(Chat.id == chat_id, ChatMember.user_id == user_id)
+    ).one_or_none()
+    if row is None:
         return None
-    return min(seq, last_seq)
+    end = row.last_seq if row.until_seq is None else row.until_seq
+    return min(seq, end)
 
 
 def mark_delivered(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> Bookmarks | None:
     """Move this person's "delivered up to" bookmark forward to seq (D20).
     Returns both bookmarks after the move, or None if nothing moved: not a
     member, no such chat, or seq isn't ahead of the bookmark."""
-    target = _capped(db, chat_id, seq)
+    target = _capped(db, chat_id, user_id, seq)
     if target is None:
         return None
 
@@ -124,7 +146,7 @@ def mark_read(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> 
     implies delivered, so "delivered up to" is lifted to at least seq too.
     Returns both bookmarks after the move, or None if nothing moved (the
     same reasons as mark_delivered)."""
-    target = _capped(db, chat_id, seq)
+    target = _capped(db, chat_id, user_id, seq)
     if target is None:
         return None
 
@@ -145,14 +167,59 @@ def mark_read(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, seq: int) -> 
     return None if row is None else Bookmarks(row.delivered_up_to, row.read_up_to)
 
 
+def group_low(db: Session, chat_id: uuid.UUID) -> Bookmarks | None:
+    """A group's lowest "delivered" and "read" over its current members: the
+    only thing a group's ticks show (D37). None for a direct chat."""
+    row = db.execute(
+        select(func.min(ChatMember.delivered_up_to), func.min(ChatMember.read_up_to))
+        .join(Chat, Chat.id == ChatMember.chat_id)
+        .where(ChatMember.chat_id == chat_id, ChatMember.until_seq.is_(None), Chat.kind == "group")
+    ).one()
+    return None if row[0] is None else Bookmarks(row[0], row[1])
+
+
+def group_receipt(chat_id: uuid.UUID, low: Bookmarks) -> dict:
+    """The group's ticks moved: "everyone has it up to #d, has read up to #r" (D37)."""
+    return {
+        "type": "group_receipt",
+        "data": {"chat_id": str(chat_id), "delivered_up_to": low.delivered_up_to, "read_up_to": low.read_up_to},
+    }
+
+
+def low_moved(db: Session, chat_id: uuid.UUID, before: Bookmarks) -> tuple[list[uuid.UUID], dict] | None:
+    """In a group, after one member's bookmarks moved up from `before` (and
+    were committed): if that lifted the group's lowest, the group receipt and
+    its current members. Otherwise None, and nothing is pushed.
+    The lowest is read after the commit, so when two members move at once,
+    the later one always sees both moves, and a lift is never missed. Both
+    may push the same numbers, which is harmless: the app keeps the higher."""
+    low = group_low(db, chat_id)
+    if low is None:
+        return None
+    if before.delivered_up_to >= low.delivered_up_to and before.read_up_to >= low.read_up_to:
+        return None  # I wasn't the one holding it back
+    return member_ids(db, chat_id), group_receipt(chat_id, low)
+
+
 def save_bookmark(
     db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, kind: Literal["delivered", "read"], seq: int
 ) -> Bookmarks | None:
     """Move this person's "delivered" or "read" bookmark to seq and, if it
-    moved, push a receipt to everyone in the chat, their own tabs too (D20).
+    moved, push the news (D20, D37):
+    - direct chat: a receipt to both people, their own tabs too;
+    - group: a receipt to their own tabs only (for unread), and a group
+      receipt to every current member only if the group's lowest moved.
     The one function behind both doors: the live line and the HTTP routes.
     Returns both bookmarks, or None if nothing moved (not a member, no such
     chat, or not a step forward). Then nothing is pushed."""
+    before = db.execute(
+        select(Chat.kind, ChatMember.delivered_up_to, ChatMember.read_up_to)
+        .join(ChatMember, ChatMember.chat_id == Chat.id)
+        .where(Chat.id == chat_id, ChatMember.user_id == user_id)
+    ).one_or_none()
+    if before is None:
+        return None  # not a member, or no such chat
+
     mark = mark_read if kind == "read" else mark_delivered
     # Saved first (mark_* commits), pushed after: a receipt never announces a
     # bookmark that isn't in PostgreSQL yet.
@@ -170,23 +237,52 @@ def save_bookmark(
             "read_up_to": moved.read_up_to,
         },
     }
-    # It moved, so they're a member: no stranger gets the receipt.
-    members = member_ids(db, chat_id)
+    if before.kind == "group":
+        # Sending everyone's every move to all 50 swamped the copies (T35's
+        # load test): my own tabs need it, the others only need the lowest.
+        to = [user_id]
+        lifted = low_moved(db, chat_id, Bookmarks(before.delivered_up_to, before.read_up_to))
+    else:
+        # It moved, so they're in the chat: no stranger gets the receipt.
+        to = list({*member_ids(db, chat_id), user_id})
+        lifted = None
     # The connection goes back before the push, so a slow Redis can't hold it (D34).
     db.close()
     # Never raises: with Redis down the bookmark is still saved, and the ticks
     # catch up later (D24).
-    bus.publish(members, receipt)
+    bus.publish(to, receipt)
+    if lifted is not None:
+        bus.publish(*lifted)
     return moved
 
 
+def _last_message(message: Message | None, sender_name: str | None) -> LastMessageOut | None:
+    if message is None:
+        return None
+    return LastMessageOut(
+        seq=message.seq,
+        # A group note has no text: the app writes its words from data (D37).
+        preview=message.body[:PREVIEW_LENGTH],
+        created_at=message.created_at,
+        kind=message.kind,
+        sender_id=message.sender_id,
+        sender_name=sender_name,
+        data=message.data,
+    )
+
+
 def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> list[ChatOut]:
-    """My chat list, newest activity first. Pass chat_id to get just that one row."""
+    """My chat list, newest activity first. Pass chat_id to get just that one row.
+    Chats I left or was removed from stay in it, read-only (D37)."""
     other_member = aliased(ChatMember)
+    sender = aliased(User)
+    # The last message I can see: the chat's last, or the note that ended my
+    # membership (D37).
+    my_last_seq = func.coalesce(ChatMember.until_seq, Chat.last_seq)
     query = (
-        select(Chat, ChatMember.read_up_to, User.id, User.name, Message)
+        select(Chat, ChatMember, User.id, User.name, Message, sender.name)
         .select_from(Chat)
-        # Only chats I'm in, with my bookmark.
+        # Only chats I'm in (or was in), with my row.
         .join(ChatMember, and_(ChatMember.chat_id == Chat.id, ChatMember.user_id == me.id))
         # Direct chats: the other person's row, then their id and name.
         .outerjoin(
@@ -198,8 +294,10 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
             ),
         )
         .outerjoin(User, User.id == other_member.user_id)
-        # The last message is the one numbered last_seq. None if the chat is empty.
-        .outerjoin(Message, and_(Message.chat_id == Chat.id, Message.seq == Chat.last_seq))
+        # The last message I can see. None if the chat is empty.
+        .outerjoin(Message, and_(Message.chat_id == Chat.id, Message.seq == my_last_seq))
+        # Its sender, for "Ana: hi" in a group's row.
+        .outerjoin(sender, sender.id == Message.sender_id)
         # Newest message first. A chat with no messages counts from when it was made.
         .order_by(func.coalesce(Message.created_at, Chat.created_at).desc())
     )
@@ -212,28 +310,28 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
     db.close()
     # Everyone's online status in one trip to Redis, not one per row (D24).
     # From Redis, not the database: a fast, temporary fact (D22).
-    found = presence.statuses([other_id for _, _, other_id, _, _ in rows if other_id is not None])
+    found = presence.statuses([other_id for _, _, other_id, _, _, _ in rows if other_id is not None])
 
     chats = []
-    for chat, read_up_to, other_id, other_name, last in rows:
-        last_message = None
-        if last is not None:
-            last_message = LastMessageOut(
-                seq=last.seq, preview=last.body[:PREVIEW_LENGTH], created_at=last.created_at
-            )
-        # Groups (v2) have no other person, so nobody to be online.
+    for chat, mine, other_id, other_name, last, sender_name in rows:
+        # Groups have no other person, so nobody to be online.
         status = found.get(other_id, presence.UNKNOWN)
+        # The last number I can see: unread never counts past it.
+        my_end = chat.last_seq if mine.current else mine.until_seq
+        is_group = chat.kind == "group"
         chats.append(
             ChatOut(
                 id=chat.id,
                 kind=chat.kind,
-                # Groups (v2) have no "other person", so they show their title.
+                # Groups have no "other person", so they show their name.
                 name=other_name or chat.title,
-                last_message=last_message,
-                unread=chat.last_seq - read_up_to,
+                last_message=_last_message(last, sender_name),
+                unread=max(0, my_end - mine.read_up_to),
                 other_user_id=other_id,
                 online=status.online,
                 last_seen=status.last_seen,
+                role=mine.role if is_group else None,
+                left=not mine.current,
             )
         )
     return chats

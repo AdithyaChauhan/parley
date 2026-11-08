@@ -4,7 +4,9 @@ import {
   BellOff,
   BellRing,
   LogOut,
+  MoreVertical,
   Plus,
+  Users,
   Search,
   Settings,
 } from "lucide-react"
@@ -13,8 +15,10 @@ import type { LiveStatus } from "@/lib/live"
 import { pushState, turnOnPush, type PushState } from "@/lib/push"
 import { cn } from "@/lib/utils"
 import { ChatRow } from "./ChatRow"
+import { NewGroupBox } from "./GroupBoxes"
 import { NewChatBox } from "./NewChatBox"
 import type { ChatSummary } from "./types"
+import type { Typist } from "./useTyping"
 
 type ChatColumnProps = {
   chats: ChatSummary[] | null // null = still loading
@@ -22,8 +26,9 @@ type ChatColumnProps = {
   openId: string | null
   onSelect: (id: string) => void
   onChatStarted: (chat: ChatSummary) => void
-  typing: Record<string, string> // chat id → who is typing there
+  typing: Record<string, Typist> // chat id → who is typing there
   phoneVisible: boolean
+  myId: string
   myName: string
   live: LiveStatus // my live line: green dot when online, else grey
   onLogout: () => void
@@ -88,6 +93,7 @@ export function ChatColumn({
   onChatStarted,
   typing,
   phoneVisible,
+  myId,
   myName,
   live,
   onLogout,
@@ -95,6 +101,11 @@ export function ChatColumn({
   const [search, setSearch] = useState("")
   const [menuOpen, setMenuOpen] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
+  // The "..." menu next to "+" (D8, back with groups), and its "New group" box
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  // The "..." button and its menu, so a tap inside them doesn't count as "outside"
+  const moreRef = useRef<HTMLDivElement>(null)
   const shown = (chats ?? []).filter((chat) => chat.name.toLowerCase().includes(search.trim().toLowerCase()))
   // The gear and its menu, so a tap inside them doesn't count as "outside"
   const menuRef = useRef<HTMLDivElement>(null)
@@ -115,6 +126,23 @@ export function ChatColumn({
       document.removeEventListener("keydown", closeOnEsc)
     }
   }, [menuOpen])
+
+  // The same for the "..." menu
+  useEffect(() => {
+    if (!moreOpen) return
+    function closeIfOutside(e: PointerEvent) {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false)
+    }
+    function closeOnEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setMoreOpen(false)
+    }
+    document.addEventListener("pointerdown", closeIfOutside)
+    document.addEventListener("keydown", closeOnEsc)
+    return () => {
+      document.removeEventListener("pointerdown", closeIfOutside)
+      document.removeEventListener("keydown", closeOnEsc)
+    }
+  }, [moreOpen])
 
   return (
     <section
@@ -173,13 +201,44 @@ export function ChatColumn({
         <div className="relative flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setNewChatOpen((open) => !open)}
+            onClick={() => {
+              setNewGroupOpen(false)
+              setNewChatOpen((open) => !open)
+            }}
             aria-label="New chat"
             aria-expanded={newChatOpen}
             className="flex size-8 items-center justify-center rounded-lg bg-accent text-primary"
           >
             <Plus className="size-4" />
           </button>
+          {/* "...": more ways to start a chat. Only "New group" for now (D8, D37) */}
+          <div ref={moreRef}>
+            <button
+              type="button"
+              onClick={() => setMoreOpen((open) => !open)}
+              aria-label="More"
+              aria-expanded={moreOpen}
+              className="flex size-8 items-center justify-center rounded-lg text-rail-icon hover:text-muted-foreground"
+            >
+              <MoreVertical className="size-5" />
+            </button>
+            {moreOpen && (
+              <div className="absolute top-full right-0 z-20 mt-1 w-48 rounded-lg bg-card p-1 shadow-lg ring-1 shadow-foreground/10 ring-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    setNewChatOpen(false)
+                    setNewGroupOpen(true)
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-row-selected"
+                >
+                  <Users className="size-4 text-muted-foreground" />
+                  New group
+                </button>
+              </div>
+            )}
+          </div>
           {newChatOpen && (
             <NewChatBox
               onStarted={(chat) => {
@@ -187,6 +246,16 @@ export function ChatColumn({
                 onChatStarted(chat)
               }}
               onClose={() => setNewChatOpen(false)}
+            />
+          )}
+          {newGroupOpen && (
+            <NewGroupBox
+              chats={chats ?? []}
+              onCreated={(chat) => {
+                setNewGroupOpen(false)
+                onChatStarted(chat)
+              }}
+              onClose={() => setNewGroupOpen(false)}
             />
           )}
         </div>
@@ -197,8 +266,9 @@ export function ChatColumn({
           <ChatRow
             key={chat.id}
             chat={chat}
+            myId={myId}
             selected={chat.id === openId}
-            typing={chat.id in typing}
+            typing={typing[chat.id]}
             onSelect={() => onSelect(chat.id)}
           />
         ))}

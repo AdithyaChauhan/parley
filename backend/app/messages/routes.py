@@ -8,23 +8,26 @@ from app import metrics
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chats.models import ChatMember
-from app.chats.service import get_member, member_ids
+from app.chats.service import Bookmarks, get_member, low_moved, member_ids
 from app.db import SessionLocal
 from app.limits import service as limits
 from app.live import bus
 from app.messages.models import Message
 from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
-from app.messages.service import add_message
+from app.messages.service import NotAMember, add_message
 from app.notify import publisher as notify
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 
 
-def _check_member(db: Session, chat_id: uuid.UUID, me: User) -> None:
+def _member(db: Session, chat_id: uuid.UUID, me: User) -> ChatMember:
     # The same 404 for "no such chat" and "not your chat", so a stranger
-    # can't tell whether a chat id is real.
-    if get_member(db, chat_id, me.id) is None:
+    # can't tell whether a chat id is real. A past member is still "in" the
+    # chat, read-only (D37).
+    member = get_member(db, chat_id, me.id)
+    if member is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found")
+    return member
 
 
 @router.post("", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
@@ -37,23 +40,36 @@ def send_message(
     # First, so a flood of sends is turned away before it touches the database (D24).
     limits.enforce(limits.SEND, me.id)
     with SessionLocal() as db:
-        _check_member(db, chat_id, me)
+        mine = _member(db, chat_id, me)
+        # My bookmarks before this send moves them to its number (D20)
+        before = Bookmarks(mine.delivered_up_to, mine.read_up_to)
 
-        saved, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
+        try:
+            saved, created = add_message(db, chat_id, me.id, body.client_msg_id, body.body)
+        except NotAMember:
+            # Left or removed: the chat is read-only for them now (D37).
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You're no longer a member of this group")
         # Everything the reply and the pushes need, read now. After the commit,
         # reading the row loads it again in a new transaction (expire_on_commit),
         # and that holds the connection until the session closes.
-        message = MessageOut.model_validate(saved)
-        members = member_ids(db, chat_id) if created else []
+        message = MessageOut.of(saved, me.name)
+        # Everyone who can see this number: the current members (D37).
+        members = member_ids(db, chat_id, message.seq) if created else []
+        # Sending counts as reading (D20): in a group, if I was the one holding
+        # the ticks back, everyone gets the new lowest (D37).
+        lifted = low_moved(db, chat_id, before) if created else None
 
     # The connection is back in the pool, so slow pushes can't hold it (D34).
     if created:
         metrics.MESSAGES_SENT.inc()
         # Saved first (D9), then shouted to everyone in the chat, my other tabs
-        # too (D20), on whichever copy their lines are (D23).
+        # too (D20), on whichever copy their lines are (D23). In a group, one
+        # shout per member (D37).
         bus.publish(members, {"type": "message.new", "data": message.model_dump(mode="json")})
         # And a "notify them if they don't read it" job for everyone but me (D25).
         notify.publish(message, [user_id for user_id in members if user_id != me.id])
+        if lifted is not None:
+            bus.publish(*lifted)
     else:
         # A resend: here is the first copy. It pushes nothing; the first copy was already pushed.
         response.status_code = status.HTTP_200_OK
@@ -74,7 +90,7 @@ def message_history(
         # Back and forward at once makes no sense: refused like any other bad query.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Use before or after, not both")
 
-    query = select(Message).where(Message.chat_id == chat_id)
+    query = select(Message, User.name).join(User, User.id == Message.sender_id).where(Message.chat_id == chat_id)
     if after is not None:
         # Catching up (D21): the ones above my highest number, oldest first,
         # so they come in reading order and I can ask again from the last one.
@@ -86,13 +102,20 @@ def message_history(
         # Opening the chat: the newest ones, newest first.
         query = query.order_by(Message.seq.desc())
     with SessionLocal() as db:
-        _check_member(db, chat_id, me)
+        member = _member(db, chat_id, me)
+        # Only my stretch of the chat (D37): nothing from before I was added,
+        # nothing after I left. A direct chat is from #1, with no end.
+        query = query.where(Message.seq >= member.from_seq)
+        if not member.current:
+            query = query.where(Message.seq <= member.until_seq)
         # One extra: if the extra comes back, there are more past these.
-        rows = list(db.scalars(query.limit(limit + 1)))
+        rows = list(db.execute(query.limit(limit + 1)))
 
-        members = db.scalars(select(ChatMember).where(ChatMember.chat_id == chat_id))
+        members = db.scalars(
+            select(ChatMember).where(ChatMember.chat_id == chat_id, ChatMember.until_seq.is_(None))
+        )
         return MessagePage(
-            messages=[MessageOut.model_validate(row) for row in rows[:limit]],
+            messages=[MessageOut.of(message, name) for message, name in rows[:limit]],
             has_more=len(rows) > limit,
             members=[MemberOut.model_validate(member) for member in members],
         )

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One command per load-test scenario (D33). From the repo root, in Git Bash:
-#   bash loadtest/run.sh trial|logins|a|b|c|d|e
+#   bash loadtest/run.sh trial|logins|a|b|c|d|e|f
 # It makes parley_load fresh, points the backends at it (limits off), runs
 # k6, checks the database for lost messages, and saves the results in
 # loadtest/results/. However it ends (done, failed or Ctrl+C), the normal
@@ -19,7 +19,8 @@ case "$SCENARIO" in
   c) SCRIPT=c-storm.js ;;
   d) SCRIPT=d-limit.js ;;
   e) SCRIPT=e-failover.js ;;
-  *) echo "Which scenario? bash loadtest/run.sh trial|logins|a|b|c|d|e" >&2; exit 1 ;;
+  f) SCRIPT=f-group.js ;;
+  *) echo "Which scenario? bash loadtest/run.sh trial|logins|a|b|c|d|e|f" >&2; exit 1 ;;
 esac
 
 RUN_ID="$(date +%Y-%m-%d_%H%M)-$SCENARIO"
@@ -41,13 +42,16 @@ run_k6() {
   if [ "${2:-}" = rw ]; then out=(-o experimental-prometheus-rw --tag testid="$1"); fi
   # A failed threshold (scenario d's steps) makes k6 exit with 99: still save.
   $LOAD run --rm k6 run --quiet "${out[@]}" -e RUN_ID="$1" -e MONITORING="${3:-on}" \
-    -e START_EVERY_S="${START_EVERY_S:-}" "/scripts/$SCRIPT" \
+    -e START_EVERY_S="${START_EVERY_S:-}" -e READS="${READS:-on}" "/scripts/$SCRIPT" \
     || echo "(k6 exited with $?)"
 }
 
 echo "== 1/4 Build, and make parley_load fresh"
 $LOAD build backend_a web
-$LOAD run --rm seed
+# Scenario f also gets one 50-member group (D37).
+GROUP_SIZE=0
+if [ "$SCENARIO" = f ]; then GROUP_SIZE=50; fi
+$LOAD run --rm -e LOAD_GROUP="$GROUP_SIZE" seed
 
 echo "== 2/4 Backends on parley_load, limits off"
 $LOAD up -d --wait

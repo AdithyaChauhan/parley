@@ -1,4 +1,4 @@
-# Parley load test (T31, and the fix after it)
+# Parley load test (T31, the fix after it, and groups in T35)
 
 1,000 fake users on one laptop, measured end to end and read from the Grafana dashboard (T30).
 Runs: T31 on November 1-4, 2026 (the old code), the re-runs after the fix (D34) on November 6, and clean re-runs of b and d on November 7 (see "Clean re-runs"). Times are the laptop's (IST, UTC+5:30), like the screenshots.
@@ -10,6 +10,7 @@ Runs: T31 on November 1-4, 2026 (the old code), the re-runs after the fix (D34) 
 - **The limit is now CPU.** Python runs one thread at a time, so each copy tops out at about one core, while PostgreSQL stays under 0.4 cores.
 - **What froze a copy was a deadlock, not a leak.** T31 blamed requests that were given up and never handed their connection back. Tests on the old code disproved that: a request held a connection while it waited for a thread, and the threads waited for a connection (see "The bottleneck").
 - **Real logins no longer collapse.** At 10 a second, all 301 went through and each backend stayed at or under ~206 MB. On the old code in the same session: 10 finished, p95 53 s, 945 MB. At 30 a second the extra logins get a 503 within ~2.5 s.
+- **Groups (T35): one 50-member group keeps up with 5 messages/s and loses nothing.** With every member reading, end-to-end p95 is 623 ms at 2/s and 1.7 s at 5/s (84 ms with reads off). Group receipts (pushed only when the group's lowest bookmark moves) cut pushes from ~2,440 to ~430 a second, and what's left is the reads' own database writes (see "Groups").
 - The first request after a quiet minute is not slow (the T30 question), whether the monitoring stack is on or off.
 - **The November 7 re-runs agree:** 0 undelivered in b and d, no frozen copy, the same peak in d (37.4 accepted a second), and only 3 line drops in b. They also showed that an uneven split of live lines (513 and 487) sends most HTTP to one copy, because `least_conn` counts WebSockets (see "Clean re-runs").
 
@@ -143,6 +144,46 @@ End to end is p50 / p95 / p99. "Refused" is the share of send tries that got a 5
 **Which runs the README uses:** b from November 7 (0 undelivered, 3 line drops) and d from November 6 (lines split exactly, so it measures two copies).
 
 **The sections a to e below are T31's runs on the old code, kept as the "before".** Their numbers stand. T31's explanation of the freeze was wrong, and "The bottleneck" has the corrected one.
+
+## Groups: one 50-member group (T35, November 8)
+
+Scenario f (`bash loadtest/run.sh f`): 50 fake users in one group (D37), all with the group open, sending at random moments. 2 messages/s for 3 minutes, then 5/s for 3 minutes. Each message should reach the other 49 members, so "expected" is sent × 49. The same tools and rules as T31 (D33): k6 times send → each member's live line, and Prometheus gives pushes and CPU (averaged over the last 150 s of each step). `READS=off bash loadtest/run.sh f` is the same run with nobody sending "read", which separates the messages' fan-out from the receipts'.
+
+It ran three times:
+- **First build:** each member's every read was pushed to all 50 members (D20's rule carried over to groups), and the fake users sent "read" for every message.
+- **Reads off:** the first build with no reads at all. It shows what the messages alone cost.
+- **Group receipts (what's built now):** a read goes only to the reader's own tabs, and the whole group gets one `group_receipt` only when the group's lowest bookmark moves (D37). The app and the fake users send "read" at most once a second per chat, always with the highest number (D20).
+
+| | First build | Reads off | **Group receipts** |
+|---|---|---|---|
+| Reached, 2/s step | 1.7/s | 1.9/s | **1.9/s** |
+| End to end p50 / p95 / p99, 2/s | 2,091 / 8,931 / 13,856 ms | 34 / 63 / 101 ms | **89 / 623 / 977 ms** |
+| Send → 201 p50 / p95, 2/s | 3,072 / 6,172 ms | 128 / 216 ms | 431 / 1,373 ms |
+| Reached, 5/s step | 2.9/s | 4.9/s | **4.8/s** |
+| End to end p50 / p95 / p99, 5/s | 1,347 / 5,226 / 10,149 ms | 42 / 84 / 148 ms | **307 / 1,702 / 2,368 ms** |
+| Send → 201 p50 / p95, 5/s | 2,341 / 4,709 ms | 169 / 351 ms | 941 / 2,875 ms |
+| Delivered by the end | 29,736 of 40,327 (2,054 by catch-up) | 59,633 of 59,633 | **58,702 of 58,702** (13 by catch-up) |
+| Live line drops | 129 | 0 | **0** |
+| Pushes published per second | ~2,350 (2/s), ~2,440 (5/s) | 93 (2/s), 247 (5/s) | **277 (2/s), 431 (5/s)** |
+| CPU, each backend copy | ~1.1 cores in both steps (the limit, D34) | 0.09 (2/s), 0.27 (5/s) | 0.65-0.68 (2/s), 0.92-0.93 (5/s) |
+| CPU, PostgreSQL / RabbitMQ / worker | 0.45-0.48 / 0.36-0.53 / 0.72-0.74 | 0.21-0.31 / 0.33-0.59 / 0.57-0.75 | 0.42-0.50 / 0.36-0.65 / 0.58-0.74 |
+| Saved in the database | 829 rows for 823 confirmed sends | 1,217 for 1,217 | 1,198 for 1,198 |
+| Afterwards | Both copies answer, no session stuck | Both copies answer, no session stuck | Both copies answer, no session stuck |
+
+What it means:
+- **The messages' fan-out is cheap.** 50 pushes per message, and 5 messages/s in a 50-member group stays at p95 84 ms with every copy under a third of a core.
+- **Receipts to everyone were what overloaded the first build.** Every member read every message, and each read was a database write plus one receipt to each of the 50 members: up to 49 × 50 = 2,450 receipt pushes per message, against 49 message pushes. Both copies sat at their one-core limit already in the 2/s step, and the line drops came from copies too busy to answer pings in time.
+- **Group receipts cut pushes by about 6-8×** (2,440 → 431 per second at the 5/s step), and the group now keeps up with the planned rate: 4.8 of 5 messages/s, every delivery live (only 13 by catch-up), no line drops, and nothing lost.
+- **It's still over the 500 ms limit (D33) with reads on**: p95 623 ms at 2/s and 1.7 s at 5/s. What's left is the reads themselves. Each member still saves "read" about once a second while messages flow, so 50 database writes a second on the live line's threads, and each copy sits at 0.65-0.93 cores against 0.09-0.27 with reads off. Sends wait behind that work (send p50 941 ms at 5/s).
+- The laptop is also nearly full: the copies, PostgreSQL, RabbitMQ and the worker together use ~3.9 cores at the 5/s step, with k6 and the monitoring stack on top, on 4 physical cores. The worker spends ~0.7 cores on 49 notification jobs per message (load users have no push devices, so every job ends as "skip: no devices" after its database reads).
+- run.sh's "idle in transaction" count was 1 at the end of the reads-off and group-receipt runs. After the reads-off run, sampled again, it was always a few milliseconds old (a request between two statements). After the group-receipt run, a check a few minutes later found none. So no session was stuck.
+
+Ideas if a busy 50-member group ever needs to be faster (not built, not measured):
+- Send "read" less often in big groups (every 2-3 s): it only moves ticks and the unread badge, which can wait a moment.
+- Skip a read that can't change the group's lowest, so most reads don't need a write. That changes D20's rule that every bookmark is saved.
+- Give the worker fewer jobs per group message (one job per message that fans out inside the worker).
+
+Runs: `loadtest/results/2026-11-08_0139-f.*` (first build), `2026-11-08_0149-f.*` (reads off) and `2026-11-08_0842-f.*` (group receipts). Same laptop and settings as below (Docker 3.4 GB, 8 threads), with other apps open (0.5-0.6 GB of Windows memory free at the start), so treat the absolute numbers as this laptop's, and the differences between runs as the finding.
 
 ## The laptop
 

@@ -21,40 +21,8 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### T35. Groups (build mode)
-- **Branch:** `feature/groups`
-- **Goal:** group chats that work like WhatsApp's basic groups. They're built on what already exists: the same message numbers, bookmarks, live line and catch-up. The rules are in D37.
-
-**Backend**
-- Tables and columns for groups, roles and membership start/end, using expand-then-contract (D31). The migration must be safe on the live database, with existing direct chats untouched.
-- Routes: create a group (name and members), add, remove, leave, rename, make admin, and list members. Every route checks membership and role on the server. Each change is saved together with its system message, in one transaction.
-- Sends, history, catch-up and the chat list work for groups and respect membership: nothing from before you joined, and nothing after you left.
-- Fan-out, receipts, typing and notifications follow D37.
-- Tests:
-  - a removed member can't read, send or get pushes
-  - two admins changing members at the same moment
-  - the last admin leaving
-  - system messages keep the numbers gap-free
-  - group ticks use the lowest bookmark
-
-**App (D8)**
-- The "..." menu comes back with "New group": a name, plus people picked from your direct chats or added by email.
-- The group header shows the name and member names. Tapping it opens the side panel with the members. Admins can add, remove and make admin there, and everyone gets "Leave group".
-- Messages from others show the sender's name above the bubble, in a steady color per person. System messages are small centered notes. The group avatar uses the name's initials.
-- A member who left or was removed sees the chat read-only, with a note and no message box.
-- Works at all three window sizes (D8). Screenshots of each go in the report.
-- Update the README's "what works" list and its v2 line.
-
-**Measure (T31's tools, D33's rules)**
-- One 50-member group at 2 and 5 msg/s: end-to-end p50/p95 to every member, pushes per second, and CPU. Write it up in `docs/load-test.md`.
-
-- **Done when:**
-  - Everything above is built, and the new and old tests pass.
-  - A real-browser check through localhost:8080 with three users passes: create, add, remove, leave, rename, and the ticks.
-  - The measurement is in `docs/load-test.md`.
-  - CI is green.
-  - LEARNING.md has the section with a draft "In my words".
-  - Adithya's iPhone check (a group with Ana and Ben on the live site) is batched with T36-T38's checks at the end.
+### T36. Files and voice notes (build mode)
+T35 Groups was done on Nov 8 (D37). The briefs for T36, T37 and T38 are below, under "Next briefs". Run them in that order.
 
 ---
 
@@ -173,7 +141,7 @@ How to run them: each task starts in a new Claude Code chat, from an up-to-date 
 - [x] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
 
 ### Phase 12: v2 (from Nov 7, 2026; target Nov 10, one PR per task)
-- [ ] T35. Groups: one message fans out to many people (D37). Brings back the "..." menu ("New group") and the members view
+- [x] T35. Groups: one message fans out to many people (D37). Brings back the "..." menu ("New group") and the members view
 - [ ] T36. Files and voice notes: images, documents and voice notes in S3-style storage (D38). Brings back attach and file drop
 - [ ] T37. Reactions, edit and delete (D39). Brings back the emoji button
 - [ ] T38. Search, only on your own device (D12, D40)

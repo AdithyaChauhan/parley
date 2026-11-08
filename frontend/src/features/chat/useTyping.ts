@@ -5,10 +5,13 @@ import { useLiveEvents } from "@/lib/live"
 // every 3 s while they type, so it stays on until they stop.
 const SHOW_FOR_MS = 5000
 
-// Who is typing in each chat right now: chat id → their user id (D20).
+// Who is typing in a chat: their id, and their name for "Ana is typing..." in a group (D37)
+export type Typist = { userId: string; name: string }
+
+// Who is typing in each chat right now: chat id → that person (D20).
 // Shown for 5 s after their last "typing", or until their message arrives.
 export function useTyping() {
-  const [typing, setTyping] = useState<Record<string, string>>({})
+  const [typing, setTyping] = useState<Record<string, Typist>>({})
   // chat id → the timer that will hide it
   const timers = useRef(new Map<string, number>())
 
@@ -25,14 +28,14 @@ export function useTyping() {
 
   useLiveEvents((event) => {
     if (event.type === "typing") {
-      const { chat_id: chatId, user_id: userId } = event.data
+      const { chat_id: chatId, user_id: userId, name } = event.data
       // Another one came in: start the 5 s again
       clearTimeout(timers.current.get(chatId))
       timers.current.set(chatId, window.setTimeout(() => stop(chatId), SHOW_FOR_MS))
-      setTyping((all) => ({ ...all, [chatId]: userId }))
+      setTyping((all) => ({ ...all, [chatId]: { userId, name } }))
     }
     // Their message arrived, so they've finished typing it
-    if (event.type === "message.new" && typing[event.data.chat_id] === event.data.sender_id) {
+    if (event.type === "message.new" && typing[event.data.chat_id]?.userId === event.data.sender_id) {
       stop(event.data.chat_id)
     }
   })

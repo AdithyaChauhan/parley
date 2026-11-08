@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -16,6 +17,7 @@ class Message(Base):
         UniqueConstraint("chat_id", "seq", name="messages_chat_seq_unique"),
         # A retried send is never saved twice (D18).
         UniqueConstraint("sender_id", "client_msg_id", name="messages_sender_client_msg_unique"),
+        CheckConstraint("kind IN ('text', 'system')", name="messages_kind_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -23,11 +25,17 @@ class Message(Base):
     # The message's number inside its chat, taken from chats.last_seq.
     seq: Mapped[int]
     # No CASCADE: deleting a user must never quietly delete messages in other people's chats.
+    # For a group note (kind "system"), the person who did it.
     sender_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     # Made by the sender's app, once per message, and sent again on a retry.
     client_msg_id: Mapped[uuid.UUID]
     # The server only stores and passes this along; it never reads it (D12).
     body: Mapped[str] = mapped_column(Text)
+    # "text": a normal message. "system": a group note (created, added, removed,
+    # left, renamed, made admin), numbered like any message (D37). Its body is
+    # empty, and data says who did what to whom; the app writes the words.
+    kind: Mapped[str] = mapped_column(server_default="text")
+    data: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

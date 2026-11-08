@@ -18,7 +18,7 @@ from prometheus_client import Counter, disable_created_metrics, start_http_serve
 from sqlalchemy import select
 
 from app.auth.models import User
-from app.chats.models import ChatMember
+from app.chats.models import Chat, ChatMember
 from app.config import settings
 from app.db import SessionLocal
 from app.messages.models import Message
@@ -88,25 +88,31 @@ def handle(job: Job, attempt: int) -> str:
     Raises if anything fails (the notifier, PostgreSQL, Redis): try again later.
     The "already notified" notes belong to the notifier now (D25)."""
     with SessionLocal() as db:
-        # The recipient's read bookmark and name. Every door moves read_up_to
-        # in PostgreSQL (live line, HTTP door, or their own reply), so this is the truth.
+        # The recipient's read bookmark, name and membership. Every door moves
+        # read_up_to in PostgreSQL (live line, HTTP door, or their own reply), so this is the truth.
         member = db.execute(
-            select(ChatMember.read_up_to, User.name)
+            select(ChatMember.read_up_to, ChatMember.until_seq, User.name)
             .join(User, User.id == ChatMember.user_id)
             .where(ChatMember.chat_id == job.chat_id, ChatMember.user_id == job.recipient_id)
         ).one_or_none()
         sender_name = db.scalar(
             select(User.name).join(Message, Message.sender_id == User.id).where(Message.id == job.message_id)
         )
+        chat = db.execute(select(Chat.kind, Chat.title).where(Chat.id == job.chat_id)).one_or_none()
 
-    if member is None or sender_name is None:
+    if member is None or sender_name is None or chat is None:
         return "skip: message or member gone"  # no retry can bring them back (D25)
+    if member.until_seq is not None:
+        # Left the group or was removed since the job was made: no more pushes (D37).
+        return "skip: message or member gone"
     if member.read_up_to >= job.seq:
         return "skip: already read"  # they saw it live
 
     fake_fail(attempt)
+    # A group says where it came from (D37). Never the text (D12).
+    title = f"{sender_name} in {chat.title}" if chat.kind == "group" else f"New message from {sender_name}"
     # "sent", "skip: no devices" or "skip: already notified" (D25).
-    return notifier.send(job, member.name, f"New message from {sender_name}")
+    return notifier.send(job, member.name, title)
 
 
 def _attempt(properties: BasicProperties) -> int:

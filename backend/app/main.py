@@ -14,6 +14,7 @@ from app.auth.routes import router as auth_router
 from app.chats.routes import router as chats_router
 from app.config import settings
 from app.db import CAPACITY, SessionLocal
+from app.groups.routes import router as groups_router
 from app.live import bus
 from app.live.routes import router as live_router
 from app.messages.routes import router as messages_router
@@ -90,6 +91,7 @@ def health_db():
 # theirs route by route: log-in has its own, and the live line stays open for hours.
 api.include_router(auth_router)
 api.include_router(chats_router, dependencies=[busy.REQUEST_SLOT])
+api.include_router(groups_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(messages_router, dependencies=[busy.REQUEST_SLOT])
 api.include_router(live_router)
 api.include_router(push_router, dependencies=[busy.REQUEST_SLOT])
