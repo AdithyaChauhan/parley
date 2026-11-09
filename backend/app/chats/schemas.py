@@ -44,6 +44,8 @@ class LastMessageOut(BaseModel):
     sender_id: uuid.UUID
     sender_name: str | None
     data: dict | None
+    # Deleted for everyone: the app shows "This message was deleted" (D39).
+    deleted: bool
 
 
 class ChatOut(BaseModel):

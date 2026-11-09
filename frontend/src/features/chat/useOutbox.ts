@@ -2,7 +2,7 @@ import { useRef, useState } from "react"
 import { api, ApiError, isBusy, isUnreachable } from "@/lib/api"
 import { putFile, rememberLocal, type PreparedFile } from "@/lib/files"
 import { announce, useLiveEvents } from "@/lib/live"
-import type { FileData, Message, ServerMessage } from "./types"
+import { NOT_CHANGED, type FileData, type Message, type ServerMessage } from "./types"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -195,6 +195,7 @@ export function useOutbox(myId: string) {
       status: "sending",
       kind: "file",
       data,
+      ...NOT_CHANGED,
       progress: 0,
       // Pictures and voice notes show or play from this device while they upload
       localUrl: file.category === "document" ? undefined : URL.createObjectURL(file.blob),
@@ -228,6 +229,7 @@ export function useOutbox(myId: string) {
       status: "sending",
       kind: "text",
       data: null,
+      ...NOT_CHANGED,
     }
     update(chatId, (list) => [...list, message])
     sendQueue(chatId)

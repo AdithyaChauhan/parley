@@ -40,6 +40,14 @@ export type FileData = {
   duration_ms?: number | null // voice notes
 }
 
+// An event's data: which message it changed (D39)
+export type EventData = { target_seq: number }
+
+// The six reactions (D39). They must match the server's list exactly.
+export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+// Emoji → the people who picked it
+export type Reactions = Record<string, string[]>
+
 // One row of the chat list (GET /api/chats, and the reply to creating a chat or group)
 export type ChatSummary = {
   id: string
@@ -53,6 +61,7 @@ export type ChatSummary = {
     sender_id: string
     sender_name: string | null
     data: SystemData | FileData | null
+    deleted: boolean // deleted for everyone (D39)
   } | null
   unread: number
   other_user_id: string | null // the other person in a direct chat, to match presence news
@@ -79,8 +88,20 @@ export type ServerMessage = {
   client_msg_id: string
   body: string
   created_at: string
-  kind: "text" | "system" | "file" // system = a group note, with data instead of text (D37); file = D38
-  data: SystemData | FileData | null
+  // system = a group note, with data instead of text (D37); file = D38.
+  // reaction, edit, delete = a change to another message, not one to show (D39)
+  kind: "text" | "system" | "file" | "reaction" | "edit" | "delete"
+  data: SystemData | FileData | EventData | null
+  edited: boolean
+  deleted: boolean
+  reactions: Reactions
+  state_seq: number // the number of the last change to this message: the higher copy wins
+  target: ServerMessage | null // events: the changed message as it is now (null if I can't see it, D37)
+}
+
+// A change to a message has its own number but no bubble (D39)
+export function isEvent(message: ServerMessage) {
+  return message.kind === "reaction" || message.kind === "edit" || message.kind === "delete"
 }
 
 // One person's tick bookmarks in a chat (D9)
@@ -95,6 +116,10 @@ export type MessagePage = {
   messages: ServerMessage[]
   has_more: boolean // older messages are waiting above these
   members: MemberBookmarks[] // the current members' bookmarks, so ticks are right after a reload
+  // Every number in this stretch is settled: it's in messages, or it's a change
+  // those messages already show (D39). Null when the page settles nothing.
+  low_seq: number | null
+  high_seq: number | null
 }
 
 // What the server pushes down the live line (D19, D20)
@@ -121,12 +146,19 @@ export type Message = {
   body: string
   createdAt: string
   status: "sending" | "waiting" | "failed" | "sent"
-  kind: "text" | "system" | "file"
-  data: SystemData | FileData | null
+  kind: ServerMessage["kind"]
+  data: ServerMessage["data"]
+  edited: boolean
+  deleted: boolean
+  reactions: Reactions
+  stateSeq: number
   // Only while my file is on its way
   progress?: number // 0 to 1
   localUrl?: string // the file from this device, shown until it's saved
 }
+
+// What a message that isn't saved yet starts with
+export const NOT_CHANGED = { edited: false, deleted: false, reactions: {}, stateSeq: 0 }
 
 export function fromServer(message: ServerMessage): Message {
   return {
@@ -140,6 +172,10 @@ export function fromServer(message: ServerMessage): Message {
     status: "sent",
     kind: message.kind,
     data: message.data,
+    edited: message.edited,
+    deleted: message.deleted,
+    reactions: message.reactions,
+    stateSeq: message.state_seq,
   }
 }
 

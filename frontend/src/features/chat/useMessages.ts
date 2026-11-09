@@ -1,24 +1,33 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { api } from "@/lib/api"
 import { reportDelivered, useLiveEvents } from "@/lib/live"
-import { fromServer, type Message, type MessagePage, type ServerMessage } from "./types"
+import { fromServer, isEvent, type Message, type MessagePage, type ServerMessage } from "./types"
 
-// Both lists together, each saved message once (matched by id), in number order
+// Both lists together, each saved message once (matched by id), in number
+// order. Of two copies, the one with the latest change wins (D39).
 function merge(a: Message[], b: Message[]) {
-  const byId = new Map([...a, ...b].map((message) => [message.id, message]))
+  const byId = new Map<string | null, Message>()
+  for (const message of [...a, ...b]) {
+    const other = byId.get(message.id)
+    if (!other || message.stateSeq >= other.stateSeq) byId.set(message.id, message)
+  }
   return [...byId.values()].sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0))
 }
 
-// The highest number with no hole below it (D21). Usually the newest; lower if
-// one in the middle is missing (I have #20 and #24, but not #21 to #23).
-// Catch-up asks for everything after it, and "read" reports it.
-function gapFree(saved: Message[]) {
-  let upTo = saved[0]?.seq ?? 0
-  for (const message of saved.slice(1)) {
-    if (message.seq !== upTo + 1) break
-    upTo += 1
+// Numbers this chat has settled, as [low, high] stretches, lowest first. A
+// reaction, edit or delete has a number but no bubble (D39), so the saved
+// messages alone would show holes where there are none.
+type Stretch = [number, number]
+
+// One more stretch, joined up with any it touches
+function settle(stretches: Stretch[], low: number, high: number): Stretch[] {
+  const joined: Stretch[] = []
+  for (const [from, to] of [...stretches, [low, high] as Stretch].sort((x, y) => x[0] - y[0])) {
+    const last = joined.at(-1)
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to)
+    else joined.push([from, to])
   }
-  return upTo
+  return joined
 }
 
 // The messages of one open chat, oldest at the top: saved ones by number,
@@ -53,6 +62,7 @@ function raise(bookmarks: Bookmarks, userId: string, delivered: number, read: nu
 
 export function useMessages(chatId: string, myId: string, unsent: Message[], list: ListCheck) {
   const [saved, setSaved] = useState<Message[]>([])
+  const [settled, setSettled] = useState<Stretch[]>([])
   // The others' bookmarks: my messages up to the lowest "delivered" get grey ✓✓, up to the lowest "read" teal ✓✓
   const [bookmarks, setBookmarks] = useState<Bookmarks>({})
   // A group's lowest bookmarks, pushed by the server whenever they move (D37).
@@ -72,12 +82,27 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
   // arrive before my send's reply, and then the outbox still has it for a moment
   const savedIds = new Set(saved.map((message) => message.clientMsgId))
   const messages = [...saved, ...unsent.filter((message) => !savedIds.has(message.clientMsgId))]
-  const gapFreeSeq = gapFree(saved)
+  // The highest number with no hole below it (D21). Usually the newest; lower if
+  // one in the middle is missing (I have #20 and #24, but not #21 to #23).
+  // Catch-up asks for everything after it, and "read" reports it.
+  const gapFreeSeq = settled[0]?.[1] ?? 0
+
+  // A message changed (D39). Only ones already on screen: an older one comes
+  // with its latest state when its page loads.
+  function applyChange(target: ServerMessage) {
+    setSaved((current) =>
+      current.map((message) =>
+        message.id === target.id && target.state_seq >= message.stateSeq ? fromServer(target) : message,
+      ),
+    )
+  }
 
   // A saved message for this chat: my send's reply, or one pushed live.
-  // Never twice: the merge matches by id.
+  // Never twice: the merge matches by id. A change has no bubble of its own.
   function addSaved(message: ServerMessage) {
-    setSaved((current) => merge(current, [fromServer(message)]))
+    setSettled((current) => settle(current, message.seq, message.seq))
+    if (!isEvent(message)) setSaved((current) => merge(current, [fromServer(message)]))
+    else if (message.target) applyChange(message.target)
   }
 
   // A page of saved messages in, from any direction. Merged, not replaced: a
@@ -86,7 +111,11 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
   // Every page lists the current members, so it also says who counts for the
   // ticks now: someone added or removed is picked up here (D37).
   function takePage(page: MessagePage) {
-    setSaved((current) => merge(page.messages.map(fromServer), current))
+    setSaved((current) => merge(page.messages.filter((row) => !isEvent(row)).map(fromServer), current))
+    // Only catch-up pages have changes in them
+    for (const row of page.messages) if (row.target) applyChange(row.target)
+    const { low_seq: low, high_seq: high } = page
+    if (low !== null && high !== null) setSettled((current) => settle(current, low, high))
     setBookmarks((current) => {
       const next: Bookmarks = {}
       for (const member of page.members) {
@@ -168,8 +197,9 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
       // Their message #N means their bookmarks are at #N too: sending counts as
       // reading, and the server moves them with no receipt (D20). Only for pushes;
       // history and catch-up pages carry the real bookmarks.
+      // A change to a message moves nobody's bookmarks (D39).
       const { seq, sender_id: senderId } = event.data
-      if (senderId !== myId) setBookmarks((current) => raise(current, senderId, seq, seq))
+      if (senderId !== myId && !isEvent(event.data)) setBookmarks((current) => raise(current, senderId, seq, seq))
       // A hole: I have up to #20 and this is #23, so #21 and #22 went missing (D21).
       // A group note: someone joined or left, and the next page brings the new
       // member list for the ticks (D37). Either way, one small catch-up.
@@ -204,5 +234,5 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
     }
   }
 
-  return { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder }
+  return { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, applyChange }
 }

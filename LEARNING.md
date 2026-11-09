@@ -1679,3 +1679,34 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why Garage: I measured it next to SeaweedFS on uploads. Both did what I needed, but Garage peaked at 77 MB and SeaweedFS at 685 MB, and the server only has about 1 GB free.
 - What I'd check first if files broke: a 403 from storage usually means the signature doesn't match, so I'd look at the `Host` Nginx sends. A 503 from the file routes means the store is down or has no keys set.
 - What still confuses me: for 5 minutes after sending, the sender still holds a valid upload link and could swap in a different file of the same size and type. It's a small hole. The real fix is a store policy that refuses overwrites.
+
+---
+
+### Task 37: Reactions, edit and delete
+**What was built**
+- `backend/app/messages/actions.py`: the four changes (set or remove a reaction, edit, delete). Each locks the chat's row, checks the rules under that lock, changes the message and saves a numbered event row, in one transaction.
+- `backend/app/messages/models.py`: three new kinds, `edited_at`, `deleted_at`, `state_seq` on messages, and the `message_reactions` table. Its key is (message, person), so the database itself allows one reaction each.
+- `backend/app/messages/routes.py`: `PUT` and `DELETE /{seq}/reaction`, `PATCH /{seq}`, `DELETE /{seq}`. History pages leave events out and carry `low_seq` and `high_seq`. Catch-up pages include events, each with the message as it is now.
+- `backend/app/chats/service.py`: unread counts only `text` and `file` rows, and the preview skips events.
+- `backend/app/files/cleanup.py`: `erase_now()` removes a deleted file at once. If the store is down, the row stays marked and the hourly run finishes the job.
+- `frontend/src/features/chat/useMessages.ts`: "settled" stretches of numbers replace the old hole check.
+- `frontend/src/features/chat/MessageBubble.tsx`, `MessageMenu.tsx`, `EditBox` in `MessageBox.tsx`: hover buttons on desktop, long press on touch screens, the emoji list, the counts under a bubble, "edited" and "This message was deleted".
+
+**New ideas**
+- Event row: a change saved as its own numbered row. Catch-up already works by number, so a change made while you were offline reaches you the same way a message does.
+- No text in events: an edit row only says which message changed. So there's one copy of the text, and deleting that copy really erases it.
+- `state_seq`: pushes can arrive out of order. Each copy of a message says which change it reflects, and the app keeps the higher one.
+- Settled numbers: history hides events, so its numbers have gaps that aren't missing messages. The page says "everything from low to high is settled", and the app tracks stretches, not just the messages it holds.
+- Idempotent action: doing the same thing twice changes nothing and takes no number, so a retry is always safe.
+- A row that remembers a debt: a deleted file's upload row stays, marked `erase_pending`, until the store has really dropped it.
+- Pointer type: `pointerType` tells a finger from a mouse, so the long press only runs on touch screens.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- How a change travels: when I react, edit or delete, the server locks the chat, checks I'm allowed, changes the message and saves a small event row with the chat's next number. Then it pushes that event like any message. Because it has a number, someone who was offline gets it through the normal catch-up.
+- Why history doesn't replay events: a new device only wants the result. History returns messages with reactions, edits and deletes already applied. Only catch-up returns the events, because that device already has the old copy and needs to fix it.
+- The catch I hit: leaving events out of history makes holes in the numbers, and the app would keep asking for them forever. So each page now says which range of numbers it settles.
+- How delete really erases: the event row never holds text. The message's text and file details are blanked, the reactions go, and the file is removed from storage. If storage is down, the row stays marked and the hourly job finishes it.
+- Who can see what: someone who joined a group later still gets the event's number, but not the message inside it, because they aren't allowed to see messages from before they joined.
+- Why unread changed: a reaction shouldn't light up a badge. Unread now counts real messages only, not events or group notes.
+- What I'd check first if it broke: a change that shows for me but not for others means the push failed, so I'd look at Redis. A chat that keeps calling catch-up means the page's `low_seq` and `high_seq` aren't joining up.
+- What still confuses me: reaction rows pile up forever, even when someone taps on and off. It's fine at this size, but a busy chat would want a way to compact old events.

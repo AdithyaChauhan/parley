@@ -4,7 +4,7 @@ import { api } from "@/lib/api"
 import { fileUrl, kindText, saveFile, sizeText } from "@/lib/files"
 import { useLiveEvents } from "@/lib/live"
 import { DocumentIcon, ImageViewer, VoicePlayer } from "./FileContent"
-import type { FileData, ServerMessage } from "./types"
+import type { EventData, FileData, ServerMessage } from "./types"
 
 type FilePage = { messages: ServerMessage[]; has_more: boolean }
 
@@ -75,9 +75,14 @@ export function SharedFiles({ chatId }: { chatId: string }) {
     load().catch(() => setFiles([]))
   }, [load])
 
-  // A new file in this chat goes on top
+  // A new file in this chat goes on top, and a deleted one goes (D39)
   useLiveEvents((event) => {
-    if (event.type !== "message.new" || event.data.chat_id !== chatId || event.data.kind !== "file") return
+    if (event.type !== "message.new" || event.data.chat_id !== chatId) return
+    if (event.data.kind === "delete") {
+      const { target_seq: gone } = event.data.data as EventData
+      setFiles((current) => current && current.filter((file) => file.seq !== gone))
+    }
+    if (event.data.kind !== "file") return
     setFiles((current) =>
       current?.some((file) => file.id === event.data.id) ? current : [event.data, ...(current ?? [])],
     )

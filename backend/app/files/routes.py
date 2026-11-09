@@ -136,7 +136,7 @@ def chat_files(
     query = (
         select(Message, User.name)
         .join(User, User.id == Message.sender_id)
-        .where(Message.chat_id == chat_id, Message.kind == "file")
+        .where(Message.chat_id == chat_id, Message.kind == "file", Message.deleted_at.is_(None))
         .order_by(Message.seq.desc())
     )
     if before is not None:

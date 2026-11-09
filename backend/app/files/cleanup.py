@@ -1,10 +1,12 @@
-"""Files that were uploaded but never sent are removed after a day (D38)."""
+"""Files that were uploaded but never sent are removed after a day (D38), and
+files whose message was deleted are removed at once (D39)."""
 
 import logging
 import threading
+import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.db import SessionLocal
 from app.files.models import Upload
@@ -18,14 +20,28 @@ BATCH = 200
 EVERY_SECONDS = 60 * 60
 
 
+def erase_now(upload_id: uuid.UUID, key: str) -> None:
+    """A deleted message's file: gone from the store right away (D39). If the
+    store is down, the row stays, and the hourly run below finishes the job."""
+    try:
+        store.delete(key)
+    except StoreError as error:
+        log.warning("Couldn't erase a deleted file, trying again next time: %s", error)
+        return
+    with SessionLocal() as db:
+        db.execute(delete(Upload).where(Upload.id == upload_id, Upload.erase_pending))
+        db.commit()
+
+
 def remove_unsent(older_than: timedelta = UNSENT_AFTER) -> int:
-    """Remove up to one batch of old unsent files. Returns how many went."""
+    """Remove up to one batch of old unsent files, and any erase still owed
+    from a store outage. Returns how many went."""
     cutoff = datetime.now(UTC) - older_than
     with SessionLocal() as db:
         rows = list(
             db.execute(
                 select(Upload.id, Upload.key)
-                .where(Upload.message_id.is_(None), Upload.created_at < cutoff)
+                .where(Upload.message_id.is_(None), or_(Upload.erase_pending, Upload.created_at < cutoff))
                 .limit(BATCH)
             )
         )
