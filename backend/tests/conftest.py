@@ -73,7 +73,9 @@ from app.presence import service as presence  # noqa: E402
 def _empty_all_tables():
     """Empties every sheet and wipes Redis, so the next test starts clean."""
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE users, sessions, chats, chat_members, messages, push_subscriptions, uploads"))
+        connection.execute(
+            text("TRUNCATE users, sessions, chats, chat_members, messages, message_reactions, push_subscriptions, uploads")
+        )
     # And the whiteboard: every presence and last seen note (Redis database 15).
     presence.client.flushdb()
     # And the post office: every box in the parley_test vhost, and the

@@ -1,19 +1,29 @@
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import metrics
 from app.auth.deps import get_current_user
 from app.auth.models import User
-from app.chats.models import ChatMember
+from app.chats.models import Chat, ChatMember
 from app.chats.service import Bookmarks, get_member, low_moved, member_ids
 from app.db import SessionLocal
+from app.files.cleanup import erase_now
 from app.limits import service as limits
 from app.live import bus
-from app.messages.models import Message
-from app.messages.schemas import MemberOut, MessageOut, MessagePage, SendMessageRequest
+from app.messages import actions
+from app.messages.models import EVENT_KINDS, Message
+from app.messages.schemas import (
+    EditMessageRequest,
+    MemberOut,
+    MessageOut,
+    MessagePage,
+    ReactionRequest,
+    SendMessageRequest,
+)
 from app.messages.service import NotAMember, UploadTaken, add_message
 from app.notify import publisher as notify
 
@@ -92,6 +102,107 @@ def save_and_push(
     return message
 
 
+def _name_of(db: Session, user_id: uuid.UUID) -> str:
+    return db.scalar(select(User.name).where(User.id == user_id)) or ""
+
+
+def _finish_change(db: Session, change: actions.Change, me: User) -> MessageOut:
+    """The changed message for the reply, and the event pushed like any message
+    (D39). Events never notify, and move nobody's bookmarks."""
+    target_id = change.target.id
+    target = MessageOut.of(
+        change.target,
+        _name_of(db, change.target.sender_id),
+        actions.reactions_of(db, [target_id]).get(target_id),
+    )
+    pushes = []
+    if change.event is not None:
+        event = MessageOut.of(change.event, me.name, target=target)
+        viewers = db.execute(
+            select(ChatMember.user_id, ChatMember.from_seq).where(
+                ChatMember.chat_id == event.chat_id,
+                ChatMember.user_id.in_(member_ids(db, event.chat_id, event.seq)),
+            )
+        ).all()
+        # Someone who joined after this message gets the number, but not the
+        # message: they aren't allowed to see it (D37).
+        can_see = [row.user_id for row in viewers if row.from_seq <= target.seq]
+        cannot = [row.user_id for row in viewers if row.from_seq > target.seq]
+        pushes.append((can_see, event))
+        if cannot:
+            pushes.append((cannot, event.model_copy(update={"target": None})))
+    db.close()  # back in the pool before the pushes (D34)
+    for people, event in pushes:
+        bus.publish(people, {"type": "message.new", "data": event.model_dump(mode="json")})
+    return target
+
+
+# The route's number must be a real one (seq starts at 1).
+Seq = Annotated[int, Path(ge=1)]
+
+
+@router.put("/{seq}/reaction", response_model=MessageOut)
+def react(chat_id: uuid.UUID, seq: Seq, body: ReactionRequest, me: User = Depends(get_current_user)):
+    # Each change takes a number and a push, like a send, so it shares the send limit (D24).
+    limits.enforce(limits.SEND, me.id)
+    with SessionLocal() as db:
+        return _finish_change(db, actions.set_reaction(db, chat_id, me.id, seq, body.emoji), me)
+
+
+@router.delete("/{seq}/reaction", response_model=MessageOut)
+def unreact(chat_id: uuid.UUID, seq: Seq, me: User = Depends(get_current_user)):
+    limits.enforce(limits.SEND, me.id)
+    with SessionLocal() as db:
+        return _finish_change(db, actions.remove_reaction(db, chat_id, me.id, seq), me)
+
+
+@router.patch("/{seq}", response_model=MessageOut)
+def edit(chat_id: uuid.UUID, seq: Seq, body: EditMessageRequest, me: User = Depends(get_current_user)):
+    limits.enforce(limits.SEND, me.id)
+    with SessionLocal() as db:
+        return _finish_change(db, actions.edit_message(db, chat_id, me.id, seq, body.body), me)
+
+
+@router.delete("/{seq}", response_model=MessageOut)
+def delete_for_everyone(chat_id: uuid.UUID, seq: Seq, me: User = Depends(get_current_user)):
+    limits.enforce(limits.SEND, me.id)
+    with SessionLocal() as db:
+        change = actions.delete_message(db, chat_id, me.id, seq)
+        result = _finish_change(db, change, me)
+    # After the push, and outside the session: a slow store can't hold anything up (D34).
+    if change.erase is not None:
+        erase_now(*change.erase)
+    return result
+
+
+def _page_messages(db: Session, rows: list, member: ChatMember) -> list[MessageOut]:
+    """A page's rows, with the latest state applied. Only catch-up pages have
+    event rows, and each one carries the message it changed."""
+    events = [message.data["target_seq"] for message, _ in rows if message.kind in EVENT_KINDS]
+    # Nothing from before I joined (D37): those events go out with no target.
+    wanted = {seq for seq in events if seq >= member.from_seq}
+    targets: dict[int, tuple[Message, str]] = {}
+    if wanted:
+        found = db.execute(
+            select(Message, User.name)
+            .join(User, User.id == Message.sender_id)
+            .where(Message.chat_id == member.chat_id, Message.seq.in_(wanted))
+        )
+        targets = {message.seq: (message, name) for message, name in found}
+
+    ids = [message.id for message, _ in rows] + [message.id for message, _ in targets.values()]
+    reactions = actions.reactions_of(db, ids)
+
+    def out(message: Message, name: str) -> MessageOut:
+        target = None
+        if message.kind in EVENT_KINDS and message.data["target_seq"] in targets:
+            shown, shown_name = targets[message.data["target_seq"]]
+            target = MessageOut.of(shown, shown_name, reactions.get(shown.id))
+        return MessageOut.of(message, name, reactions.get(message.id), target)
+
+    return [out(message, name) for message, name in rows]
+
+
 @router.get("", response_model=MessagePage)
 def message_history(
     chat_id: uuid.UUID,
@@ -110,15 +221,19 @@ def message_history(
     if after is not None:
         # Catching up (D21): the ones above my highest number, oldest first,
         # so they come in reading order and I can ask again from the last one.
+        # Events too: this is how a change made while I was away reaches me (D39).
         query = query.where(Message.seq > after).order_by(Message.seq.asc())
     elif before is not None:
         # Scrolling up: the ones above the oldest on screen, newest first.
-        query = query.where(Message.seq < before).order_by(Message.seq.desc())
+        query = query.where(Message.seq < before, Message.kind.not_in(EVENT_KINDS)).order_by(Message.seq.desc())
     else:
         # Opening the chat: the newest ones, newest first.
-        query = query.order_by(Message.seq.desc())
+        query = query.where(Message.kind.not_in(EVENT_KINDS)).order_by(Message.seq.desc())
     with SessionLocal() as db:
         member = _member(db, chat_id, me)
+        # Read before the messages: a number is only handed out with its row,
+        # so every event up to this one is already in what the query below reads.
+        newest = db.scalar(select(Chat.last_seq).where(Chat.id == chat_id))
         # Only my stretch of the chat (D37): nothing from before I was added,
         # nothing after I left. A direct chat is from #1, with no end.
         query = query.where(Message.seq >= member.from_seq)
@@ -126,12 +241,25 @@ def message_history(
             query = query.where(Message.seq <= member.until_seq)
         # One extra: if the extra comes back, there are more past these.
         rows = list(db.execute(query.limit(limit + 1)))
+        page = rows[:limit]
+
+        low_seq = high_seq = None
+        if page:
+            if after is not None:
+                low_seq, high_seq = max(after + 1, member.from_seq), page[-1][0].seq
+            elif before is not None:
+                low_seq, high_seq = page[-1][0].seq, before - 1
+            else:
+                end = newest if member.current else min(newest, member.until_seq)
+                low_seq, high_seq = page[-1][0].seq, max(end, page[0][0].seq)
 
         members = db.scalars(
             select(ChatMember).where(ChatMember.chat_id == chat_id, ChatMember.until_seq.is_(None))
         )
         return MessagePage(
-            messages=[MessageOut.of(message, name) for message, name in rows[:limit]],
+            messages=_page_messages(db, page, member),
+            low_seq=low_seq,
+            high_seq=high_seq,
             has_more=len(rows) > limit,
             members=[MemberOut.model_validate(member) for member in members],
         )

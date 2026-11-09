@@ -117,11 +117,11 @@ def test_create_makes_me_admin_and_the_created_note_is_number_1(client, sign_up)
     assert row["last_message"]["kind"] == "system"
     assert row["last_message"]["data"]["event"] == "created"
     assert _members(client, ana, row["id"]) == {"Ana": "admin", "Ben": "member", "Cara": "member"}
-    # Ben sees it too, with the note as #1, and it counts as unread for him.
+    # Ben sees it too, with the note as #1. Group notes aren't unread (D39).
     page = _history(client, ben, row["id"]).json()
     assert _seqs(page) == [1]
     assert page["messages"][0]["sender_name"] == "Ana"
-    assert _row(client, ben, row["id"])["unread"] == 1
+    assert _row(client, ben, row["id"])["unread"] == 0
 
 
 def test_name_must_be_1_to_50_letters(client, sign_up):
@@ -255,8 +255,8 @@ def test_a_new_member_sees_from_when_they_joined(client, sign_up):
     # Asking for older ones, or catching up from 0, gives nothing before #3 either.
     assert _seqs(_history(client, ben, chat_id, "?before=3").json()) == []
     assert _seqs(_history(client, ben, chat_id, "?after=0").json()) == [3, 4]
-    # His unread counts from his start, not from #1.
-    assert _row(client, ben, chat_id)["unread"] == 2
+    # His unread counts from his start, not from #1, and only real messages (D39).
+    assert _row(client, ben, chat_id)["unread"] == 1
 
 
 def test_a_removed_member_cant_read_new_messages_or_send(client, sign_up):

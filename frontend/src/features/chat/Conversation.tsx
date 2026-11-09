@@ -1,19 +1,34 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
 import { ArrowLeft, FolderUp } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
+import { api } from "@/lib/api"
 import { prepareFile, type PreparedFile } from "@/lib/files"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
-import { MessageBox } from "./MessageBox"
-import { memberNames } from "./groupNotes"
-import { MessageBubble, SystemNote } from "./MessageBubble"
+import { EditBox, MessageBox } from "./MessageBox"
+import { MessageMenu, type OpenMenu } from "./MessageMenu"
+import { groupError, memberNames } from "./groupNotes"
+import { MessageBubble, SystemNote, type BubbleActions } from "./MessageBubble"
 import { lastSeenText } from "./time"
-import { tintFor, type ChatSummary, type GroupMember, type Message, type NarrowView } from "./types"
+import {
+  REACTIONS,
+  tintFor,
+  type ChatSummary,
+  type GroupMember,
+  type Message,
+  type NarrowView,
+  type ServerMessage,
+} from "./types"
 import { useMessages } from "./useMessages"
 import type { Typist } from "./useTyping"
 
 // Scrolled up less than this counts as "at the bottom": the newest message is on screen
 const NEAR_BOTTOM_PX = 80
+// The server checks these again; the app only hides what would be refused (D39)
+const EDIT_FOR_MS = 15 * 60_000
+const DELETE_FOR_MS = 60 * 60_000
+// How often "can I still edit this?" is looked at again
+const CLOCK_EVERY_MS = 30_000
 
 // How much of the list is below what you can see, in pixels
 function hiddenBelow(list: HTMLElement) {
@@ -56,12 +71,8 @@ export function Conversation({
   listChecks,
   lineDown,
 }: ConversationProps) {
-  const { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder } = useMessages(
-    chat.id,
-    myId,
-    unsent,
-    { seq: chat.last_message?.seq ?? 0, checks: listChecks, lineDown },
-  )
+  const { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, applyChange } =
+    useMessages(chat.id, myId, unsent, { seq: chat.last_message?.seq ?? 0, checks: listChecks, lineDown })
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
   const fromBottom = useRef<number | null>(null)
@@ -92,6 +103,56 @@ export function Conversation({
   }
 
   const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files")
+
+  // The actions menu, and the message I'm fixing (D39)
+  const [menu, setMenu] = useState<OpenMenu | null>(null)
+  const [editing, setEditing] = useState<Message | null>(null)
+  // The time, so "Edit" goes away once it would be refused
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_EVERY_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const age = (message: Message) => now - Date.parse(message.createdAt)
+  const canEdit = (message: Message) =>
+    message.senderId === myId && message.kind === "text" && age(message) < EDIT_FOR_MS
+  const canDelete = (message: Message) => message.senderId === myId && age(message) < DELETE_FOR_MS
+
+  // One change to a saved message. The reply is the message as it is now, so
+  // it shows at once, even if the live push is lost (D24). The push still comes,
+  // with the change's number.
+  async function change(message: Message, path: string, method: string, body?: unknown) {
+    try {
+      applyChange(await api<ServerMessage>(`/chats/${chat.id}/messages/${message.seq}${path}`, { method, body }))
+    } catch (error) {
+      showHint(groupError(error))
+    }
+  }
+
+  // Tap the one I already picked to take it back; any other replaces it (D39)
+  function toggleReaction(message: Message, emoji: string) {
+    if (message.reactions[emoji]?.includes(myId)) change(message, "/reaction", "DELETE")
+    else change(message, "/reaction", "PUT", { emoji })
+  }
+
+  const myReaction = (message: Message) =>
+    REACTIONS.find((emoji) => message.reactions[emoji]?.includes(myId)) ?? null
+
+  // What this message offers. Nothing until it's saved, once deleted, or after I've left.
+  function actionsFor(message: Message): BubbleActions | null {
+    if (chat.left || message.seq === null || message.deleted) return null
+    return {
+      canEdit: canEdit(message),
+      canDelete: canDelete(message),
+      onMenu: (anchor, mode) => setMenu({ message, anchor, mode }),
+      onEdit: () => setEditing(message),
+      onToggle: (emoji) => toggleReaction(message, emoji),
+    }
+  }
+
+  // The message as it is now: the one in the menu may have changed since it opened
+  const menuMessage = menu && (messages.find((m) => m.clientMsgId === menu.message.clientMsgId) ?? menu.message)
 
   const group = chat.kind === "group"
   const firstKey = messages[0]?.clientMsgId
@@ -170,6 +231,7 @@ export function Conversation({
   function handleScroll() {
     const list = listRef.current
     if (!list) return
+    setMenu(null) // it's pinned to where the message was
     atBottom.current = hiddenBelow(list) <= NEAR_BOTTOM_PX
     reportIfRead()
     if (!hasMore || list.scrollTop > 80) return
@@ -278,10 +340,39 @@ export function Conversation({
               onRetry={() => onRetry(message)}
               chatId={chat.id}
               onCancel={() => onCancel(message)}
+              myId={myId}
+              actions={actionsFor(message)}
             />
           ),
         )}
       </div>
+
+      {menu && menuMessage && (
+        <MessageMenu
+          menu={menu}
+          mine={menuMessage.senderId === myId}
+          myReaction={myReaction(menuMessage)}
+          canEdit={canEdit(menuMessage)}
+          canDelete={canDelete(menuMessage)}
+          onReact={(emoji) => {
+            setMenu(null)
+            toggleReaction(menuMessage, emoji)
+          }}
+          onEdit={() => {
+            setMenu(null)
+            setEditing(menuMessage)
+          }}
+          onCopy={() => {
+            setMenu(null)
+            navigator.clipboard.writeText(menuMessage.body).catch(() => showHint("Couldn't copy that."))
+          }}
+          onDelete={() => {
+            setMenu(null)
+            change(menuMessage, "", "DELETE")
+          }}
+          onClose={() => setMenu(null)}
+        />
+      )}
 
       {/* The other person is typing (D20). The three dots bounce one after another. */}
       {typing && (
@@ -309,13 +400,27 @@ export function Conversation({
                 {hint}
               </p>
             )}
-            <MessageBox
-              onSend={onSend}
-              onTyping={() => sendTyping(chat.id)}
-              onFiles={takeFiles}
-              onVoice={onSendFile}
-              onHint={showHint}
-            />
+            {/* Hidden, not removed, so whatever I was writing is still there afterwards */}
+            <div className={editing ? "hidden" : undefined}>
+              <MessageBox
+                onSend={onSend}
+                onTyping={() => sendTyping(chat.id)}
+                onFiles={takeFiles}
+                onVoice={onSendFile}
+                onHint={showHint}
+              />
+            </div>
+            {editing && (
+              <EditBox
+                key={editing.clientMsgId}
+                original={editing.body}
+                onCancel={() => setEditing(null)}
+                onSave={(body) => {
+                  setEditing(null)
+                  change(editing, "", "PATCH", { body })
+                }}
+              />
+            )}
           </>
         )}
       </div>

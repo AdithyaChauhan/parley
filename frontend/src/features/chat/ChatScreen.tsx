@@ -6,11 +6,13 @@ import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
 import { IconRail } from "./IconRail"
 import { SidePanel } from "./SidePanel"
-import type { ChatSummary, NarrowView, ServerMessage } from "./types"
+import { isEvent, type ChatSummary, type NarrowView, type ServerMessage } from "./types"
 import { useGroupMembers } from "./useGroupMembers"
 import { useOutbox } from "./useOutbox"
 import { useTyping } from "./useTyping"
 import { useVisibleArea } from "./useVisibleArea"
+
+type LastMessage = NonNullable<ChatSummary["last_message"]>
 
 // The chat list shows each chat's newest message, so it's on this device now (D20)
 function reportListDelivered(list: ChatSummary[]) {
@@ -107,8 +109,10 @@ export function ChatScreen({ user }: { user: User }) {
     })
   }
 
-  // My read bookmark moved, maybe in another tab (D20). Unread is always the
-  // newest number minus it. A "delivered" or late receipt never raises it.
+  // My read bookmark moved, maybe in another tab (D20). Unread is at most the
+  // newest number minus it. Changes and group notes have numbers but don't
+  // count (D39), so this can leave the badge a little high until the next re-check.
+  // A "delivered" or late receipt never raises it.
   function myReadMoved(chatId: string, readUpTo: number) {
     setChats(
       (all) =>
@@ -161,20 +165,38 @@ export function ChatScreen({ user }: { user: User }) {
             seq: message.seq,
             preview: message.body,
             created_at: message.created_at,
-            kind: message.kind,
+            kind: message.kind as LastMessage["kind"], // events never come here
             sender_id: message.sender_id,
             sender_name: message.sender_name,
-            data: message.data,
+            data: message.data as LastMessage["data"],
+            deleted: message.deleted,
           }
         : chat.last_message
       // Sending counts as reading everything above it (T14), like on the server.
-      // Their new message adds 1. If the chat is open and you're looking, the
-      // Conversation sends "read" and sets it back to 0 before the screen is drawn.
+      // Their new message adds 1, but a group note doesn't (D39). If the chat is open and you're
+      // looking, the Conversation sends "read" and sets it back to 0 before the screen is drawn.
       let unread = chat.unread
       if (message.sender_id === user.id) unread = 0
-      else if (isNew) unread += 1
+      else if (isNew && message.kind !== "system") unread += 1
       return [{ ...chat, last_message: lastMessage, unread }, ...all.filter((c) => c.id !== chat.id)]
     })
+  }
+
+  // A reaction, edit or delete (D39). It doesn't move the chat or add to unread.
+  // The preview changes only if it's showing the message that changed.
+  function messageChanged(event: ServerMessage) {
+    const target = event.target
+    if (!target) return
+    setChats(
+      (all) =>
+        all &&
+        all.map((chat) => {
+          const last = chat.last_message
+          if (chat.id !== event.chat_id || last?.seq !== target.seq) return chat
+          const changed = { ...last, preview: target.body, data: target.data as LastMessage["data"], deleted: target.deleted }
+          return { ...chat, last_message: changed }
+        }),
+    )
   }
 
   // A new message pushed live (D20). It's on this device now, so tell the server.
@@ -199,6 +221,10 @@ export function ChatScreen({ user }: { user: User }) {
     const message = event.data
     reportDelivered(message.chat_id, message.seq)
     if (!chats) return // the list is still loading, and will include it
+    if (isEvent(message)) {
+      messageChanged(message)
+      return
+    }
     if (chats.some((chat) => chat.id === message.chat_id)) {
       messageArrived(message)
       // A group note can change the row itself: its name, my role, or that I'm

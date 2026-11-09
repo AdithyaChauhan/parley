@@ -97,13 +97,19 @@ def handle(job: Job, attempt: int) -> str:
             .join(User, User.id == ChatMember.user_id)
             .where(ChatMember.chat_id == job.chat_id, ChatMember.user_id == job.recipient_id)
         ).one_or_none()
-        sender_name = db.scalar(
-            select(User.name).join(Message, Message.sender_id == User.id).where(Message.id == job.message_id)
-        )
+        message = db.execute(
+            select(User.name, Message.deleted_at)
+            .join(Message, Message.sender_id == User.id)
+            .where(Message.id == job.message_id)
+        ).one_or_none()
         chat = db.execute(select(Chat.kind, Chat.title).where(Chat.id == job.chat_id)).one_or_none()
 
-    if member is None or sender_name is None or chat is None:
+    if member is None or message is None or chat is None:
         return "skip: message or member gone"  # no retry can bring them back (D25)
+    if message.deleted_at is not None:
+        # Deleted for everyone during the job's wait: there's nothing to come and see (D39).
+        return "skip: message or member gone"
+    sender_name = message.name
     if member.until_seq is not None:
         # Left the group or was removed since the job was made: no more pushes (D37).
         return "skip: message or member gone"

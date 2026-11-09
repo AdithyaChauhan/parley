@@ -9,7 +9,7 @@ from app.auth.models import User
 from app.chats.models import Chat, ChatMember
 from app.chats.schemas import ChatOut, LastMessageOut
 from app.live import bus
-from app.messages.models import Message
+from app.messages.models import EVENT_KINDS, REAL_KINDS, Message
 from app.presence import service as presence
 
 # How many letters of the last message the chat list shows.
@@ -269,6 +269,7 @@ def _last_message(message: Message | None, sender_name: str | None) -> LastMessa
         sender_name=sender_name,
         # The chat list only needs a file's name and category, not its picture.
         data={k: v for k, v in message.data.items() if k != "preview"} if message.data else None,
+        deleted=message.deleted_at is not None,
     )
 
 
@@ -277,11 +278,36 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
     Chats I left or was removed from stay in it, read-only (D37)."""
     other_member = aliased(ChatMember)
     sender = aliased(User)
-    # The last message I can see: the chat's last, or the note that ended my
+    # The last number I can see: the chat's last, or the note that ended my
     # membership (D37).
     my_last_seq = func.coalesce(ChatMember.until_seq, Chat.last_seq)
+    # The preview skips reactions, edits and deletes (D39): the last row at or
+    # below that number that's a message or a group note.
+    row = aliased(Message)
+    last_shown_seq = (
+        select(row.seq)
+        .where(row.chat_id == Chat.id, row.seq <= my_last_seq, row.kind.not_in(EVENT_KINDS))
+        .order_by(row.seq.desc())
+        .limit(1)
+        .correlate(Chat, ChatMember)
+        .scalar_subquery()
+    )
+    # Unread counts only real messages: not events, not group notes (D39).
+    unread_row = aliased(Message)
+    unread_count = (
+        select(func.count())
+        .select_from(unread_row)
+        .where(
+            unread_row.chat_id == Chat.id,
+            unread_row.seq > ChatMember.read_up_to,
+            unread_row.seq <= my_last_seq,
+            unread_row.kind.in_(REAL_KINDS),
+        )
+        .correlate(Chat, ChatMember)
+        .scalar_subquery()
+    )
     query = (
-        select(Chat, ChatMember, User.id, User.name, Message, sender.name)
+        select(Chat, ChatMember, User.id, User.name, Message, sender.name, unread_count)
         .select_from(Chat)
         # Only chats I'm in (or was in), with my row.
         .join(ChatMember, and_(ChatMember.chat_id == Chat.id, ChatMember.user_id == me.id))
@@ -296,7 +322,7 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
         )
         .outerjoin(User, User.id == other_member.user_id)
         # The last message I can see. None if the chat is empty.
-        .outerjoin(Message, and_(Message.chat_id == Chat.id, Message.seq == my_last_seq))
+        .outerjoin(Message, and_(Message.chat_id == Chat.id, Message.seq == last_shown_seq))
         # Its sender, for "Ana: hi" in a group's row.
         .outerjoin(sender, sender.id == Message.sender_id)
         # Newest message first. A chat with no messages counts from when it was made.
@@ -311,14 +337,12 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
     db.close()
     # Everyone's online status in one trip to Redis, not one per row (D24).
     # From Redis, not the database: a fast, temporary fact (D22).
-    found = presence.statuses([other_id for _, _, other_id, _, _, _ in rows if other_id is not None])
+    found = presence.statuses([other_id for _, _, other_id, *_ in rows if other_id is not None])
 
     chats = []
-    for chat, mine, other_id, other_name, last, sender_name in rows:
+    for chat, mine, other_id, other_name, last, sender_name, unread in rows:
         # Groups have no other person, so nobody to be online.
         status = found.get(other_id, presence.UNKNOWN)
-        # The last number I can see: unread never counts past it.
-        my_end = chat.last_seq if mine.current else mine.until_seq
         is_group = chat.kind == "group"
         chats.append(
             ChatOut(
@@ -327,7 +351,7 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
                 # Groups have no "other person", so they show their name.
                 name=other_name or chat.title,
                 last_message=_last_message(last, sender_name),
-                unread=max(0, my_end - mine.read_up_to),
+                unread=unread,
                 other_user_id=other_id,
                 online=status.online,
                 last_seen=status.last_seen,

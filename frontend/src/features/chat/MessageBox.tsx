@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent, type PointerEvent } from "react"
-import { Mic, Paperclip, SendHorizontal } from "lucide-react"
+import { Check, Mic, Paperclip, SendHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ACCEPTED_FILES, clockText, type PreparedFile } from "@/lib/files"
 import { canRecord, useVoiceRecorder } from "./useVoiceRecorder"
@@ -14,6 +14,59 @@ type MessageBoxProps = {
 
 // Slide this far from the mic while holding, and letting go throws the recording away
 const CANCEL_DISTANCE_PX = 90
+
+// Stands in for the message box while I fix a message I sent (D39)
+export function EditBox({
+  original,
+  onSave,
+  onCancel,
+}: {
+  original: string
+  onSave: (text: string) => void
+  onCancel: () => void
+}) {
+  const [text, setText] = useState(original)
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    const trimmed = text.trim()
+    if (!trimmed) return
+    if (trimmed === original) onCancel()
+    else onSave(trimmed)
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      onKeyDown={(e) => e.key === "Escape" && onCancel()}
+      className="flex h-16 items-center gap-2 rounded-panel bg-card pr-2 pl-2 shadow-sm shadow-foreground/5 md:gap-3 md:pl-3"
+    >
+      <button
+        type="button"
+        onClick={onCancel}
+        aria-label="Cancel editing"
+        className="flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-row-selected"
+      >
+        <X className="size-5" />
+      </button>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs leading-tight text-primary">Editing</p>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+          maxLength={4000}
+          aria-label="Edit your message"
+          // 16px on a phone, like the message box
+          className="w-full bg-transparent text-base text-ellipsis outline-none md:text-body"
+        />
+      </div>
+      <Button type="submit" aria-label="Save" disabled={!text.trim()} className="ml-1 size-12 shrink-0 rounded-lg md:ml-2">
+        <Check className="size-5" />
+      </Button>
+    </form>
+  )
+}
 
 // The white box at the bottom: attach, type a message, then the teal button.
 // With nothing typed, the teal button is the mic: hold to record a voice note.

@@ -30,3 +30,6 @@ class Upload(Base):
     size: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    # Its message was deleted for everyone (D39). The row stays only until the
+    # store has dropped the file, so a store outage can't leave a file behind.
+    erase_pending: Mapped[bool] = mapped_column(server_default="false")

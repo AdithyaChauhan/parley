@@ -53,6 +53,7 @@ function fileLine(chat: ChatSummary, data: FileData, sender: string | null) {
 export function previewText(chat: ChatSummary, myId: string) {
   const last = chat.last_message
   if (!last) return "No messages yet"
+  if (last.deleted) return "This message was deleted"
   if (last.kind === "system" && last.data) return noteText(last.data as SystemData, myId)
   if (last.kind === "file" && last.data) return fileLine(chat, last.data as FileData, last.sender_name)
   if (chat.kind !== "group") return last.preview
