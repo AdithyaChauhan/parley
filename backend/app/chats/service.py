@@ -351,6 +351,7 @@ def list_my_chats(db: Session, me: User, chat_id: uuid.UUID | None = None) -> li
                 # Groups have no "other person", so they show their name.
                 name=other_name or chat.title,
                 last_message=_last_message(last, sender_name),
+                last_seq=chat.last_seq if mine.current else mine.until_seq,
                 unread=unread,
                 other_user_id=other_id,
                 online=status.online,

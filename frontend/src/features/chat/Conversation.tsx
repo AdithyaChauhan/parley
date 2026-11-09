@@ -1,14 +1,16 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type DragEvent } from "react"
-import { ArrowLeft, FolderUp } from "lucide-react"
+import { ArrowLeft, FolderUp, Search } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import { api } from "@/lib/api"
 import { prepareFile, type PreparedFile } from "@/lib/files"
+import { keep, type Kept } from "@/lib/localCopy"
 import { reportRead, sendTyping, windowInFront } from "@/lib/live"
 import { cn } from "@/lib/utils"
 import { EditBox, MessageBox } from "./MessageBox"
 import { MessageMenu, type OpenMenu } from "./MessageMenu"
 import { groupError, memberNames } from "./groupNotes"
 import { MessageBubble, SystemNote, type BubbleActions } from "./MessageBubble"
+import { ChatSearch } from "./SearchResults"
 import { lastSeenText } from "./time"
 import {
   REACTIONS,
@@ -20,6 +22,7 @@ import {
   type ServerMessage,
 } from "./types"
 import { useMessages } from "./useMessages"
+import type { HistoryLoad } from "./useSearch"
 import type { Typist } from "./useTyping"
 
 // Scrolled up less than this counts as "at the bottom": the newest message is on screen
@@ -51,6 +54,10 @@ type ConversationProps = {
   view: NarrowView // below 1280px: what has the shared spot
   listChecks: number // goes up each time the chat list re-checks the server
   lineDown: boolean // the live line dropped or failed: nothing is pushed now
+  jump: number | null // a tapped search result: open at this message number (D40)
+  onJumped: () => void // handled
+  history: HistoryLoad // "Load all my history"
+  onOpenHit: (hit: Kept) => void // a search result in this chat was tapped
 }
 
 // The middle panel: who you're talking to, the messages, and the message box
@@ -70,14 +77,23 @@ export function Conversation({
   view,
   listChecks,
   lineDown,
+  jump,
+  onJumped,
+  history,
+  onOpenHit,
 }: ConversationProps) {
-  const { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, applyChange } =
+  const { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, loadBackTo, applyChange } =
     useMessages(chat.id, myId, unsent, { seq: chat.last_message?.seq ?? 0, checks: listChecks, lineDown })
   const listRef = useRef<HTMLDivElement>(null)
   // How far from the bottom you were when older messages were asked for
   const fromBottom = useRef<number | null>(null)
   // You're at the newest message, so the list keeps the bottom in view
   const atBottom = useRef(true)
+  // The search inside this chat. Its words stay after a tap, so you can look at the next result.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  // A search result that's still loading: go there when its page arrives
+  const goingTo = useRef<number | null>(null)
 
   // A short note above the message box: a file that can't be sent, or a recording tip
   const [hint, setHint] = useState("")
@@ -124,7 +140,9 @@ export function Conversation({
   // with the change's number.
   async function change(message: Message, path: string, method: string, body?: unknown) {
     try {
-      applyChange(await api<ServerMessage>(`/chats/${chat.id}/messages/${message.seq}${path}`, { method, body }))
+      const changed = await api<ServerMessage>(`/chats/${chat.id}/messages/${message.seq}${path}`, { method, body })
+      applyChange(changed)
+      keep([changed]) // the push does this too, unless Redis is down (D24)
     } catch (error) {
       showHint(groupError(error))
     }
@@ -196,6 +214,42 @@ export function Conversation({
     observer.observe(list)
     return () => observer.disconnect()
   }, [])
+
+  // Puts the message in the middle of the list and flashes it. False if it isn't on screen.
+  function goTo(seq: number) {
+    const list = listRef.current
+    const row = list?.querySelector(`[data-seq="${seq}"]`)
+    if (!list || !row) return false
+    atBottom.current = false // or a resize would pull the list back down
+    // By hand, because scrollIntoView can also move the locked page on an iPhone
+    const [rowBox, listBox] = [row.getBoundingClientRect(), list.getBoundingClientRect()]
+    list.scrollTop += rowBox.top - listBox.top - (list.clientHeight - rowBox.height) / 2
+    row.querySelector("[data-bubble]")?.animate(
+      [{ boxShadow: "0 0 0 3px var(--primary)" }, { boxShadow: "0 0 0 3px transparent" }],
+      { duration: 2000, easing: "ease-in" },
+    )
+    return true
+  }
+
+  // A result was tapped. If the message is further up, page back to it first (D40).
+  const runJump = useEffectEvent((seq: number) => {
+    onJumped()
+    if (goTo(seq)) return
+    goingTo.current = seq
+    loadBackTo(seq).then((found) => {
+      if (found) return
+      goingTo.current = null
+      showHint("That message isn't in this chat any more.")
+    })
+  })
+  useEffect(() => {
+    if (jump !== null && !loading) runJump(jump)
+  }, [jump, loading])
+
+  // Older messages arrived: is the one I'm going to among them?
+  useLayoutEffect(() => {
+    if (goingTo.current !== null && goTo(goingTo.current)) goingTo.current = null
+  }, [firstKey])
 
   // "Read" (D20): this chat is showing, the window is in front, and the newest
   // message is on screen. Then tell the server the highest number with no hole
@@ -308,6 +362,14 @@ export function Conversation({
                   : lastSeenText(chat.last_seen)}
             </span>
           </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          aria-label="Search in this chat"
+          className="ml-auto flex size-10 shrink-0 items-center justify-center rounded-lg text-rail-icon hover:text-muted-foreground"
+        >
+          <Search className="size-5" />
         </button>
       </header>
 
@@ -424,6 +486,24 @@ export function Conversation({
           </>
         )}
       </div>
+
+      {searchOpen && (
+        <ChatSearch
+          chat={chat}
+          myId={myId}
+          query={searchQuery}
+          onQuery={setSearchQuery}
+          history={history}
+          onOpen={(hit) => {
+            setSearchOpen(false)
+            onOpenHit(hit)
+          }}
+          onClose={() => {
+            setSearchOpen(false)
+            setSearchQuery("")
+          }}
+        />
+      )}
 
       {/* Dropping files: the screen from the reference design (D8) */}
       {dragging && (

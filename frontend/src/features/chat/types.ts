@@ -63,6 +63,7 @@ export type ChatSummary = {
     data: SystemData | FileData | null
     deleted: boolean // deleted for everyone (D39)
   } | null
+  last_seq: number // the last number I can see, events included: my copy compares with it (D40)
   unread: number
   other_user_id: string | null // the other person in a direct chat, to match presence news
   online: boolean // the other person has Parley open right now (D22)

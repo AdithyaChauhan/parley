@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useState } from "react"
 import { useAuth, type User } from "@/features/auth/useAuth"
 import { api } from "@/lib/api"
+import { keep, openCopy, syncCopy, type Kept } from "@/lib/localCopy"
 import { reportDelivered, shownUpTo, useLiveConnection, useLiveEvents } from "@/lib/live"
 import { ChatColumn } from "./ChatColumn"
 import { Conversation } from "./Conversation"
@@ -9,6 +10,7 @@ import { SidePanel } from "./SidePanel"
 import { isEvent, type ChatSummary, type NarrowView, type ServerMessage } from "./types"
 import { useGroupMembers } from "./useGroupMembers"
 import { useOutbox } from "./useOutbox"
+import { useHistoryLoad } from "./useSearch"
 import { useTyping } from "./useTyping"
 import { useVisibleArea } from "./useVisibleArea"
 
@@ -45,6 +47,8 @@ export function ChatScreen({ user }: { user: User }) {
   const [narrowView, setNarrowView] = useState<NarrowView>("list")
   // Goes up by one each time the chat list is re-checked, so the open chat can re-check with it (D21, D24)
   const [listChecks, setListChecks] = useState(0)
+  // A search result was tapped: the chat opens at that message (D40)
+  const [jump, setJump] = useState<{ chatId: string; seq: number } | null>(null)
   // My unsaved messages per chat, sent one at a time, in order (D21)
   const outbox = useOutbox(user.id)
   // This screen only shows while logged in, so the line opens on log-in and closes on log-out.
@@ -53,6 +57,14 @@ export function ChatScreen({ user }: { user: User }) {
   const typing = useTyping()
   // The screen's size follows the visible part of the page (the keyboard, on a phone)
   useVisibleArea()
+  // "Load all my history", shared by both search boxes
+  const history = useHistoryLoad(chats)
+
+  // This device's copy of my messages, for search (D40). First, so it's open
+  // for everything below.
+  useEffect(() => {
+    openCopy(user.id)
+  }, [user.id])
 
   // My real chats, newest activity first. The first one opens on its own.
   useEffect(() => {
@@ -63,6 +75,7 @@ export function ChatScreen({ user }: { user: User }) {
         setChats(withMyReads(list))
         setOpenId((current) => current ?? list[0]?.id ?? null)
         reportListDelivered(list)
+        syncCopy(list)
       })
       .catch(() => !ignore && setLoadFailed(true))
     return () => {
@@ -80,6 +93,7 @@ export function ChatScreen({ user }: { user: User }) {
         setLoadFailed(false)
         setOpenId((current) => current ?? list[0]?.id ?? null)
         reportListDelivered(list)
+        syncCopy(list)
         setListChecks((n) => n + 1)
       })
       .catch(() => {})
@@ -99,6 +113,11 @@ export function ChatScreen({ user }: { user: User }) {
   function selectChat(id: string) {
     setOpenId(id)
     setNarrowView("chat")
+  }
+
+  function openHit(hit: Kept) {
+    selectChat(hit.chatId)
+    setJump({ chatId: hit.chatId, seq: hit.seq })
   }
 
   // The open chat sent "read": nothing in it is unread any more
@@ -220,6 +239,7 @@ export function ChatScreen({ user }: { user: User }) {
     if (event.type !== "message.new") return
     const message = event.data
     reportDelivered(message.chat_id, message.seq)
+    keep([message], true)
     if (!chats) return // the list is still loading, and will include it
     if (isEvent(message)) {
       messageChanged(message)
@@ -253,6 +273,8 @@ export function ChatScreen({ user }: { user: User }) {
         myName={user.name}
         live={live}
         onLogout={logout}
+        history={history}
+        onOpenHit={openHit}
       />
       {openChat ? (
         <>
@@ -274,6 +296,10 @@ export function ChatScreen({ user }: { user: User }) {
             view={narrowView}
             listChecks={listChecks}
             lineDown={live === "reconnecting"}
+            jump={jump?.chatId === openChat.id ? jump.seq : null}
+            onJumped={() => setJump(null)}
+            history={history}
+            onOpenHit={openHit}
           />
           <SidePanel
             chat={openChat}

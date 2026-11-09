@@ -12,12 +12,15 @@ import {
 } from "lucide-react"
 import { Avatar } from "@/components/Avatar"
 import type { LiveStatus } from "@/lib/live"
+import type { Kept } from "@/lib/localCopy"
 import { pushState, turnOnPush, type PushState } from "@/lib/push"
 import { cn } from "@/lib/utils"
 import { ChatRow } from "./ChatRow"
+import { MessageResults } from "./SearchResults"
 import { NewGroupBox } from "./GroupBoxes"
 import { NewChatBox } from "./NewChatBox"
 import type { ChatSummary } from "./types"
+import type { HistoryLoad } from "./useSearch"
 import type { Typist } from "./useTyping"
 
 type ChatColumnProps = {
@@ -32,6 +35,8 @@ type ChatColumnProps = {
   myName: string
   live: LiveStatus // my live line: green dot when online, else grey
   onLogout: () => void
+  history: HistoryLoad // "Load all my history" (D40)
+  onOpenHit: (hit: Kept) => void // a search result was tapped
 }
 
 // "Turn on notifications" in the gear menu (D26). The browser only asks on
@@ -97,6 +102,8 @@ export function ChatColumn({
   myName,
   live,
   onLogout,
+  history,
+  onOpenHit,
 }: ChatColumnProps) {
   const [search, setSearch] = useState("")
   const [menuOpen, setMenuOpen] = useState(false)
@@ -189,7 +196,7 @@ export function ChatColumn({
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search"
+          placeholder="Search messages on this device"
           // 16px on a phone: an iPhone zooms the whole page when you tap a smaller box
           className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-body"
         />
@@ -287,8 +294,9 @@ export function ChatColumn({
             </button>
           </div>
         )}
-        {chats && chats.length > 0 && shown.length === 0 && (
-          <p className="px-4 py-6 text-sm text-muted-foreground">No chats found</p>
+        {/* While typing: chats by name above, and messages by text below (D40) */}
+        {chats && search.trim() && (
+          <MessageResults query={search} chats={chats} myId={myId} history={history} onOpen={onOpenHit} />
         )}
       </div>
     </section>
