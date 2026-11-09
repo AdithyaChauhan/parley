@@ -429,6 +429,22 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - A message is saved only after its upload finishes (D9). It holds the file's key, name, type and size, and for images the size and a small preview made by the browser. The server never opens files.
 - 10 MB per file. Images (JPEG, PNG, WebP, GIF), documents (PDF, TXT, DOCX, XLSX, PPTX, ZIP) and voice notes (up to 2 minutes). Uploads get D24-style limits. Uploaded but unsent files are removed after a day.
 - Known gap: no backups for files, the same as the database (D30).
+- Decided during T36 (Nov 8): the store is Garage. Its 4 secrets live in Parameter Store under `/parley/prod/`, like the others (D31). Adithya adds them once from his laptop with one command that shows no values. They aren't derived from `JWT_SECRET`, so a leak or rotation of one never touches the other.
+- Agreed and learned in T36 (Nov 8, 2026):
+  - Garage v2.4.1, chosen by measured memory: a 77 MB peak against SeaweedFS's 685 MB, in the same test (5 MB × 60, up and down, 4 at once). Metadata in sqlite, compression off, one node, a 256 MB memory limit and a 5 GB bucket limit, so uploads can't fill the disk the database lives on.
+  - The four secrets are `STORAGE_RPC_SECRET`, `STORAGE_ADMIN_TOKEN`, `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY`. A deploy stops before changing anything if one is missing, and servers refuse Compose's laptop keys.
+  - A small S3 client with no AWS SDK (D29), checked against AWS's published signature example. The signature covers the store's own Host, which Nginx sends, so the browser only sees `/storage/` on our site.
+  - Presigned links last 5 minutes. Uploads sign the size and type, so the store itself refuses anything else, and the server checks them again before saving the message (D9).
+  - A message stores the file's id, not a key. The key is always `chats/<chat>/<file>`, so user input never touches a path.
+  - Download links go only to current members, from the message they joined at (D37). Ex-members keep the previews and the file list, but get 403 on new links.
+  - Documents always download and never open on our site. HTML and SVG aren't allowed. Nginx adds `nosniff` and a sandbox header.
+  - Limits: 60 uploads an hour and 300 download links a minute, per user.
+  - Files have their own queue per chat, so a big upload doesn't hold up a text. A later text can get a lower number than a photo still uploading (an exception to D21's strict order, for files only).
+  - The backends don't wait for the store. Chat works without it, and file routes answer 503.
+  - Unsent files are removed after a day by an hourly job in the worker.
+  - Results: 218 tests (38 new), 11 guards broken on purpose and each caught, and 46/46 real-browser checks.
+  - Known gap: for up to 5 minutes, the sender's upload link can replace their own file with another of the same size and type (a fix is in PLAN's Later list).
+  - Live since Nov 9, 2026 (PR #42). CI (including k8s) and the deploy were green. Idle on the live server: the store used 5.3 MB of its 256 MB, and the server had 1009 MB available. Even at the store's full limit, about 750 MB stays free. Unsigned `/storage/` requests get 403.
 
 ### D39. Reactions, edit and delete (T37)
 - Every change to a message is an event with its own number in the chat (`reaction`, `edit`, `delete`), so catch-up by number brings it (D21). History pages return messages with the latest state applied.
@@ -436,8 +452,26 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Edit: your own text messages, within 15 minutes, marked "edited".
 - Delete for everyone: your own messages, within 1 hour. The server erases the text and the file. "Delete for me" comes later.
 - Unread and notifications count only real messages (text, files, voice). Events and group notes (D37) don't. This replaces D20's "newest number − read_up_to" rule.
+- Agreed and learned in T37 (Nov 9, 2026):
+  - Event rows hold only `target_seq`, never text. The text lives only on the message, so delete really erases it. `state_seq` is the number of the last change, and the app keeps the higher copy, since pushes can arrive out of order.
+  - Each action locks the chat, checks the rules, changes the message and saves the event in one transaction. Repeating an action changes nothing and takes no number. Actions share the send limit (20 per 10 s).
+  - History pages return the latest state with no events, and say which numbers they cover (`low_seq`, `high_seq`), so the app tracks covered stretches instead of hunting for holes. Catch-up returns the events, each with the current target. Pushes use `message.new`.
+  - Events move no bookmarks and notify nobody. A notification job for a message deleted during its 5 s wait is skipped. A later joiner gets the event with `target: null` (D37).
+  - Delete blanks the text and file details, removes the reactions and removes the file from storage. If storage is down, the upload row stays `erase_pending`, and the hourly cleanup finishes the job.
+  - Routes: `PUT` and `DELETE /{seq}/reaction`, `PATCH /{seq}` and `DELETE /{seq}`. Desktop uses hover and touch uses a long press, with "Copy" in the phone menu.
+  - Results: 257 tests (39 new), with each deliberate bug caught, and 14 real-browser checks.
+  - Known and accepted: event rows are never compacted. A tab left open across this deploy shows blank bubbles for events until it reloads. An unread badge moved from another tab can stay a little high until the next 60 s re-check.
+  - Live since Nov 9, 2026 (PR #43, a31cdf9), with CI and the deploy green.
 
 ### D40. Search (T38)
 - Search runs only in the browser (D12). The server has no text search.
 - The app keeps the messages it has seen in IndexedDB, per user, and clears them on log-out. Edits and deletes update the copy.
 - It searches what this device has loaded, and says so. An optional button loads older history.
+- Agreed and learned in T38 (Nov 9, 2026):
+  - The chat list carries `last_seq` (the last number I can see, events included, stopping where a member left). Each chat on the device has a mark meaning "changes up to here are applied here". Live pushes move the mark only when they're the next number. The list's re-check fetches `after=<mark>` only when `last_seq` is ahead, so edits and deletes made while the device was away still reach the copy. Usually that means no extra requests at all.
+  - A deleted message stays as an empty row with no text, and the higher `state_seq` wins, so a late copy can't bring it back.
+  - Log-out deletes the device's database, and other tabs stop writing to it. A session that really ended (401 on refresh) erases it too, and a different user's login removes any leftover.
+  - Text and file names are searchable. Voice notes and group notes aren't. Results are capped at the newest 100, and the app says so.
+  - "Load all my history" fetches one page of 100 at a time with a 250 ms pause. It can be stopped, and it resumes where it stopped.
+  - Results: 261 tests (4 new), and 54 of 54 real-browser checks at three window sizes. No request carried the searched words.
+  - Known and accepted: the copy has no size limit and isn't encrypted on the device. A search reads every row, about 0.5 s at 20,000.
