@@ -21,58 +21,36 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### T36. Files and voice notes (build mode)
-T35 Groups was done on Nov 8 (D37). The briefs for T36, T37 and T38 are below, under "Next briefs". Run them in that order.
+### v2 is built (T35-T38, Nov 8-9, 2026). Last step: Adithya's iPhone session
+Use the live site, with Ana on the laptop (Chrome) and Ben on the iPhone (Safari). About 15 minutes.
 
----
+**Groups**
+1. Ana creates a group with Ben. It appears on the iPhone right away, the header shows the names, and names show above the bubbles.
+2. Messages go both ways, and "Ana is typing..." shows on the iPhone.
 
-## Next briefs (run in order after T35, no planning round in between)
+**Files**
+3. Ben sends a photo from the iPhone: progress shows, it appears on both sides, and tapping it opens it large.
+4. Ben sends a PDF from Files: a card shows, and it downloads on the laptop.
+5. Ben holds the mic, records about 5 s, and lets go: it plays on the laptop. A voice note from Ana plays on the iPhone.
 
-How to run them: each task starts in a new Claude Code chat, from an up-to-date `main`, after the previous PR is merged. Step 0 of every task is to check that the last deploy is green and the live site shows the new version. Adithya brings a report to the planning chat only when Claude Code stops for a decision, or at the end of the batch. Claude Code collects suggested PLAN and DECISIONS text in its report, and the planner folds it all in at the end. iPhone checks for T35-T38 are batched into one session at the end.
+**Reactions, edit, delete**
+6. A long press on Ana's message opens the menu, with no text selection or iOS popup. Reacting with 👍 shows on the laptop.
+7. A long press on Ben's own text, then Edit: the keyboard opens at once, and saving shows "edited" on both sides.
+8. Delete a photo and a text for everyone: both become "This message was deleted" on both sides.
+9. "Copy" in the menu pastes the right text (for example into Notes).
+10. Scrolling the chat doesn't open the menu by accident.
 
-### T36. Files and voice notes (build mode)
-- **Branch:** `feature/files`
-- **Goal:** send images, documents and voice notes in direct chats and groups, like WhatsApp. The rules are in D38.
+**Search**
+11. Search a word from the chat list: the result shows, and tapping it jumps to the message.
+12. Log out on the iPhone and log back in: search starts empty.
 
-**Storage (D38)**
-- An S3-compatible store runs in Compose (dev, CI, and the live server's Compose) and in the kind setup. MinIO's free edition is out (D38), so pick Garage or SeaweedFS. Choose by measured memory on the 2 GB server and by the S3 features you need (presigned URLs). Pin the version (D27), and record the choice and the numbers.
-- The app code talks plain S3 (one small client, settings from the environment, D29), so AWS S3 would work by changing settings only.
-- On the live server the store runs in Compose with a volume on the server's disk. That's no AWS change and no extra cost. Set a memory limit, and measure the server's free memory after the deploy.
+**Finish**
+13. Ana removes Ben from the group: the iPhone shows the chat read-only, with a note.
+14. In Chrome on the iPhone, repeat 3, 5 and 6.
 
-**How files travel**
-- The browser uploads straight to storage with a short-lived presigned URL that the backend hands out after checking membership. Storage is reached through Nginx on the same site (for example `/storage/`), so there's no cross-site setup.
-- The message is saved only after the upload finishes (D9). It carries the file's key, name, type, size and, for images, width and height plus a small preview that the browser makes. The server never opens the file (D12's spirit).
-- Downloads use short-lived presigned URLs, given only to current members of the chat (D37's membership rules apply).
-- Limits: 10 MB per file. Images (JPEG, PNG, WebP, GIF), documents (PDF, TXT, DOCX, XLSX, PPTX, ZIP) and voice notes. Checked on the server and in storage. D24-style upload limits per user.
-- Files that were uploaded but never sent are removed after a day.
+Anything that fails goes to Claude Code as a fix task (`fix/...`), with a screenshot.
 
-**App (D8)**
-- The attach button and file drop come back. Images show inline with the preview first, then the full image. Tapping one opens it large. Documents show as a card with the name, type and size, plus a download button. The side panel's "No files yet" becomes a real list of the chat's files.
-- Voice notes: hold the mic button to record (the browser's MediaRecorder; iPhone Safari records a different format, so test both). Up to 2 minutes, with a player in the bubble (play/pause, length).
-- An upload shows progress and can be cancelled. A failed upload shows "Not sent" with retry, like a text.
-- Works at all three window sizes, and on iPhone Safari (the batched check).
-
-- **Done when:** sending and opening all three kinds works in a direct chat and a group (real browser, three users); a non-member can't get a file URL (test); the size and type limits hold (tests); the store's memory on the live server is measured after the deploy; CI is green; the README's lists are updated; LEARNING.md has the section with a draft "In my words".
-
-### T37. Reactions, edit and delete (build mode)
-- **Branch:** `feature/message-actions`
-- **Goal:** react to a message, edit your own text, and delete your own messages for everyone. The rules are in D39.
-- Each change is an event with its own number in the chat (`kind` = `reaction`, `edit` or `delete`, pointing at the target message). So catch-up by number brings it (D21), and live pushes carry it like any message. History pages return messages with the latest state already applied, so a new device doesn't replay events.
-- Reactions: one per person per message, from 6 emojis (👍 ❤️ 😂 😮 😢 🙏). Tap again to remove. Counts show under the bubble. The emoji button comes back (D8).
-- Edit: your own text messages, within 15 minutes. The bubble shows "edited".
-- Delete for everyone: your own messages, within 1 hour. The server erases the text and the file (from storage too). Everyone sees "This message was deleted". "Delete for me" comes later.
-- Unread and notifications count only real messages (text, files, voice). Events and group notes don't (this updates D20's unread rule, D39). The chat list's preview skips events.
-- Works in direct chats and groups, at all three window sizes. On phones, a long press opens the actions. On desktop, hovering does.
-- **Done when:** all three work live between two browsers and after a reconnect (catch-up); the time limits and "own messages only" hold (tests); unread counts ignore events (test); CI is green; LEARNING.md has the section with a draft "In my words".
-
-### T38. Search on your device (build mode)
-- **Branch:** `feature/search`
-- **Goal:** search your messages without the server ever searching them (D12). The rules are in D40.
-- The app keeps the messages it has seen in IndexedDB, per user, and clears them on log-out. Edits and deletes update the copy.
-- Search across chats from the top of the chat list, and inside a chat from its header. Results show the chat, the sender and the matching text, with the match highlighted. Tapping one jumps to the message, loading older pages if needed.
-- An honest note in the search box: it searches messages this device has loaded. An optional "Load all my history" button fetches older pages (D24-style pacing).
-- Works at all three window sizes.
-- **Done when:** search finds messages across chats and inside a chat, stays right after edits and deletes, is empty after log-out (tests or browser checks); no server route searches text; CI is green; the README's lists are updated; LEARNING.md has the section with a draft "In my words".
+**After that:** v2 is done. What's left is optional: T33 (the EKS run, only before Feb 2, 2027), the small items in "Later", or the bigger "Later" phases (end-to-end encryption, Status, calls).
 
 ---
 
@@ -140,11 +118,11 @@ How to run them: each task starts in a new Claude Code chat, from an up-to-date 
 ### Phase 11: Show it
 - [x] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
 
-### Phase 12: v2 (from Nov 7, 2026; target Nov 10, one PR per task)
+### Phase 12: v2 (Nov 7-9, 2026, one PR per task; iPhone session pending)
 - [x] T35. Groups: one message fans out to many people (D37). Brings back the "..." menu ("New group") and the members view
-- [ ] T36. Files and voice notes: images, documents and voice notes in S3-style storage (D38). Brings back attach and file drop
-- [ ] T37. Reactions, edit and delete (D39). Brings back the emoji button
-- [ ] T38. Search, only on your own device (D12, D40)
+- [x] T36. Files and voice notes: images, documents and voice notes in S3-style storage (D38). Brings back attach and file drop
+- [x] T37. Reactions, edit and delete (D39). Brings back the emoji button (PR #43)
+- [x] T38. Search, only on your own device (D12, D40)
 
 ### Later
 - End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
@@ -159,3 +137,5 @@ How to run them: each task starts in a new Claude Code chat, from an up-to-date 
 - Small: a page reload during overload shows the log-in screen when its refresh gets a 503. Wait for `Retry-After` and try again instead.
 - More capacity, if ever needed (the limit is now about one core per copy): a third copy, autoscaling on Kubernetes (HPA), or `uvicorn[standard]`. A cheaper refusal (for example in Nginx) could also stop accepted messages falling past the limit. None of these is measured yet.
 - Small: balance HTTP and live lines separately. `least_conn` counts WebSockets, so a 513/487 split sent most HTTP to one copy (D36). Options: a separate upstream for `/api/live`, or round robin for plain HTTP. Not measured.
+- Small: stop a sender from replacing their own sent file during the 5-minute upload link (D38). For example, copy it to a final key when the message is saved, or refuse overwrites if Garage supports that.
+- Small: a size limit or a word index for search's copy on the device (today a search reads every row, about 0.5 s at 20,000). Rethink the copy when end-to-end encryption comes, since it isn't encrypted on the device (D40).

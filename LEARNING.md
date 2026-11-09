@@ -1710,3 +1710,32 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Why unread changed: a reaction shouldn't light up a badge. Unread now counts real messages only, not events or group notes.
 - What I'd check first if it broke: a change that shows for me but not for others means the push failed, so I'd look at Redis. A chat that keeps calling catch-up means the page's `low_seq` and `high_seq` aren't joining up.
 - What still confuses me: reaction rows pile up forever, even when someone taps on and off. It's fine at this size, but a busy chat would want a way to compact old events.
+
+---
+
+### Task 38: Search on your device
+**What was built**
+- `frontend/src/lib/localCopy.ts`: this device's copy of the messages it has seen, in IndexedDB. One database per user, removed on log-out. It keeps only what search needs: the text (or a file's name), who, when, and the message's `state_seq`.
+- `frontend/src/features/chat/useSearch.ts`: searching with a short pause for typing, and the state of the "Load all my history" button.
+- `frontend/src/features/chat/SearchResults.tsx`: the results under the chat list, the search inside a chat, the highlight and the honest note.
+- `frontend/src/features/chat/Conversation.tsx` and `useMessages.ts`: the search button in the header, and jumping to a message, paging back to it if needed.
+- `backend/app/chats/schemas.py` and `service.py`: one new number in the chat list, `last_seq`. It's the only backend change, and it searches nothing.
+- `backend/tests/test_search_rules.py`: no route searches text, and `last_seq` counts changes and stops where a member left.
+
+**New ideas**
+- IndexedDB: a real database inside the browser, per website. It survives a reload, which memory doesn't, and it holds far more than localStorage.
+- Tombstone: a deleted message stays as an empty row. It can't match anything, and its `state_seq` stops an older copy, still on its way, from bringing the text back.
+- A sync mark: per chat, "every change up to this number has been applied here". Live pushes move it only when they're the very next number, so a gap can't be skipped by accident.
+- `versionchange`: the browser tells every open tab that a database is about to be removed. Each tab closes its connection and stops writing, so a log-out in one tab can't be undone by another.
+- Escaping a search: what you type goes into a regular expression, so `$5.00` must be escaped or the dot means "any character".
+- Scrolling by hand: `scrollIntoView` can also move the page around it, and the chat page is locked on a phone. So the app works out the list's own `scrollTop`.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- How search works: the app keeps a copy of every message it has seen in the browser's IndexedDB, and search only reads that copy. The server never gets the words, so it still can't read or search text (D12).
+- Why it says "this device": a new phone only has what it has loaded. The app says so instead of pretending, and "Load all my history" fetches the older pages one at a time, with a pause, so it never crowds out the chat.
+- How an edit or delete reaches the copy: a live change updates it straight away. A deleted message becomes an empty row, so it can't be found and a late copy can't bring it back.
+- The catch I hit: if I was away, a delete in a chat I didn't open would stay searchable. The chat list skips events, so nothing told the app. I added `last_seq`, and the app asks for "everything after my mark" only for chats that moved.
+- What happens on log-out: the whole database is deleted, and other open tabs are told to let go. If a session just runs out and someone else logs in, their login removes what was left.
+- Jumping to a result: the app loads older pages until the message is there, then scrolls it to the middle and flashes it. Nothing there counts as read unless you're at the bottom.
+- What I'd check first if it broke: in Chrome's Application tab, is there a `parley-copy-` database with rows? If there are no rows, the saving is broken. If rows exist but results are empty, the search is.
+- What still confuses me: the copy has no size limit and isn't encrypted. With about 20,000 messages a search takes about half a second, so a heavy user would want an index of words. When end-to-end encryption comes, this copy will be the only readable text, so it will need thought.

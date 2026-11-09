@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Logo } from "@/components/Logo"
 import { api, refresh, setAccessToken, setOnLoggedOut } from "@/lib/api"
+import { eraseCopy } from "@/lib/localCopy"
 import { resendPush, turnOffPush } from "@/lib/push"
 import { AuthContext, type Auth, type User } from "./useAuth"
 
@@ -13,7 +14,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // api.ts calls this when a refresh says the session is over.
-    setOnLoggedOut(() => setUser(null))
+    setOnLoggedOut(() => {
+      eraseCopy()
+      setUser(null)
+    })
 
     async function restore() {
       try {
@@ -44,6 +48,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login: (email, password) => startSession("/auth/login", { email, password }),
     signup: (name, email, password) => startSession("/auth/signup", { name, email, password }),
     async logout() {
+      // First, so nothing is written after this: this device forgets my messages (D40)
+      eraseCopy()
       // First, while we still have the access token: stop this browser
       // getting this user's notifications (a shared computer, D26).
       await turnOffPush().catch(() => {})

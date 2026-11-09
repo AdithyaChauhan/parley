@@ -227,7 +227,7 @@ export function MessageBubble({
   if (mine) {
     const unsaved = message.status === "sending" || message.status === "waiting"
     return (
-      <div className="flex flex-col items-end gap-2">
+      <div data-seq={message.seq ?? undefined} className="flex flex-col items-end gap-2">
         <p className="flex items-center gap-1 text-label">
           You, {time} {edited}
           {/* Waiting also gets the clock: it's still on its way */}
@@ -259,7 +259,7 @@ export function MessageBubble({
   }
 
   return (
-    <div className="flex items-end gap-3">
+    <div data-seq={message.seq ?? undefined} className="flex items-end gap-3">
       {/* Beside the bubble, not beside the counts under it */}
       <div className={cn("shrink-0", REACTIONS.some((emoji) => message.reactions[emoji]?.length) && "mb-8")}>
         <Avatar name={senderName} tint={senderTint} size="sm" />

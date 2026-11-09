@@ -57,6 +57,9 @@ class ChatOut(BaseModel):
     name: str
     # Empty (null) for a chat with no messages yet.
     last_message: LastMessageOut | None
+    # The last number I can see, events included (last_message skips them). The
+    # app compares it with its own copy, to catch edits and deletes it missed (D40).
+    last_seq: int
     unread: int
     # The other person in a direct chat (null for groups), so the app can match
     # their live "presence" news to this row.

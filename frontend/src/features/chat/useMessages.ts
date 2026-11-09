@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { api } from "@/lib/api"
+import { keep } from "@/lib/localCopy"
 import { reportDelivered, useLiveEvents } from "@/lib/live"
 import { fromServer, isEvent, type Message, type MessagePage, type ServerMessage } from "./types"
 
@@ -111,6 +112,7 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
   // Every page lists the current members, so it also says who counts for the
   // ticks now: someone added or removed is picked up here (D37).
   function takePage(page: MessagePage) {
+    keep(page.messages) // search runs on this device's copy (D40)
     setSaved((current) => merge(page.messages.filter((row) => !isEvent(row)).map(fromServer), current))
     // Only catch-up pages have changes in them
     for (const row of page.messages) if (row.target) applyChange(row.target)
@@ -234,5 +236,28 @@ export function useMessages(chatId: string, myId: string, unsent: Message[], lis
     }
   }
 
-  return { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, applyChange }
+  // Page up until #seq is here, for a tapped search result (D40). False if it never turned up.
+  async function loadBackTo(seq: number) {
+    let oldest = saved[0]?.seq ?? null
+    if (oldest === null || !hasMore) return false
+
+    loadingOlder.current = true
+    try {
+      while (oldest > seq) {
+        const page: MessagePage = await api(`/chats/${chatId}/messages?before=${oldest}&limit=100`)
+        takePage(page)
+        setHasMore(page.has_more)
+        if (page.messages.some((message) => message.seq === seq)) return true
+        if (!page.has_more || page.messages.length === 0) return false
+        oldest = page.messages.at(-1)?.seq ?? oldest
+      }
+      return false
+    } catch {
+      return false
+    } finally {
+      loadingOlder.current = false
+    }
+  }
+
+  return { messages, gapFreeSeq, theirDelivered, theirRead, hasMore, loading, failed, loadOlder, loadBackTo, applyChange }
 }
