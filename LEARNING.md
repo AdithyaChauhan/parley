@@ -1739,3 +1739,31 @@ The two bookmark columns (delivered_up_to, read_up_to) exist but nothing writes 
 - Jumping to a result: the app loads older pages until the message is there, then scrolls it to the middle and flashes it. Nothing there counts as read unless you're at the bottom.
 - What I'd check first if it broke: in Chrome's Application tab, is there a `parley-copy-` database with rows? If there are no rows, the saving is broken. If rows exist but results are empty, the search is.
 - What still confuses me: the copy has no size limit and isn't encrypted. With about 20,000 messages a search takes about half a second, so a heavy user would want an index of words. When end-to-end encryption comes, this copy will be the only readable text, so it will need thought.
+
+### Task 39: Status
+**What was built**
+- `backend/app/status/models.py`: two tables. `statuses` holds one text or photo with its `posted_at` and `expires_at` (24 hours later). `status_views` holds who saw which status, once each.
+- `backend/app/status/service.py`: who sees what. `audience()` lists everyone I have a direct chat with, `can_see()` checks one status, and `quote_for_reply()` makes the small copy a reply carries.
+- `backend/app/status/routes.py`: the list, posting (text, or a photo after its upload), "I saw it", "who saw mine", a photo link and delete. Each change pushes one small `status` event, and apps load the list again.
+- `backend/app/status/cleanup.py`: the hourly job in the worker that removes statuses whose 24 hours are up, their photos, and photos never posted.
+- `backend/app/messages/routes.py`: a send may carry `status_id`, and the message then holds a copy of that status.
+- `backend/migrations/versions/d2f6b8a1c3e5_statuses.py`: the two new tables (expand only).
+- `backend/tests/test_status.py`: 31 tests: who sees what, retries, views, running out, photos, delete and replies.
+- `frontend/src/features/status/`: the Status column, the full-screen viewer (bars, tap, hold, reply, viewers, delete), the composer for text or a photo, and the hook that keeps the list fresh.
+- `frontend/src/features/chat/IconRail.tsx` and `ChatColumn.tsx`: the eye icon on the rail, and Chats/Status tabs on a phone.
+- `frontend/src/features/chat/MessageBubble.tsx` and `useOutbox.ts`: a reply to a status goes through the normal outbox and shows the status above the words.
+
+**New ideas**
+- Expiry by reading, cleanup by a job: every read asks "has it run out?", so a status vanishes at the exact moment. The hourly job only tidies up the rows and photos afterwards.
+- Audience from relationships: there's no contacts list, so "people I have a direct chat with" decides who sees a status. It's worked out when you ask, so a new chat shows statuses at once.
+- A thin push: the live event only says "Ana's statuses changed". The app asks the list again, so the event can't carry anything stale or private.
+- A snapshot in the reply: the reply keeps a copy of the status, so it still makes sense after the status is gone.
+
+**In my words** (draft by Claude Code; Adithya to review)
+- What Status does: you post a text on a color or a photo, and it disappears after 24 hours. Everyone you have a 1:1 chat with sees it, the ring is teal until they've watched it, and you can see who viewed yours.
+- How expiry works: each status saves `expires_at`, 24 hours after posting, and every read checks it. So it's gone on time even if the cleanup job is late. The worker's hourly job then deletes the rows and the photos from storage.
+- Why the photo is uploaded first: like chat files, the browser uploads straight to storage, and the status only becomes visible once the server has checked the upload is really there and the right size and type.
+- How a retry stays safe: the app makes the status id, so sending the same post twice returns the first copy and tells nobody twice. A view is one row per person, so watching again doesn't count again.
+- How replies work: a reply is a normal message in our chat, sent through the same outbox, with a small copy of the status. If the status has already gone, it's sent as a plain message, never refused.
+- What I'd check first if it broke: GET `/api/status` for the person who should see it. An empty list means there's no direct chat between them, or `expires_at` has passed. If the list is right but the ring doesn't update, the `status` live event isn't arriving.
+- What still confuses me: the server can read status text. That's fine for now, since end-to-end encryption covers only 1:1 messages, but statuses would need their own plan to be private.

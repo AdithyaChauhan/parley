@@ -71,11 +71,12 @@ The fake file numbers are removed (T27). Every chat's side panel shows "No files
 Kafka is not used: RabbitMQ fits our jobs and is lighter.
 
 ### D11. AWS later
-Kubernetes runs on the laptop. A short EKS run happens only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out).
+Kubernetes runs on the laptop. A short EKS run happens only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out). Dropped for now (Nov 28, 2026).
 
 ### D12. Encryption is a later phase
 - 1:1 text only, one device per user, Web Crypto (ECDH + AES-GCM), safety-number check.
 - From day one, the server only passes message text along and never reads it: no message text in notifications, no server-side search.
+- The 1:1 text phase is T41 (D43).
 
 ### D13. Git workflow
 - `main` always works.
@@ -89,6 +90,7 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
 - Planning chat (Claude on claude.ai): writes the plan, task briefs and decisions.
 - Claude Code (build mode from Nov 4, 2026): builds, checks and writes up each task end to end, including a draft "In my words". It decides small clashes itself and lists them in its report. It stops only for money, AWS changes, deleting data, security trade-offs, going against a D-entry, or anything that can't be undone. It never commits, pushes or merges. Adithya can write a file himself whenever he wants.
 - Only the planning chat changes PLAN.md and DECISIONS.md. Adithya copies the new versions into the repo.
+- From Nov 28, 2026: when Adithya asks, Claude Code may set a task's scope from defaults he accepts (T39 Status). The planner records it in PLAN and DECISIONS afterwards.
 
 ### D15. Database access style
 - SQLAlchemy 2.x in normal (sync) mode for now: simpler to learn and debug. We revisit async only if load tests (T31) show a need. Revisited after T31 (D34): not needed, since the limit is CPU (about one core per copy), which async wouldn't lift.
@@ -475,3 +477,38 @@ Kubernetes runs on the laptop. A short EKS run happens only if ready before the 
   - "Load all my history" fetches one page of 100 at a time with a 250 ms pause. It can be stopped, and it resumes where it stopped.
   - Results: 261 tests (4 new), and 54 of 54 real-browser checks at three window sizes. No request carried the searched words.
   - Known and accepted: the copy has no size limit and isn't encrypted on the device. A search reads every row, about 0.5 s at 20,000.
+
+### D41. Status (T39)
+- A status is a text (1-700 characters, on one of 6 colors) or a photo with an optional caption. It lasts 24 hours from posting.
+- Everyone I have a direct chat with sees mine, and I see theirs. It's worked out on each read, so there's no contacts list or privacy setting. Sharing only a group doesn't share statuses.
+- Photos follow D38: a signed upload link (size and type), and the server checks the stored file before the status becomes visible. Keys are ids only (`status/<user>/<status>`), and 5-minute links go only to people who may see it.
+- The app makes the status id, so a retried post is saved once and pushed once.
+- Every read checks `expires_at`, so a status disappears on time. The worker's hourly job removes expired rows and photos, plus photos never posted after a day. The poster's delete takes it down for everyone at once and erases the photo (or the hourly job does, if the store is down).
+- Views: one row per viewer per status. Your own views don't count, and only the poster sees who viewed.
+- Live: one thin event, `{"type":"status","data":{"user_id","change":"new|gone|viewed"}}`, goes to the poster's people and own tabs. Apps then reload `GET /api/status` (also on `hello`). Statuses never notify.
+- A reply is a normal text in our direct chat, through the outbox, with `status_id`. The server stores a small copy (kind, first 100 characters, color, preview), so it still shows after the status is gone. If it can't be quoted (gone, my own, or another chat's), it's sent plain, never refused.
+- Status text and photos are readable by the server (they're not end-to-end encrypted). No backups, like D30 and D38.
+- Limits: 30 posts an hour and 300 views a minute, per user. Photo uploads share the upload limit, and photo links share the download-link limit.
+- The rail's eye icon is back (D8). Phones switch with Chats/Status tabs at the top of the list, not a bottom bar (D8). The viewer and composer are full screen at every size. A text shows for 5 s and a photo for 6 s once loaded, and holding pauses.
+- Results (Nov 28, 2026): 292 tests (31 new), 4 deliberate bugs each caught, and 39/39 real-browser checks at three window sizes.
+
+### D42. Voice and video calls (T40)
+- 1:1 voice and video calls between direct-chat partners, with WebRTC in the browser. Group calls come later.
+- Signaling (ring, accept, decline, offer, answer, ICE candidates, hang up) travels over the live line, through Redis like every push (D19, D23). Every signal carries a `call_id`. The server checks that the two share a direct chat, and keeps who's in a call in Redis with a timer, so a second call gets "busy".
+- Ringing happens only while the callee has Parley open. Every open tab rings, the first to answer takes the call, and the others stop. No answer within 30 s is a missed call.
+- Each call leaves one `call` note in the chat: voice or video, missed or answered, and its length. A missed call counts as unread and sends a push with no text, "Missed call from Ana" (D12, D26). An answered call doesn't (this extends D39).
+- Media goes straight between the two browsers when it can, and through a TURN relay when it can't (strict networks, mobile data). Either way, WebRTC encrypts it (DTLS-SRTP), so the relay can't see or hear it.
+- The relay is coturn, pinned (D27), in Compose on the same EC2 server, with host networking. It listens on 3478 (UDP and TCP) and relays on a small UDP range, which the security group opens. That's an AWS change, so Claude Code shows the Terraform plan and cost and waits for Adithya's OK (D30). Locally and in kind, calls connect directly, with no relay.
+- TURN logins are short-lived (about 1 hour), made by the backend from a shared secret (coturn's `use-auth-secret`). The secret lives in Parameter Store (D31), added by Adithya with one command that shows no value.
+- The relay is locked down. It refuses to relay to private, loopback and link-local addresses, including the EC2 metadata address (169.254.169.254) and Docker's networks. It has no admin CLI, and it has per-user and total quotas. EC2 sees only its private address, so coturn's `external-ip` maps it to the Elastic IP.
+- Known limits: no ringing while Parley is closed (a web app can't get VoIP pushes). Relayed calls use the server's bandwidth. The signaling passes through our server, so a dishonest server could swap the call's keys; nothing checks them yet.
+
+### D43. End-to-end encryption for 1:1 text (T41)
+- Scope: new text messages in direct chats, including edits. Files, voice notes, groups, status, reactions and call notes stay as they are (D12). Messages sent before T41 stay plain.
+- One device per person. Each login creates a new key pair in the browser (ECDH P-256, Web Crypto). The private key is non-extractable and stays in that browser's IndexedDB. Only the public key goes to the server, and only someone you share a direct chat with can fetch it. Log-out deletes the key, like D40's copy.
+- Each direct chat's key comes from ECDH between the two people's keys, through HKDF with the chat id. Each message is AES-GCM with a fresh random IV, with the chat id, sender and `client_msg_id` bound in as extra data, so a ciphertext can't be moved to another chat or sender.
+- The server stores only the ciphertext and IV, never the text, and checks only the size. Chat-list previews and search are decrypted in the app. Search's copy on the device holds plain text (D40).
+- A new login replaces the person's public key. Messages sent to the old key show "Not readable on this device". The app remembers each partner's key fingerprint and shows "Ben's security code changed" itself, without trusting a note from the server. A browser whose key was replaced says so and asks you to log in again there.
+- If the partner has no key yet (they haven't logged in since T41), messages go plain and the chat says so. Once both have keys, everything new is encrypted, and a banner at the top of the chat says so.
+- Safety numbers: 60 digits made from both public keys, shown in the side panel and the same on both screens. Comparing them in person or on a call proves nobody swapped the keys.
+- Known limits, stated plainly in the README: there's no forward secrecy (the same two keys protect the chat until a new login). The web app's code comes from our server, so a dishonest server could serve code that leaks keys. The server still sees who talks to whom, and when.

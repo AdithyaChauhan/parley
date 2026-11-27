@@ -20,6 +20,7 @@ A real-time chat web app, like WhatsApp Web, built to learn and show backend sys
 - Messages arrive live, with ticks: sent, delivered (grey ✓✓) and read (teal ✓✓)
 - Photos, documents and voice notes, up to 10 MB, with progress and cancel. Files go straight between the browser and storage on short-lived signed links, and the server never opens them
 - Reactions, editing your text for 15 minutes, and deleting your messages for everyone for 1 hour. A deleted message's text and file are really erased, and every change is caught up by number like a message
+- Status: a text or a photo that disappears after 24 hours, seen by everyone you have a 1:1 chat with. You see who viewed yours, and a reply lands in your chat with a small copy of the status
 - Search across chats and inside a chat, with a jump to the message. It runs only in the browser, on the messages this device has loaded, the server never searches text, and the copy is wiped on log-out
 - "typing...", online and "last seen"
 - Offline sends wait in order and go out when the line is back, never twice. Missed messages are caught up by number

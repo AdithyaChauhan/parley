@@ -21,7 +21,83 @@ Parley is a real-time chat web app, like WhatsApp Web. It's a portfolio project 
 
 ## You are here
 
-### v2 is built (T35-T38, Nov 8-9, 2026). Last step: Adithya's iPhone session
+### T40. Voice and video calls (build mode)
+- **Branch:** `feature/calls`
+- **Goal:** 1:1 voice and video calls between direct-chat partners, like WhatsApp Web. The rules are in D42.
+- Target for T40 and T41 together: Dec 10, 2026.
+
+**Step 1: the AWS part, first (needs Adithya's OK)**
+- Prepare the Terraform change for the security group: 3478 UDP and TCP, plus the relay's small UDP range. Also prepare the one command that adds the TURN secret to Parameter Store without showing it (D31).
+- Show the plan in plain words, with the cost: the rules are free, and relayed calls use data transfer. Ask for the OK at the very start, then carry on with everything else while you wait. Apply nothing before the OK (D30).
+
+**Backend**
+- Signaling events on the live line, through Redis (D19, D23): ring, accept, decline, offer, answer, ICE candidates and hang up, each with a `call_id`.
+- Checks: only direct-chat partners can call each other, one call at a time per person ("busy", kept in Redis with a timer), a 30 s ring timeout, and D24-style limits on starting calls.
+- One `call` note per call in the chat: voice or video, missed or answered, and its length. A missed call counts as unread and sends a push with no text (D12, D26).
+- A route for short-lived TURN logins (about 1 hour), made from the shared secret (coturn's `use-auth-secret`).
+- On the live server: coturn in `docker-compose.prod.yml`, pinned (D27), with host networking, a memory limit and D42's lockdown settings. EC2 only sees its private address, so set `external-ip` to the Elastic IP. The deploy stops early if the TURN secret is missing. Locally and in kind, calls connect directly, with no relay.
+
+**App**
+- The calls icon comes back (D8): voice and video buttons in a direct chat's header.
+- Incoming call: every open tab rings with accept and decline, the first tab to answer takes the call, and the others stop.
+- In a call: mute, camera on/off, hang up, a timer and a small self-view. Full screen on phones. Clear messages when the mic or camera is blocked.
+- If the live line drops mid-call, the call keeps going. If the network changes, the app restarts ICE.
+- Call notes in the chat ("Missed voice call", "Video call, 4:12") with a call-back button.
+- Works at all three window sizes (D8).
+
+**Checks**
+- Tests:
+  - a stranger can't call
+  - busy
+  - timeout → a missed note and a push job
+  - one note per call
+  - TURN logins expire
+- Real browser: two headless Chrome users with a fake camera and mic. Cover a voice call, a video call, decline, missed, busy, hanging up from either side, two tabs ringing, and the live line dropping mid-call.
+- After the merge (read-only, with no login): a STUN request to the live server's 3478 UDP gets an answer.
+- Add to the batched iPhone list: the iPhone on mobile data (Wi-Fi off) calls the laptop, first voice and then video (this forces the relay). The iPhone answers a call from the laptop. Mute and camera-off work.
+
+- **Done when:**
+  - The AWS change is applied after Adithya's OK.
+  - Calls work in the real-browser checks, and the new and old tests pass.
+  - The STUN check passes on the live site.
+  - CI is green, the README's lists are updated, and LEARNING.md has the section with a draft "In my words".
+
+---
+
+## Next brief (after T40 is merged)
+
+### T41. End-to-end encryption for 1:1 text (build mode)
+- **Branch:** `feature/e2ee`
+- **Goal:** new 1:1 text messages can be read only on the two people's devices. The rules are in D43.
+- **Keys:**
+  - Each login creates a key pair in the browser (Web Crypto, ECDH P-256). The private key is non-extractable and kept in IndexedDB. The public key goes to the server.
+  - Only someone you share a direct chat with can fetch your public key.
+  - Log-out deletes the key.
+- **Messages:**
+  - The app encrypts before sending. The server stores only the ciphertext and IV, with the text empty, and checks only the size.
+  - History, catch-up and pushes carry the ciphertext. The app decrypts it for the bubbles, the chat-list preview and search's copy on the device (D40).
+  - An edit re-encrypts the message. A delete erases the ciphertext.
+- **Key changes:**
+  - The app remembers each partner's key fingerprint. When it changes, the app itself shows "Ben's security code changed" in the chat.
+  - Messages sent to an old key show "Not readable on this device".
+  - A browser whose key was replaced by a newer login says so, and asks you to log in again there.
+- **Partner without a key** (hasn't logged in since T41): messages go plain, and the chat says so. Once both have keys, everything new is encrypted, and a banner at the top of the chat says so.
+- **Safety number:** 60 digits made from both public keys, shown in the side panel. It's the same on both screens.
+- Older plain messages stay as they are.
+- **README:** an honest "What end-to-end encryption covers here" section with D43's limits.
+- **Checks:**
+  - Tests: the server never stores text for an encrypted message, oversized ciphertext is refused, and only partners can fetch a key.
+  - Real browser: encrypted messages both ways. Check the dev database directly to prove it holds no readable text. Also check:
+    - a new login on one side gives "Not readable on this device" there and "security code changed" on the other
+    - the safety numbers match
+    - search finds encrypted messages on the device
+    - edit and delete still work
+  - Add to the batched iPhone list: the banner and matching safety numbers, then log out and back in on the iPhone.
+- **Done when:** all of the above pass, CI is green, the README section is written, and LEARNING.md has the section with a draft "In my words".
+
+---
+
+## Batched iPhone session (T35-T41, postponed by Adithya on Nov 28)
 Use the live site, with Ana on the laptop (Chrome) and Ben on the iPhone (Safari). About 15 minutes.
 
 **Groups**
@@ -48,9 +124,22 @@ Use the live site, with Ana on the laptop (Chrome) and Ben on the iPhone (Safari
 13. Ana removes Ben from the group: the iPhone shows the chat read-only, with a note.
 14. In Chrome on the iPhone, repeat 3, 5 and 6.
 
-Anything that fails goes to Claude Code as a fix task (`fix/...`), with a screenshot.
+**Status (T39)**
+15. Ben posts a photo status from the iPhone's camera roll, and a text status.
+16. Ana watches both on the laptop. Ben sees "1 view", and Ana is listed under "Viewed by".
+17. On the iPhone: tapping right or left moves between statuses, holding pauses, and the reply box opens the keyboard without the status running on.
+18. A reply shows in the chat with the status quote.
 
-**After that:** v2 is done. What's left is optional: T33 (the EKS run, only before Feb 2, 2027), the small items in "Later", or the bigger "Later" phases (end-to-end encryption, Status, calls).
+**Calls (T40)**
+19. With the iPhone on mobile data (Wi-Fi off), call the laptop: voice first, then video (this uses the relay).
+20. The iPhone answers a call from the laptop.
+21. Mute and camera-off work on the iPhone.
+
+**Encryption (T41)**
+22. Ben's chat with Ana shows the encryption banner, and the safety numbers match on both screens.
+23. Log out and back in on the iPhone: older encrypted messages show "Not readable on this device", and Ana sees "Ben's security code changed".
+
+Anything that fails goes to Claude Code as a fix task (`fix/...`), with a screenshot.
 
 ---
 
@@ -113,7 +202,7 @@ Anything that fails goes to Claude Code as a fix task (`fix/...`), with a screen
 
 ### Phase 10: Kubernetes
 - [x] T32. Run Parley on local Kubernetes (with liveness probes, so a stuck copy restarts by itself, D34, D35)
-- [ ] T33. Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour). It can slot in between v2 tasks, any time before Feb 2. Set RabbitMQ's memory alarm there (D35)
+- [ ] T33. Dropped for now (Nov 28, 2026). Optional, only if ready before the AWS free plan ends (Feb 2, 2027, or when the credits run out): short EKS run with Terraform, and record a demo. Tear it all down the same day with `terraform destroy` (the cluster costs money every hour). It can slot in between v2 tasks, any time before Feb 2. Set RabbitMQ's memory alarm there (D35)
 
 ### Phase 11: Show it
 - [x] T34. README with an architecture diagram, screenshots, a demo video and the load-test results, plus a short "How I built this" section (planned with Claude, coded with Claude Code; Adithya made the decisions and reviewed the work; up to T31 he also tested every change himself, and from the load fix on (build mode) Claude Code ran the checks; LEARNING.md shows what he learned). First re-run load tests b and d with other apps closed, for clean numbers (the Nov 6 runs had Windows paging)
@@ -124,9 +213,13 @@ Anything that fails goes to Claude Code as a fix task (`fix/...`), with a screen
 - [x] T37. Reactions, edit and delete (D39). Brings back the emoji button (PR #43)
 - [x] T38. Search, only on your own device (D12, D40)
 
+### Phase 13: Add-ons (from Nov 28, 2026; target Dec 10, one PR per task)
+- [x] T39. Status: 24-hour text and photo statuses for direct-chat partners, with views and replies (D41). Brings back the eye icon. Scope set by Claude Code from defaults Adithya accepted
+- [ ] T40. Voice and video calls, 1:1, with WebRTC and a TURN relay (D42). Brings back the calls icon
+- [ ] T41. End-to-end encryption for 1:1 text (D12, D43)
+
 ### Later
-- End-to-end encryption phase: 1:1 text, one device, safety numbers (see D12) (chat-list previews then move to the app, since the server can't read the text)
-- Maybe later: Status (24-hour stories, which bring back the eye icon: a good topic for expiry and fan-out), voice and video calls (WebRTC, a big topic on its own, which bring back the calls icon).
+- Maybe later: group calls; encrypting files, voice notes, groups and status; more than one device per person (D43).
 - Not planned: Dashboard, Tasks and Stats (they came from the reference design, not from WhatsApp), the "available" pill, and contacts sync.
 - Optional: move notifications into their own service
 - Small phone polish, only if wanted: a slimmer phone chat header (plain back arrow, 32 px avatar, 18 px name, 56 px tall). UI/UX polish isn't a priority.

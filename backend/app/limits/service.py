@@ -36,12 +36,15 @@ GROUP_CREATE = Rule("group_create", 10, 60 * 60)  # per user (D37)
 GROUP_CHANGE = Rule("group_change", 30, 60)  # add, remove, rename, make admin, leave: per user (D37)
 UPLOAD = Rule("upload", 60, 60 * 60)  # new uploads, per user (D38)
 FILE_URL = Rule("file_url", 300, 60)  # download links, per user: a chat full of photos asks for many (D38)
+STATUS_POST = Rule("status_post", 30, 60 * 60)  # new statuses, per user (D41)
+STATUS_VIEW = Rule("status_view", 300, 60)  # "I saw it", per user: one per status watched (D41)
 
 # Each rule's 429 count shows 0 on /metrics from the start. Prometheus counts
 # "how many lately" from the change between two visits, so a rule that first
 # shows up at 1 would hide its first 429.
 for _rule in (
     SEND, LOGIN_EMAIL, LOGIN_IP, SIGNUP_IP, START_CHAT, TICKET, PUSH_SUBSCRIBE, GROUP_CREATE, GROUP_CHANGE, UPLOAD, FILE_URL,
+    STATUS_POST, STATUS_VIEW,
 ):
     metrics.RATE_LIMITED.labels(_rule.name)
 

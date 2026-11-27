@@ -19,6 +19,7 @@ import { ChatRow } from "./ChatRow"
 import { MessageResults } from "./SearchResults"
 import { NewGroupBox } from "./GroupBoxes"
 import { NewChatBox } from "./NewChatBox"
+import { SectionTabs, type Section } from "@/features/status/SectionTabs"
 import type { ChatSummary } from "./types"
 import type { HistoryLoad } from "./useSearch"
 import type { Typist } from "./useTyping"
@@ -37,6 +38,8 @@ type ChatColumnProps = {
   onLogout: () => void
   history: HistoryLoad // "Load all my history" (D40)
   onOpenHit: (hit: Kept) => void // a search result was tapped
+  onSection: (section: Section) => void // phones: Chats or Status (D41)
+  statusUnseen: boolean
 }
 
 // "Turn on notifications" in the gear menu (D26). The browser only asks on
@@ -104,6 +107,8 @@ export function ChatColumn({
   onLogout,
   history,
   onOpenHit,
+  onSection,
+  statusUnseen,
 }: ChatColumnProps) {
   const [search, setSearch] = useState("")
   const [menuOpen, setMenuOpen] = useState(false)
@@ -191,6 +196,8 @@ export function ChatColumn({
         {/* Only while the live line is down: the list moves down a little then (D8) */}
         {live === "reconnecting" && <p className="mt-1 text-sm text-muted-foreground">Reconnecting...</p>}
       </div>
+
+      <SectionTabs section="chats" onSection={onSection} unseen={statusUnseen} className="mb-3 shrink-0" />
 
       <label className="flex h-12 shrink-0 items-center gap-2 rounded-lg bg-search px-5">
         <input

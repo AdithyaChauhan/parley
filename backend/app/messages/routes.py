@@ -26,6 +26,7 @@ from app.messages.schemas import (
 )
 from app.messages.service import NotAMember, UploadTaken, add_message
 from app.notify import publisher as notify
+from app.status.service import quote_for_reply
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 
@@ -49,7 +50,12 @@ def send_message(
 ):
     # First, so a flood of sends is turned away before it touches the database (D24).
     limits.enforce(limits.SEND, me.id)
-    return save_and_push(chat_id, me, response, body.client_msg_id, body.body)
+    data = None
+    if body.status_id is not None:
+        # A reply to a status: a normal text, with a copy of the status in data (D41)
+        with SessionLocal() as db:
+            data = quote_for_reply(db, chat_id, me.id, body.status_id)
+    return save_and_push(chat_id, me, response, body.client_msg_id, body.body, data=data)
 
 
 def save_and_push(

@@ -1,6 +1,8 @@
 import { useEffect, useEffectEvent, useState } from "react"
+import { Eye } from "lucide-react"
 import { useAuth, type User } from "@/features/auth/useAuth"
 import { api } from "@/lib/api"
+import { prepareFile } from "@/lib/files"
 import { keep, openCopy, syncCopy, type Kept } from "@/lib/localCopy"
 import { reportDelivered, shownUpTo, useLiveConnection, useLiveEvents } from "@/lib/live"
 import { ChatColumn } from "./ChatColumn"
@@ -13,6 +15,12 @@ import { useOutbox } from "./useOutbox"
 import { useHistoryLoad } from "./useSearch"
 import { useTyping } from "./useTyping"
 import { useVisibleArea } from "./useVisibleArea"
+import type { Section } from "@/features/status/SectionTabs"
+import { StatusColumn } from "@/features/status/StatusColumn"
+import { StatusComposer, type Draft } from "@/features/status/StatusComposer"
+import { StatusViewer } from "@/features/status/StatusViewer"
+import type { PersonStatuses, StatusItem } from "@/features/status/types"
+import { useStatuses } from "@/features/status/useStatuses"
 
 type LastMessage = NonNullable<ChatSummary["last_message"]>
 
@@ -59,6 +67,14 @@ export function ChatScreen({ user }: { user: User }) {
   useVisibleArea()
   // "Load all my history", shared by both search boxes
   const history = useHistoryLoad(chats)
+  // Chats or Status (D41): the rail switches from 768px, the tabs on a phone
+  const [section, setSection] = useState<Section>("chats")
+  const statuses = useStatuses()
+  // Statuses being watched, full screen, and a new one being written
+  const [watching, setWatching] = useState<{ people: PersonStatuses[]; start: number } | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [statusProblem, setStatusProblem] = useState<string | null>(null)
+  const statusUnseen = statuses.feed?.people.some((person) => !person.all_viewed) ?? false
 
   // This device's copy of my messages, for search (D40). First, so it's open
   // for everything below.
@@ -118,6 +134,46 @@ export function ChatScreen({ user }: { user: User }) {
   function openHit(hit: Kept) {
     selectChat(hit.chatId)
     setJump({ chatId: hit.chatId, seq: hit.seq })
+  }
+
+  // Watch someone's statuses, then everyone after them in the column's order:
+  // new ones first, then the ones I've seen. My own id: just mine.
+  function openStatuses(userId: string) {
+    const feed = statuses.feed
+    if (!feed) return
+    if (userId === user.id) {
+      setWatching({ people: [{ user_id: user.id, name: user.name, statuses: feed.mine, all_viewed: true }], start: 0 })
+      return
+    }
+    const ordered = [...feed.people.filter((p) => !p.all_viewed), ...feed.people.filter((p) => p.all_viewed)]
+    setWatching({ people: ordered, start: Math.max(0, ordered.findIndex((p) => p.user_id === userId)) })
+  }
+
+  async function pickStatusPhoto(file: File) {
+    setStatusProblem(null)
+    const prepared = await prepareFile(file)
+    if (typeof prepared === "string") setStatusProblem(prepared)
+    else if (prepared.category !== "image") setStatusProblem("A status can be a photo or text")
+    else setDraft({ kind: "photo", file: prepared, localUrl: URL.createObjectURL(prepared.blob) })
+  }
+
+  function closeDraft() {
+    if (draft?.kind === "photo") URL.revokeObjectURL(draft.localUrl)
+    setDraft(null)
+  }
+
+  // A reply goes into our direct chat, through the outbox like any message,
+  // with a small copy of the status (D41)
+  function replyToStatus(person: PersonStatuses, status: StatusItem, text: string) {
+    const chat = chats?.find((c) => c.kind === "direct" && c.other_user_id === person.user_id)
+    if (!chat) return
+    outbox.send(chat.id, text, {
+      id: status.id,
+      kind: status.kind,
+      body: status.body.slice(0, 100),
+      color: status.color,
+      preview: status.preview,
+    })
   }
 
   // The open chat sent "read": nothing in it is unread any more
@@ -260,23 +316,44 @@ export function ChatScreen({ user }: { user: User }) {
     // there (fixed), so the page itself never scrolls: on a phone with the
     // keyboard open, only the message list moves.
     <div className="fixed inset-x-0 top-[var(--visible-top,0px)] flex h-[var(--visible-height,100dvh)] flex-col overflow-hidden bg-card md:flex-row">
-      <IconRail myName={user.name} />
-      <ChatColumn
-        chats={chats}
-        loadFailed={loadFailed}
-        openId={openId}
-        onSelect={selectChat}
-        onChatStarted={chatStarted}
-        typing={typing}
-        phoneVisible={narrowView === "list"}
-        myId={user.id}
-        myName={user.name}
-        live={live}
-        onLogout={logout}
-        history={history}
-        onOpenHit={openHit}
-      />
-      {openChat ? (
+      <IconRail myName={user.name} section={section} onSection={setSection} statusUnseen={statusUnseen} />
+      {section === "status" ? (
+        <StatusColumn
+          feed={statuses.feed}
+          myId={user.id}
+          myName={user.name}
+          phoneVisible
+          onSection={setSection}
+          onOpen={openStatuses}
+          onWriteText={() => setDraft({ kind: "text" })}
+          onPickPhoto={pickStatusPhoto}
+          problem={statusProblem}
+        />
+      ) : (
+        <ChatColumn
+          chats={chats}
+          loadFailed={loadFailed}
+          openId={openId}
+          onSelect={selectChat}
+          onChatStarted={chatStarted}
+          typing={typing}
+          phoneVisible={narrowView === "list"}
+          myId={user.id}
+          myName={user.name}
+          live={live}
+          onLogout={logout}
+          history={history}
+          onOpenHit={openHit}
+          onSection={setSection}
+          statusUnseen={statusUnseen}
+        />
+      )}
+      {section === "status" ? (
+        <section className="hidden min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-conversation text-muted-foreground md:my-4 md:mr-4 md:flex md:min-w-90 md:rounded-panel">
+          <Eye className="size-8" />
+          Pick a status to watch it
+        </section>
+      ) : openChat ? (
         <>
           {/* key: a new chat gets a fresh Conversation, with its own messages */}
           <Conversation
@@ -318,6 +395,27 @@ export function ChatScreen({ user }: { user: User }) {
         <section className="hidden min-w-0 flex-1 items-center justify-center bg-conversation text-muted-foreground md:my-4 md:mr-4 md:flex md:min-w-90 md:rounded-panel">
           {chats ? "Pick a chat, or start one with +" : ""}
         </section>
+      )}
+      {watching && (
+        <StatusViewer
+          people={watching.people}
+          start={watching.start}
+          myId={user.id}
+          onClose={() => setWatching(null)}
+          onSeen={statuses.seen}
+          onReply={replyToStatus}
+          onDeleted={statuses.reload}
+        />
+      )}
+      {draft && (
+        <StatusComposer
+          draft={draft}
+          onClose={closeDraft}
+          onPosted={() => {
+            closeDraft()
+            statuses.reload()
+          }}
+        />
       )}
     </div>
   )
