@@ -17,6 +17,8 @@ class SendMessageRequest(BaseModel):
     # Made by the sender's app once per message, and sent again on a retry (D9).
     client_msg_id: uuid.UUID
     body: MessageText
+    # A reply to this person's status (D41): the message carries a small copy of it.
+    status_id: uuid.UUID | None = None
 
 
 class EditMessageRequest(BaseModel):

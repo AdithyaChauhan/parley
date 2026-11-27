@@ -1,6 +1,8 @@
 // The shapes the backend sends (T14), and the ones the screen adds itself.
 // Times arrive as UTC text with a time zone, like "2026-10-22T09:15:00+00:00".
 
+import type { StatusQuote } from "@/features/status/types"
+
 // Avatar colors: soft tints from docs/design/look.md
 export type Tint = "teal" | "purple" | "yellow" | "red"
 
@@ -39,6 +41,9 @@ export type FileData = {
   preview?: string | null // a tiny copy of a picture, shown until the real one arrives
   duration_ms?: number | null // voice notes
 }
+
+// A reply to a status: a text with a small copy of the status (D41)
+export type StatusReplyData = { status: StatusQuote }
 
 // An event's data: which message it changed (D39)
 export type EventData = { target_seq: number }
@@ -92,7 +97,7 @@ export type ServerMessage = {
   // system = a group note, with data instead of text (D37); file = D38.
   // reaction, edit, delete = a change to another message, not one to show (D39)
   kind: "text" | "system" | "file" | "reaction" | "edit" | "delete"
-  data: SystemData | FileData | EventData | null
+  data: SystemData | FileData | EventData | StatusReplyData | null
   edited: boolean
   deleted: boolean
   reactions: Reactions
@@ -133,6 +138,8 @@ export type LiveEvent =
   | { type: "typing"; data: { chat_id: string; user_id: string; name: string } }
   | { type: "presence"; data: { user_id: string; online: boolean; last_seen: string | null } } // came online or went offline (D22)
   | { type: "pong"; data: Record<string, never> } // the answer to the app's heartbeat ping (D21)
+  // Someone's statuses changed: the app loads the list again (D41)
+  | { type: "status"; data: { user_id: string; change: "new" | "gone" | "viewed" } }
 
 // A message on screen. Until the server answers, it has no id or number (seq) yet.
 // clientMsgId stays the same before and after, so it's the key that matches them.

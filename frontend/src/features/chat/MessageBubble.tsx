@@ -7,7 +7,8 @@ import { FileContent } from "./FileContent"
 import { noteText } from "./groupNotes"
 import type { MenuMode } from "./MessageMenu"
 import { clockTime } from "./time"
-import { REACTIONS, type Message, type Reactions, type SystemData, type Tint } from "./types"
+import { STATUS_COLORS } from "@/features/status/types"
+import { REACTIONS, type Message, type Reactions, type StatusReplyData, type SystemData, type Tint } from "./types"
 
 // Shows "@Name" in teal (look.md: @mentions use the teal accent)
 function withMentions(text: string) {
@@ -19,6 +20,26 @@ function withMentions(text: string) {
     ) : (
       part
     ),
+  )
+}
+
+// A reply to a status (D41): a small copy of the status above the words, kept
+// in the message, so it still shows after the status is gone
+function StatusQuoteBox({ data }: { data: StatusReplyData }) {
+  const quote = data.status
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-lg border-l-4 border-primary bg-foreground/5 p-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-label font-medium text-primary">Status</p>
+        <p className="truncate text-sm text-muted-foreground">{quote.body || (quote.kind === "image" ? "Photo" : "")}</p>
+      </div>
+      {quote.kind === "image" && quote.preview && (
+        <img src={quote.preview} alt="" className="size-10 shrink-0 rounded object-cover" />
+      )}
+      {quote.kind === "text" && (
+        <span className="size-10 shrink-0 rounded" style={{ backgroundColor: STATUS_COLORS[quote.color] }} />
+      )}
+    </div>
   )
 }
 
@@ -218,6 +239,11 @@ export function MessageBubble({
     <Deleted />
   ) : isFile ? (
     <FileContent chatId={chatId} message={message} onCancel={onCancel} />
+  ) : message.data && "status" in message.data ? (
+    <>
+      <StatusQuoteBox data={message.data} />
+      {withMentions(message.body)}
+    </>
   ) : (
     withMentions(message.body)
   )

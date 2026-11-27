@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { api, ApiError, isBusy, isUnreachable } from "@/lib/api"
 import { putFile, rememberLocal, type PreparedFile } from "@/lib/files"
 import { announce, useLiveEvents } from "@/lib/live"
+import type { StatusQuote } from "@/features/status/types"
 import { NOT_CHANGED, type FileData, type Message, type ServerMessage } from "./types"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -50,7 +51,12 @@ export function useOutbox(myId: string) {
         try {
           const reply = await api<ServerMessage>(`/chats/${chatId}/messages`, {
             method: "POST",
-            body: { client_msg_id: next.clientMsgId, body: next.body },
+            body: {
+              client_msg_id: next.clientMsgId,
+              body: next.body,
+              // A reply to a status (D41): the server adds its own copy of it
+              ...(next.data && "status" in next.data && { status_id: next.data.status.id }),
+            },
           })
           update(chatId, (list) => list.filter((m) => m.clientMsgId !== next.clientMsgId))
           // The reply is a saved message, like a pushed one, so it goes in the same way:
@@ -217,7 +223,7 @@ export function useOutbox(myId: string) {
   }
 
   // Shows the message at once, then sends it in its turn
-  function send(chatId: string, body: string) {
+  function send(chatId: string, body: string, quote?: StatusQuote) {
     const message: Message = {
       id: null,
       clientMsgId: crypto.randomUUID(), // a fresh ID for each new message (D9)
@@ -228,7 +234,7 @@ export function useOutbox(myId: string) {
       createdAt: new Date().toISOString(),
       status: "sending",
       kind: "text",
-      data: null,
+      data: quote ? { status: quote } : null,
       ...NOT_CHANGED,
     }
     update(chatId, (list) => [...list, message])

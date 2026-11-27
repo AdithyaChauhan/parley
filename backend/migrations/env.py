@@ -8,6 +8,7 @@ import app.chats.models  # noqa: F401
 import app.files.models  # noqa: F401
 import app.messages.models  # noqa: F401
 import app.push.models  # noqa: F401
+import app.status.models  # noqa: F401
 from app.config import settings
 from app.db import Base, engine
 

@@ -74,7 +74,7 @@ def _empty_all_tables():
     """Empties every sheet and wipes Redis, so the next test starts clean."""
     with engine.begin() as connection:
         connection.execute(
-            text("TRUNCATE users, sessions, chats, chat_members, messages, message_reactions, push_subscriptions, uploads")
+            text("TRUNCATE users, sessions, chats, chat_members, messages, message_reactions, push_subscriptions, uploads, statuses, status_views")
         )
     # And the whiteboard: every presence and last seen note (Redis database 15).
     presence.client.flushdb()
